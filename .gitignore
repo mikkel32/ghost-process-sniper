@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+dist/
+.DS_Store
+DerivedData/
+*.xcuserstate
+*.swp
+*.swo
+*.tmp
+*.log
+logs/
