@@ -3071,6 +3071,7 @@ private func killHistoryChangesStrategyRecommendation() async throws {
     )
 
     try check(preview.strategyRecommendation.strategy == .stubbornRunaway, "force-heavy kill history should recommend stubborn runaway strategy")
+    try check(preview.canKill, "history should inform a stop, never lock it")
     try check(preview.whyWaitEvidence.contains { $0.title == "Force history" }, "preview should explain history-driven caution")
 }
 
@@ -3329,8 +3330,12 @@ private func radarStoreRecordsKillEventsAndLearning() async throws {
         rootPID: 98,
         gracefulPIDs: [98],
         forcedPIDs: [98],
-        deniedPIDs: [199],
+        deniedPIDs: [199, 197],
         survivorPIDs: [198],
+        attempts: [
+            KillAttempt(pid: 98, signal: SIGTERM, stage: "graceful", succeeded: true),
+            KillAttempt(pid: 199, signal: SIGTERM, stage: "graceful", succeeded: false, message: "Operation not permitted")
+        ],
         timeline: KillExecutionTimeline(preflightMilliseconds: 1, signalMilliseconds: 2, verificationMilliseconds: 3, totalMilliseconds: 6),
         realizedMemoryReclaimBytes: 900_000_000,
         eventHistory: [
@@ -3342,13 +3347,14 @@ private func radarStoreRecordsKillEventsAndLearning() async throws {
         scopeUsed: .ownedFamily
     )
 
-    try await store.recordKillOperation(report: report, family: family, at: Date(timeIntervalSince1970: 22))
+    var refused = report
+    refused.signalDeniedPIDs = [199]
+    try await store.recordKillOperation(report: refused, family: family, at: Date(timeIntervalSince1970: 22))
     let events = try await store.recentKillEvents(operationID: operationID)
-    let history = try await store.killHistorySummary(signatureID: family.signature.id)
-    let strategyHistory = try await store.killStrategyHistory(
-        signatureID: family.signature.id,
-        devKind: family.classification?.kind.rawValue
-    )
+    let history = try await store.killHistorySummary(signatureID: family.signature.id, now: Date(timeIntervalSince1970: 30))
+    let strategyHistory = try await store.killStrategyHistory(signatureID: family.signature.id, now: Date(timeIntervalSince1970: 30))
+    let unrelated = try await store.killStrategyHistory(signatureID: "other-family-of-the-same-kind", now: Date(timeIntervalSince1970: 30))
+    let expired = try await store.killStrategyHistory(signatureID: family.signature.id, now: Date(timeIntervalSince1970: 22 + 31 * 24 * 60 * 60))
     let diagnostics = try await store.exportKillDiagnostics()
 
     try check(events.map(\.kind) == [.queued, .signaled, .completed], "store should persist kill operation event history")
@@ -3356,8 +3362,10 @@ private func radarStoreRecordsKillEventsAndLearning() async throws {
     try check(history.operationCount == 1, "store should persist kill outcome learning rows")
     try check(history.forceRate == 1, "kill history should learn force rate")
     try check(history.survivorRate == 1, "kill history should learn survivor rate")
-    try check(history.commonDenialCount == 1, "kill history should learn denial counts")
-    try check(strategyHistory.operationCount == 1 && strategyHistory.forceRate == 1, "strategy history should query by signature/dev kind")
+    try check(history.commonDenialCount == 1, "kill history should count only signals the kernel refused, not preflight locks")
+    try check(strategyHistory.operationCount == 1 && strategyHistory.forceRate == 1, "strategy history should query by signature")
+    try check(unrelated.operationCount == 0, "strategy history should not pool other families of the same kind")
+    try check(expired.operationCount == 0, "strategy history should only use the last 30 days")
     try check(diagnostics.contains("Ghost Process Sniper Kill Diagnostics"), "store should export compact kill diagnostics")
 }
 
@@ -3413,6 +3421,7 @@ private func radarStoreRecordsKillCalibrationAggregates() async throws {
         displayName: "node",
         rootPID: 100,
         gracefulPIDs: [100],
+        attempts: [KillAttempt(pid: 100, signal: SIGINT, stage: "graceful", succeeded: true)],
         timeline: KillExecutionTimeline(preflightMilliseconds: 1, signalMilliseconds: 400, verificationMilliseconds: 2, totalMilliseconds: 403),
         estimatedMemoryReclaimBytes: 500_000_000,
         realizedMemoryReclaimBytes: 450_000_000,
@@ -3425,6 +3434,7 @@ private func radarStoreRecordsKillCalibrationAggregates() async throws {
         gracefulPIDs: [100],
         forcedPIDs: [100],
         survivorPIDs: [100],
+        attempts: [KillAttempt(pid: 100, signal: SIGKILL, stage: "forced", succeeded: true)],
         timeline: KillExecutionTimeline(preflightMilliseconds: 1, signalMilliseconds: 800, verificationMilliseconds: 2, totalMilliseconds: 803),
         estimatedMemoryReclaimBytes: 500_000_000,
         realizedMemoryReclaimBytes: 100_000_000,

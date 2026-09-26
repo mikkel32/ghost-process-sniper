@@ -33,6 +33,9 @@ public struct KillReport: Equatable, Sendable {
     /// New processes that replaced the stopped ones: a supervisor restarted them.
     public var respawnedPIDs: [Int32] = []
     public var respawnedBy: String?
+    /// Targets whose signal the kernel refused (EPERM). Unlike deniedPIDs,
+    /// this leaves out processes the preflight locked and never signalled.
+    public var signalDeniedPIDs: [Int32] = []
 
     public var partiallySucceeded: Bool {
         !gracefulPIDs.isEmpty || !forcedPIDs.isEmpty

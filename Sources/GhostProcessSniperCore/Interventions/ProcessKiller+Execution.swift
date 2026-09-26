@@ -111,6 +111,7 @@ extension ProcessKiller {
             if !report.deniedPIDs.contains(target.pid) {
                 report.deniedPIDs.append(target.pid)
             }
+            if !report.signalDeniedPIDs.contains(target.pid) { report.signalDeniedPIDs.append(target.pid) }
             appendEvent(.targetUpdated, operationID: operationID, pid: target.pid, targetState: .locked, message: "Signal denied: \(failure.message)", report: &report, eventSink: eventSink)
         } catch {
             report.attempts.append(KillAttempt(pid: target.pid, signal: signal, stage: stage, succeeded: false, message: error.localizedDescription))

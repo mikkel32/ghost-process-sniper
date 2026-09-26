@@ -430,6 +430,7 @@ public actor RadarStore {
                 throw RadarStoreError.sqlite("Cannot upgrade baseline measurement provenance")
             }
         }
+        try migrateKillLearning(handle)
     }
 
     public func pruneIfNeeded(now: Date) throws {
@@ -439,14 +440,7 @@ public actor RadarStore {
         try execute("DELETE FROM samples WHERE sampled_at < ?", .double(now.addingTimeInterval(-RadarStore.denseSampleRetention).timeIntervalSince1970))
         try execute("DELETE FROM incidents WHERE resolved_at IS NOT NULL AND resolved_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
         try execute("DELETE FROM actions WHERE created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
-        try execute("DELETE FROM kill_operations WHERE created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
-        try execute("DELETE FROM kill_operation_events WHERE created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
-        try execute("DELETE FROM kill_outcome_history WHERE created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
-        try execute("DELETE FROM kill_strategy_history WHERE created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
-        try execute("DELETE FROM kill_signal_outcomes WHERE created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
-        try execute("DELETE FROM kill_graph_deltas WHERE created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
-        try execute("DELETE FROM kill_reclaim_calibration WHERE created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
-        try execute("DELETE FROM kill_exit_events WHERE created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
+        try pruneKillOperations(before: now.addingTimeInterval(-RadarStore.incidentRetention))
         try execute("DELETE FROM predictive_alerts WHERE created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
         try execute("DELETE FROM recommendation_history WHERE created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))
         try execute("DELETE FROM rules WHERE json LIKE '%\"expiresAt\"%' AND created_at < ?", .double(now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970))

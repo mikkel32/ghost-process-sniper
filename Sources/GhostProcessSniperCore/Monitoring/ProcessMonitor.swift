@@ -392,7 +392,7 @@ public final class ProcessMonitor {
         guard let store else { return family.killPlan(workload: workload) }
         do {
             let devKind = family.classification?.kind.rawValue
-            let history = try await store.killStrategyHistory(signatureID: family.signature.id, devKind: devKind)
+            let history = try await store.killStrategyHistory(signatureID: family.signature.id)
             var calibrations: [KillStrategy: KillCalibrationSnapshot] = [:]
             for strategy in KillStrategy.allCases where strategy != .inspectOnly {
                 let snapshot = try await store.killCalibrationSnapshot(

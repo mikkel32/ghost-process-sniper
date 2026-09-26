@@ -162,43 +162,6 @@ enum RadarStoreSchema {
         "CREATE INDEX IF NOT EXISTS kill_operation_events_operation_time ON kill_operation_events(operation_id, created_at)",
         "CREATE INDEX IF NOT EXISTS kill_operation_events_created ON kill_operation_events(created_at)",
         """
-        CREATE TABLE IF NOT EXISTS kill_outcome_history(
-            id TEXT PRIMARY KEY NOT NULL,
-            operation_id TEXT NOT NULL,
-            signature_id TEXT,
-            strategy TEXT NOT NULL,
-            scope TEXT NOT NULL,
-            graceful_count INTEGER NOT NULL,
-            forced_count INTEGER NOT NULL,
-            survivor_count INTEGER NOT NULL,
-            locked_count INTEGER NOT NULL,
-            realized_memory_bytes INTEGER NOT NULL,
-            denial_count INTEGER NOT NULL,
-            created_at REAL NOT NULL
-        )
-        """,
-        "CREATE INDEX IF NOT EXISTS kill_outcome_history_signature_time ON kill_outcome_history(signature_id, created_at DESC)",
-        "CREATE INDEX IF NOT EXISTS kill_outcome_history_created ON kill_outcome_history(created_at)",
-        """
-        CREATE TABLE IF NOT EXISTS kill_strategy_history(
-            id TEXT PRIMARY KEY NOT NULL,
-            operation_id TEXT NOT NULL,
-            signature_id TEXT,
-            dev_kind TEXT,
-            strategy TEXT NOT NULL,
-            scope TEXT NOT NULL,
-            graceful_count INTEGER NOT NULL,
-            forced_count INTEGER NOT NULL,
-            survivor_count INTEGER NOT NULL,
-            locked_count INTEGER NOT NULL,
-            realized_memory_bytes INTEGER NOT NULL,
-            denial_count INTEGER NOT NULL,
-            created_at REAL NOT NULL
-        )
-        """,
-        "CREATE INDEX IF NOT EXISTS kill_strategy_history_signature_kind_time ON kill_strategy_history(signature_id, dev_kind, created_at DESC)",
-        "CREATE INDEX IF NOT EXISTS kill_strategy_history_created ON kill_strategy_history(created_at)",
-        """
         CREATE TABLE IF NOT EXISTS kill_signal_outcomes(
             id TEXT PRIMARY KEY NOT NULL,
             operation_id TEXT NOT NULL,
@@ -251,7 +214,55 @@ enum RadarStoreSchema {
         )
         """,
         "CREATE INDEX IF NOT EXISTS kill_exit_events_operation ON kill_exit_events(operation_id)",
-        "CREATE INDEX IF NOT EXISTS kill_exit_events_created ON kill_exit_events(created_at)",
+        "CREATE INDEX IF NOT EXISTS kill_exit_events_created ON kill_exit_events(created_at)"
+    ] + killLearningStatements
+
+    /// PRAGMA user_version. Opening a store written at a lower version
+    /// rebuilds the kill learning tables: their rows meant something else.
+    static let version: Int32 = 1
+
+    static let killLearningTables = ["kill_outcome_history", "kill_strategy_history", "kill_calibration_aggregates"]
+
+    static let killLearningStatements = [
+        """
+        CREATE TABLE IF NOT EXISTS kill_outcome_history(
+            id TEXT PRIMARY KEY NOT NULL,
+            operation_id TEXT NOT NULL,
+            signature_id TEXT,
+            strategy TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            graceful_count INTEGER NOT NULL,
+            forced_count INTEGER NOT NULL,
+            survivor_count INTEGER NOT NULL,
+            locked_count INTEGER NOT NULL,
+            realized_memory_bytes INTEGER NOT NULL,
+            denial_count INTEGER NOT NULL,
+            held_force INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS kill_outcome_history_signature_time ON kill_outcome_history(signature_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS kill_outcome_history_created ON kill_outcome_history(created_at)",
+        """
+        CREATE TABLE IF NOT EXISTS kill_strategy_history(
+            id TEXT PRIMARY KEY NOT NULL,
+            operation_id TEXT NOT NULL,
+            signature_id TEXT,
+            dev_kind TEXT,
+            strategy TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            graceful_count INTEGER NOT NULL,
+            forced_count INTEGER NOT NULL,
+            survivor_count INTEGER NOT NULL,
+            locked_count INTEGER NOT NULL,
+            realized_memory_bytes INTEGER NOT NULL,
+            denial_count INTEGER NOT NULL,
+            held_force INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS kill_strategy_history_signature_time ON kill_strategy_history(signature_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS kill_strategy_history_created ON kill_strategy_history(created_at)",
         """
         CREATE TABLE IF NOT EXISTS kill_calibration_aggregates(
             id TEXT PRIMARY KEY NOT NULL,
@@ -313,27 +324,25 @@ enum RadarStoreQueries {
         LIMIT ?
         """
 
-    static let killHistorySummary = """
-        SELECT COUNT(*),
-               AVG(CASE WHEN survivor_count = 0 AND forced_count = 0 THEN 1.0 ELSE 0.0 END),
-               AVG(CASE WHEN forced_count > 0 THEN 1.0 ELSE 0.0 END),
-               AVG(CASE WHEN survivor_count > 0 THEN 1.0 ELSE 0.0 END),
-               AVG(realized_memory_bytes),
-               SUM(denial_count)
-        FROM kill_outcome_history
-        WHERE signature_id = ?
-        """
+    /// The latest 20 stops of one family within 30 days. Survivors the user
+    /// chose to keep (held force) are not failures of the stop.
+    static let killHistorySummary = historySummary(from: "kill_outcome_history")
+    static let killStrategyHistory = historySummary(from: "kill_strategy_history")
 
-    static let killStrategyHistoryBySignatureAndKind = """
+    private static func historySummary(from table: String) -> String {
+        """
         SELECT COUNT(*),
                AVG(CASE WHEN survivor_count = 0 AND forced_count = 0 THEN 1.0 ELSE 0.0 END),
                AVG(CASE WHEN forced_count > 0 THEN 1.0 ELSE 0.0 END),
-               AVG(CASE WHEN survivor_count > 0 THEN 1.0 ELSE 0.0 END),
+               AVG(CASE WHEN survivor_count > 0 AND held_force = 0 THEN 1.0 ELSE 0.0 END),
                AVG(realized_memory_bytes),
                SUM(denial_count)
-        FROM kill_strategy_history
-        WHERE signature_id = ? OR dev_kind = ?
+        FROM (SELECT * FROM \(table)
+              WHERE signature_id = ? AND created_at >= ?
+              ORDER BY created_at DESC
+              LIMIT 20)
         """
+    }
 
     static let killCalibration = """
         SELECT signature_id, dev_kind, strategy, operation_count, graceful_success_rate,

@@ -123,16 +123,8 @@ public struct InterventionPolicyEngine: Sendable {
         if !stale.isEmpty || !recycled.isEmpty || !diff.isEmpty {
             factors.append(KillDecisionFactor(kind: .whyWait, title: "Tree drift", detail: diff.summary, weight: -min(20, Double(stale.count + recycled.count + diff.reparentedPIDs.count) * 5)))
         }
-        if let history = plan.killHistory, history.operationCount > 0 {
-            if history.forceRate >= 0.5 {
-                factors.append(KillDecisionFactor(kind: .whyWait, title: "Force history", detail: "\(Int((history.forceRate * 100).rounded()))% of recent interventions required force.", weight: -10, source: .history))
-            }
-            if history.gracefulSuccessRate >= 0.65 {
-                factors.append(KillDecisionFactor(kind: .whyKill, title: "Graceful history", detail: "\(Int((history.gracefulSuccessRate * 100).rounded()))% recent graceful success.", weight: 8, source: .history))
-            }
-            if history.survivorRate >= 0.35 || history.commonDenialCount >= 2 {
-                factors.append(KillDecisionFactor(kind: .blocking, title: "Poor intervention history", detail: "Recent interventions had survivors or repeated denials.", weight: -35, source: .history))
-            }
+        if let history = plan.killHistory {
+            factors.append(contentsOf: historyFactors(history))
         }
 
         factors.append(contentsOf: riskFactors(risk))
@@ -141,6 +133,33 @@ public struct InterventionPolicyEngine: Sendable {
         let blockingPenalty = factors.contains { $0.kind == .blocking } ? 35.0 : 0
         let confidence = min(1, max(0.2, 0.45 + Double(targets.count) * 0.08 + reclaim.confidence * 0.25 - Double(locked.count) * 0.04))
         return KillDecisionScore(value: raw - blockingPenalty, confidence: confidence, factors: factors)
+    }
+
+    /// History informs the decision but never blocks it: one survivor held
+    /// on purpose, or a refused child, must not lock a family out of
+    /// stopping. It speaks only once there are a few stops to go by.
+    private func historyFactors(_ history: KillHistorySummary) -> [KillDecisionFactor] {
+        var factors: [KillDecisionFactor] = []
+        let count = history.operationCount
+        if count >= 3 {
+            let survived = Int((history.survivorRate * Double(count)).rounded())
+            if survived > 0 {
+                factors.append(KillDecisionFactor(kind: .whyWait, title: "Past stops left something running",
+                                                  detail: "\(survived) of the last \(count) stops left a process running.",
+                                                  weight: -12 * history.survivorRate, source: .history))
+            }
+            if history.forceRate >= 0.5 {
+                factors.append(KillDecisionFactor(kind: .whyWait, title: "Force history",
+                                                  detail: "\(Int((history.forceRate * 100).rounded()))% of recent stops needed force.",
+                                                  weight: -6, source: .history))
+            }
+        }
+        if count > 0, history.gracefulSuccessRate >= 0.65 {
+            factors.append(KillDecisionFactor(kind: .whyKill, title: "Graceful history",
+                                              detail: "\(Int((history.gracefulSuccessRate * 100).rounded()))% of recent stops ended cleanly.",
+                                              weight: 8, source: .history))
+        }
+        return factors
     }
 
     /// What the radar saw, named for what it is. The forecast states are

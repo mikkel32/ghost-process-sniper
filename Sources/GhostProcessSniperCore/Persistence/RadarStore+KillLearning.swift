@@ -34,28 +34,17 @@ extension RadarStore {
             for event in report.eventHistory {
                 try insertKillEvent(event)
             }
-            try insertKillOutcomeHistory(report: report, signatureID: record.signatureID, createdAt: date)
-            try insertKillStrategyHistory(
-                report: report,
-                signatureID: record.signatureID,
-                devKind: family?.classification?.kind.rawValue,
-                createdAt: date
-            )
             try insertKillSignalOutcomes(report: report, createdAt: date)
             try insertKillGraphDeltas(report: report, createdAt: date)
-            try insertKillReclaimCalibration(
-                report: report,
-                signatureID: record.signatureID,
-                devKind: family?.classification?.kind.rawValue,
-                createdAt: date
-            )
             try insertKillExitEvents(report: report)
-            try upsertKillCalibrationAggregate(
-                report: report,
-                signatureID: record.signatureID,
-                devKind: family?.classification?.kind.rawValue,
-                createdAt: date
-            )
+            // Refused, expired and inspect-only stops sent nothing; they say
+            // nothing about how the family stops and stay audit-only.
+            guard !report.attempts.isEmpty else { return }
+            let devKind = family?.classification?.kind.rawValue
+            try insertKillOutcomeHistory(report: report, signatureID: record.signatureID, createdAt: date)
+            try insertKillStrategyHistory(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
+            try insertKillReclaimCalibration(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
+            try upsertKillCalibrationAggregate(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
         }
         lastKillOperationSummary = "\(record.displayName): \(record.summary)"
     }
@@ -85,36 +74,20 @@ extension RadarStore {
         return events
     }
 
-    public func killHistorySummary(signatureID: String) throws -> KillHistorySummary {
-        let statement = try prepare(RadarStoreQueries.killHistorySummary)
-        defer { sqlite3_finalize(statement) }
-        bind(.text(signatureID), to: statement, index: 1)
-        guard sqlite3_step(statement) == SQLITE_ROW else {
-            return .empty
-        }
-        let count = Int(sqlite3_column_int64(statement, 0))
-        guard count > 0 else {
-            return KillHistorySummary.empty
-        }
-        return KillHistorySummary(
-            signatureID: signatureID,
-            operationCount: count,
-            gracefulSuccessRate: sqlite3_column_double(statement, 1),
-            forceRate: sqlite3_column_double(statement, 2),
-            survivorRate: sqlite3_column_double(statement, 3),
-            averageReclaimBytes: UInt64(max(0, sqlite3_column_int64(statement, 4))),
-            commonDenialCount: Int(sqlite3_column_int64(statement, 5))
-        )
+    /// How the family's recent stops went: its own latest 20 within 30 days.
+    public func killHistorySummary(signatureID: String, now: Date = Date()) throws -> KillHistorySummary {
+        try historySummary(RadarStoreQueries.killHistorySummary, signatureID: signatureID, now: now)
     }
 
-    public func killStrategyHistory(signatureID: String, devKind: String?) throws -> KillHistorySummary {
-        guard let devKind, !devKind.isEmpty else {
-            return try killHistorySummary(signatureID: signatureID)
-        }
-        let statement = try prepare(RadarStoreQueries.killStrategyHistoryBySignatureAndKind)
+    public func killStrategyHistory(signatureID: String, now: Date = Date()) throws -> KillHistorySummary {
+        try historySummary(RadarStoreQueries.killStrategyHistory, signatureID: signatureID, now: now)
+    }
+
+    private func historySummary(_ sql: String, signatureID: String, now: Date) throws -> KillHistorySummary {
+        let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
         bind(.text(signatureID), to: statement, index: 1)
-        bind(.text(devKind), to: statement, index: 2)
+        bind(.double(now.addingTimeInterval(-Self.killHistoryWindow).timeIntervalSince1970), to: statement, index: 2)
         guard sqlite3_step(statement) == SQLITE_ROW else {
             return .empty
         }
@@ -161,6 +134,35 @@ extension RadarStore {
             denialPenalty: sqlite3_column_double(statement, 9),
             updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 10))
         )
+    }
+
+    /// Rows from the kill tables older than the retention window.
+    func pruneKillOperations(before cutoff: Date) throws {
+        let tables = ["kill_operations", "kill_operation_events", "kill_outcome_history", "kill_strategy_history",
+                      "kill_signal_outcomes", "kill_graph_deltas", "kill_reclaim_calibration", "kill_exit_events"]
+        for table in tables {
+            try execute("DELETE FROM \(table) WHERE created_at < ?", .double(cutoff.timeIntervalSince1970))
+        }
+    }
+
+    /// Learning rows written before held force and real refusals were told
+    /// apart carry fake survivors and denials that locked families out of
+    /// stopping, so a store from an older version rebuilds those tables.
+    static func migrateKillLearning(_ handle: OpaquePointer?) throws {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, "PRAGMA user_version", -1, &statement, nil) == SQLITE_OK else {
+            throw RadarStoreError.sqlite("Cannot read the store version")
+        }
+        let version = sqlite3_step(statement) == SQLITE_ROW ? sqlite3_column_int(statement, 0) : 0
+        sqlite3_finalize(statement)
+        guard version < RadarStoreSchema.version else { return }
+        let rebuild = RadarStoreSchema.killLearningTables.map { "DROP TABLE IF EXISTS \($0)" } +
+            RadarStoreSchema.killLearningStatements + ["PRAGMA user_version = \(RadarStoreSchema.version)"]
+        for sql in rebuild {
+            guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else {
+                throw RadarStoreError.sqlite("Cannot rebuild kill learning: \(String(cString: sqlite3_errmsg(handle)))")
+            }
+        }
     }
 
     public func killSignalOutcomeCount(operationID: KillOperationID) throws -> Int {
@@ -236,8 +238,8 @@ extension RadarStore {
             """
             INSERT INTO kill_outcome_history(id, operation_id, signature_id, strategy, scope,
                                              graceful_count, forced_count, survivor_count, locked_count,
-                                             realized_memory_bytes, denial_count, created_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                             realized_memory_bytes, denial_count, held_force, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             .text(UUID().uuidString),
             .text(report.operationID.rawValue),
@@ -249,7 +251,8 @@ extension RadarStore {
             .int64(Int64(report.survivorPIDs.count)),
             .int64(Int64(report.deniedPIDs.count)),
             .int64(Int64(clamping: report.realizedMemoryReclaimBytes)),
-            .int64(Int64(report.deniedPIDs.count + report.failures.count)),
+            .int64(Int64(report.signalDeniedPIDs.count)),
+            .int64(report.skipForceRequested ? 1 : 0),
             .double(createdAt.timeIntervalSince1970)
         )
     }
@@ -259,8 +262,8 @@ extension RadarStore {
             """
             INSERT INTO kill_strategy_history(id, operation_id, signature_id, dev_kind, strategy, scope,
                                               graceful_count, forced_count, survivor_count, locked_count,
-                                              realized_memory_bytes, denial_count, created_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                              realized_memory_bytes, denial_count, held_force, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             .text(UUID().uuidString),
             .text(report.operationID.rawValue),
@@ -273,7 +276,8 @@ extension RadarStore {
             .int64(Int64(report.survivorPIDs.count)),
             .int64(Int64(report.deniedPIDs.count)),
             .int64(Int64(clamping: report.realizedMemoryReclaimBytes)),
-            .int64(Int64(report.deniedPIDs.count + report.failures.count)),
+            .int64(Int64(report.signalDeniedPIDs.count)),
+            .int64(report.skipForceRequested ? 1 : 0),
             .double(createdAt.timeIntervalSince1970)
         )
     }
@@ -466,6 +470,8 @@ extension RadarStore {
             updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 10))
         )
     }
+
+    static let killHistoryWindow: TimeInterval = 30 * 24 * 60 * 60
 
     private func calibrationAggregateID(signatureID: String?, devKind: String?, strategy: KillStrategy) -> String {
         "\(signatureID ?? "*")|\(devKind ?? "*")|\(strategy.rawValue)"
