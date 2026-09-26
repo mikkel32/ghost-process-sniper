@@ -7,9 +7,11 @@ public struct ThermalTrajectory: Equatable, Sendable {
     public let spanSeconds: TimeInterval
     public let warmSeconds: TimeInterval
     public let hotSeconds: TimeInterval
+    /// Zero until at least two consecutive readings reach 90°C, whatever the cadence.
+    public let veryHotSeconds: TimeInterval
 
     public static let empty = Self(direction: .measuring, changeCelsius: nil,
-                                   spanSeconds: 0, warmSeconds: 0, hotSeconds: 0)
+                                   spanSeconds: 0, warmSeconds: 0, hotSeconds: 0, veryHotSeconds: 0)
 
     public var label: String {
         switch direction {
@@ -84,17 +86,18 @@ public struct ThermalObservationWindow: Equatable, Sendable {
         let span = recent.first.map { latest.date.timeIntervalSince($0.date) } ?? 0
         let warm = duration(above: 70)
         let hot = duration(above: 80)
+        let veryHot = duration(above: 90)
         guard recent.count >= 4, span >= 30 else {
-            return ThermalTrajectory(direction: .measuring, changeCelsius: nil,
-                                     spanSeconds: span, warmSeconds: warm, hotSeconds: hot)
+            return ThermalTrajectory(direction: .measuring, changeCelsius: nil, spanSeconds: span,
+                                     warmSeconds: warm, hotSeconds: hot, veryHotSeconds: veryHot)
         }
         let edgeCount = min(3, recent.count / 2)
         let first = Self.median(recent.prefix(edgeCount).map(\.value))
         let last = Self.median(recent.suffix(edgeCount).map(\.value))
         let change = last - first
         let direction: ThermalTrajectory.Direction = change >= 2 ? .rising : change <= -2 ? .falling : .steady
-        return ThermalTrajectory(direction: direction, changeCelsius: change,
-                                 spanSeconds: span, warmSeconds: warm, hotSeconds: hot)
+        return ThermalTrajectory(direction: direction, changeCelsius: change, spanSeconds: span,
+                                 warmSeconds: warm, hotSeconds: hot, veryHotSeconds: veryHot)
     }
 
     private static func median(_ values: [Double]) -> Double {

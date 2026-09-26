@@ -227,6 +227,19 @@ final class ThermalInterpretationTests: XCTestCase {
         XCTAssertEqual(result.band, .veryHot, "The instantaneous reading must remain visible")
         XCTAssertEqual(result.trajectory.direction, .steady, "One outlier cannot fabricate a trend")
         XCTAssertEqual(result.trajectory.hotSeconds, 0)
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: latest, activity: .empty, observations: window,
+                                                  at: latest.sampledAt)
+        XCTAssertEqual(diagnosis.reviewStatus, "Very hot")
+        XCTAssertFalse(diagnosis.headline.contains("Reduce"))
+        XCTAssertEqual(diagnosis.headline, "90.0°C · Brief spike — watching the next readings")
+    }
+
+    func testConsecutiveVeryHotReadingsAskToReduceHeavyWork() {
+        let (window, latest) = history([75, 75, 75, 75, 75, 91, 91])
+        let result = ThermalDiagnosis.evaluate(snapshot: latest, activity: .empty, observations: window,
+                                               at: latest.sampledAt)
+        XCTAssertEqual(result.temperature.trajectory.veryHotSeconds, 10)
+        XCTAssertEqual(result.headline, "91.0°C · Reduce optional heavy work")
     }
 
     func testObservationWindowIsBoundedAndRejectsOutOfOrderSamples() {

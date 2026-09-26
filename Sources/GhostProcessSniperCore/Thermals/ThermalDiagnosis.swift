@@ -82,7 +82,10 @@ public struct ThermalDiagnosis: Equatable, Sendable {
                 if cooling {
                     headline = "Cooling, but still \(temperature.readingText)"
                 } else if temperature.band == .veryHot {
-                    headline = "\(temperature.readingText) · Reduce optional heavy work"
+                    // Die sensors spike past 90°C for sub-second bursts; only a repeat is actionable.
+                    headline = temperature.trajectory.veryHotSeconds > 0
+                        ? "\(temperature.readingText) · Reduce optional heavy work"
+                        : "\(temperature.readingText) · Brief spike — watching the next readings"
                 } else if rising {
                     headline = "\(temperature.readingText) and rising · Review activity"
                 } else if temperature.trajectory.hotSeconds >= 60 {
