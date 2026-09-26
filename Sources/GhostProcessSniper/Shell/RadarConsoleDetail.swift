@@ -14,14 +14,17 @@ struct RadarConsoleDetail: View {
             case .family(let familyKey):
                 if let family = session.family(forKey: familyKey) {
                     // Look up by the concrete key so an alias still finds the prebuilt panel.
-                    let panel = session.monitor.consoleSnapshot.detailPanel(for: family.familyKey)
-                        ?? FamilyDetailPanelModel(family: family, previous: nil)
+                    let panel = session.detailPanel(for: family)
                     FamilyDetailConsoleView(
                         panel: panel,
-                        stopRisk: KillRiskAssessor().assess(
+                        // Panels carry the assessment, built off the main actor;
+                        // assessing here only covers a first frame without one.
+                        stopRisk: panel.stopRisk ?? KillRiskAssessor().assess(
                             KillWorkloadProfile(family: family, sample: session.monitor.sampledProcesses)
                         ),
-                        actions: FamilyPageActions(session: session, family: family)
+                        actions: FamilyPageActions(session: session, family: family),
+                        lastScoredAt: family.lastScoredAt,
+                        forensicsFreshness: family.forensicsFreshness
                     )
                 } else if let report = session.recentStops[familyKey] {
                     RecentStopView(
@@ -72,7 +75,7 @@ struct RadarConsoleInspector: View {
 
     var body: some View {
         if let family = session.selectedFamily {
-            FamilyInspectorView(panel: session.selectedPanel ?? FamilyDetailPanelModel(family: family, previous: nil))
+            FamilyInspectorView(panel: session.detailPanel(for: family), forensicsFreshness: family.forensicsFreshness)
         } else {
             ContentUnavailableView("Nothing selected", systemImage: "sidebar.right")
         }

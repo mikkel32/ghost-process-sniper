@@ -5,24 +5,30 @@ public struct RadarRuleEngine: Sendable {
 
     public func suggestions(for family: ProcessFamily, rules: [RadarRule], now: Date) -> [RadarActionSuggestion] {
         rules
-            .filter { $0.isEnabled }
-            .filter { rule in
-                if let expiresAt = rule.expiresAt, expiresAt <= now {
-                    return false
-                }
-                if rule.isBuiltIn {
-                    switch rule.action {
-                    case .notify:
-                        guard family.score.heat.shouldNotify else { return false }
-                    case .suggestKill, .kill:
-                        guard family.score.heat.shouldRaiseLiveAlert else { return false }
-                    default:
-                        break
-                    }
-                }
-                return matches(rule, family: family, now: now)
-            }
+            .filter { matches(rule: $0, family: family, now: now) }
             .map { suggestion(from: $0, family: family, now: now) }
+    }
+
+    /// The single definition of "this rule applies": enabled, not expired,
+    /// heat-gated for built-ins, and every match field satisfied.
+    public func matches(rule: RadarRule, family: ProcessFamily, now: Date) -> Bool {
+        guard rule.isEnabled else {
+            return false
+        }
+        if let expiresAt = rule.expiresAt, expiresAt <= now {
+            return false
+        }
+        if rule.isBuiltIn {
+            switch rule.action {
+            case .notify:
+                guard family.score.heat.shouldNotify else { return false }
+            case .suggestKill, .kill:
+                guard family.score.heat.shouldRaiseLiveAlert else { return false }
+            default:
+                break
+            }
+        }
+        return fieldsMatch(rule, family: family, now: now)
     }
 
     public func alertState(for family: ProcessFamily, suggestions: [RadarActionSuggestion], now: Date) -> AlertState {
@@ -41,7 +47,7 @@ public struct RadarRuleEngine: Sendable {
         return .normal
     }
 
-    private func matches(_ rule: RadarRule, family: ProcessFamily, now: Date) -> Bool {
+    private func fieldsMatch(_ rule: RadarRule, family: ProcessFamily, now: Date) -> Bool {
         let match = rule.match
 
         if let signatureID = match.signatureID, signatureID != family.signature.id {

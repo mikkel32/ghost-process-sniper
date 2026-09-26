@@ -181,7 +181,7 @@ private struct SidebarToolGrid: View {
 
     var body: some View {
         let snapshot = session.monitor.consoleSnapshot
-        let activeIncidents = snapshot.incidentRows.reduce(0) { $1.stateText == "Active" ? $0 + 1 : $0 }
+        let activeIncidents = snapshot.activeIncidentCount
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
             SidebarToolButton(
                 title: "Duplicates",

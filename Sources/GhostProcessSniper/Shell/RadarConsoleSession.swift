@@ -40,6 +40,7 @@ final class RadarConsoleSession {
     @ObservationIgnored private let commands = RadarCommandCoordinator()
     @ObservationIgnored private var presentationObserverID: UUID?
     @ObservationIgnored private var queryTask: Task<Void, Never>?
+    @ObservationIgnored private var panelTask: Task<Void, Never>?
     @ObservationIgnored private var requestedQueryKey: ConsoleDerivedSnapshotKey?
     @ObservationIgnored private var lastFocusedFamilySignatures: Set<String> = []
     @ObservationIgnored private(set) var isVisible = false
@@ -86,10 +87,6 @@ final class RadarConsoleSession {
             return families[offset]
         }
         return families.first { $0.familyKey == key || $0.signature.id == key }
-    }
-
-    var selectedPanel: FamilyDetailPanelModel? {
-        selectedFamily.flatMap { monitor.consoleSnapshot.detailPanel(for: $0.familyKey) }
     }
 
     var familyItems: [FamilyTriageViewModel] {
@@ -210,6 +207,8 @@ final class RadarConsoleSession {
         presentationObserverID = nil
         queryTask?.cancel()
         queryTask = nil
+        panelTask?.cancel()
+        panelTask = nil
         requestedQueryKey = nil
         queries.cancel()
         // Otherwise every later refresh keeps prioritising forensics for
@@ -225,10 +224,32 @@ final class RadarConsoleSession {
         updateOverviewThermalBand()
         scheduleQueryUpdate()
         updateCanStopSelection()
+        schedulePanelUpdate()
     }
 
     func updateCanStopSelection() {
         canStopSelection = selectedFamily.map { !$0.ownedIdentities.isEmpty } ?? false
+    }
+
+    /// A selected family the refresh did not prepare gets its panel from the
+    /// worker now, and again with every sample while it stays unprepared.
+    func schedulePanelUpdate() {
+        guard presentationObserverID != nil, let family = selectedFamily,
+              monitor.consoleSnapshot.detailPanel(for: family.familyKey) == nil else { return }
+        let request = ConsoleProjectionRequest(
+            source: monitor.consoleSnapshot,
+            incidents: [],
+            state: state.coreState,
+            families: monitor.families,
+            processes: monitor.sampledProcesses,
+            sampleRevision: monitor.sampleRevision
+        )
+        panelTask?.cancel()
+        let queries = queries
+        let familyKey = family.familyKey
+        panelTask = Task {
+            _ = await queries.updatePanel(familyKey: familyKey, request: request)
+        }
     }
 
     /// Returns the projection task for the current state, so callers that
@@ -281,6 +302,7 @@ final class RadarConsoleSession {
         recordVisit(state.focusedSelection)
         updateFocusedFamilies()
         updateCanStopSelection()
+        schedulePanelUpdate()
     }
 
     func focus(_ selection: RadarFocusedSelection) {
@@ -288,6 +310,7 @@ final class RadarConsoleSession {
         recordVisit(state.focusedSelection)
         updateFocusedFamilies()
         updateCanStopSelection()
+        schedulePanelUpdate()
     }
 
     /// Family selections carry the concrete family key: prebuilt panels and
@@ -359,14 +382,14 @@ final class RadarConsoleSession {
     }
 
     func snoozeSelected(minutes: TimeInterval = 60) {
-        guard let signatureID = selectedFamily?.signature.id ?? state.focusedSelection.signatureID else {
+        guard let signatureID = selectedFamily?.signature.id ?? state.focusedSelection.familyKey else {
             return
         }
         snooze(familyKey: signatureID, name: selectedFamily?.displayName, minutes: minutes)
     }
 
     func ignoreSelected() {
-        guard let signatureID = selectedFamily?.signature.id ?? state.focusedSelection.signatureID else {
+        guard let signatureID = selectedFamily?.signature.id ?? state.focusedSelection.familyKey else {
             return
         }
         ignore(familyKey: signatureID, name: selectedFamily?.displayName)

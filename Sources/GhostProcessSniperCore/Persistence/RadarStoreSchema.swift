@@ -1,9 +1,56 @@
 import Foundation
 
 enum RadarStoreSchema {
+    /// The version that drops the write-only tables; the store backs the file
+    /// up before migrating past it.
+    static let slimVersion: Int32 = 3
+
+    /// Append new versions; never edit a version that has shipped.
+    static let migrations = [
+        // Version 1 is the schema from before versioning. Its statements are
+        // idempotent, so an unversioned file with these tables is stamped v1.
+        SQLiteMigration(
+            version: 1,
+            statements: migrationStatements,
+            addedColumns: [
+                SQLiteAddedColumn(table: "baselines", column: "measurement_version", definition: "INTEGER NOT NULL DEFAULT 0")
+            ]
+        ),
+        // Recurrence counts only resolved incidents, so the index must cover
+        // resolved_at as well.
+        SQLiteMigration(
+            version: 2,
+            statements: [
+                "DROP INDEX IF EXISTS incidents_signature_started",
+                "CREATE INDEX IF NOT EXISTS incidents_signature_started_resolved ON incidents(signature_id, started_at, resolved_at)"
+            ]
+        ),
+        // Tables nothing reads, and indexes no query uses. The kill detail
+        // tables stay until kill learning stops writing them.
+        SQLiteMigration(
+            version: slimVersion,
+            statements: [
+                "DROP TABLE IF EXISTS samples",
+                "DROP TABLE IF EXISTS forecasts",
+                "DROP TABLE IF EXISTS recommendation_history",
+                "DROP TABLE IF EXISTS predictive_alerts",
+                "DROP TABLE IF EXISTS actions",
+                "DROP INDEX IF EXISTS kill_operations_signature_time",
+                "DROP INDEX IF EXISTS kill_calibration_signature_kind_strategy"
+            ]
+        )
+    ]
+
+    /// Tables whose rows expire `incidentRetention` after `created_at`.
+    static let createdAtRetentionTables = [
+        "kill_operations", "kill_operation_events", "kill_outcome_history",
+        "kill_strategy_history", "kill_signal_outcomes", "kill_graph_deltas",
+        "kill_reclaim_calibration", "kill_exit_events"
+    ]
+
+    /// Connection pragmas (WAL, synchronous, busy timeout) are applied by
+    /// SQLiteDatabase.open, because WAL cannot be enabled inside a transaction.
     static let migrationStatements = [
-        "PRAGMA journal_mode = WAL",
-        "PRAGMA synchronous = NORMAL",
         """
         CREATE TABLE IF NOT EXISTS settings(
             key TEXT PRIMARY KEY NOT NULL,
@@ -282,18 +329,45 @@ enum RadarStoreQueries {
         LIMIT ?
         """
 
-    static let recentForecasts = """
-        SELECT signature_id, state, confidence, eta_seconds, why_now, generated_at
-        FROM forecasts
-        ORDER BY generated_at DESC
-        LIMIT ?
+    static let loadEpisodes = """
+        SELECT id, signature_id, level, max_score, memory_bytes, last_seen_at, resolved_at
+        FROM incidents
+        WHERE resolved_at IS NULL OR resolved_at >= ?
         """
 
-    static let recentPredictiveAlerts = """
-        SELECT id, signature_id, state, message, created_at
-        FROM predictive_alerts
-        ORDER BY created_at DESC
-        LIMIT ?
+    static let insertIncident = """
+        INSERT INTO incidents(id, signature_id, display_name, canonical_path, command_fingerprint, family_name,
+                              level, max_score, memory_bytes, cpu_percent, leak_velocity, reasons_json,
+                              started_at, last_seen_at, resolved_at, occurrence_count)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)
+        """
+
+    static let refreshIncident = """
+        UPDATE incidents
+        SET level = ?, max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
+            cpu_percent = ?, leak_velocity = ?, last_seen_at = ?
+        WHERE id = ?
+        """
+
+    static let escalateIncident = """
+        UPDATE incidents
+        SET level = ?, max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
+            cpu_percent = ?, leak_velocity = ?, last_seen_at = ?, reasons_json = ?
+        WHERE id = ?
+        """
+
+    static let reopenIncident = """
+        UPDATE incidents
+        SET resolved_at = NULL, occurrence_count = occurrence_count + 1, last_seen_at = ?, level = ?,
+            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?), cpu_percent = ?, leak_velocity = ?
+        WHERE id = ?
+        """
+
+    static let closeIncident = """
+        UPDATE incidents
+        SET resolved_at = ?, last_seen_at = MAX(last_seen_at, ?),
+            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?)
+        WHERE id = ?
         """
 
     static let recentKillOperations = """

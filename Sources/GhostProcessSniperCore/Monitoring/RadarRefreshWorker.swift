@@ -328,7 +328,8 @@ public actor RadarRefreshWorker {
             performance: tracedPerformance,
             previous: request.previousConsoleSnapshot,
             generatedAt: request.now,
-            detailSignatures: request.focusedSignatureIDs.union(scored.families.prefix(8).map(\.familyKey))
+            detailSignatures: request.focusedSignatureIDs.union(scored.families.prefix(8).map(\.familyKey)),
+            processes: batch.processes
         )
         let currentActivity = ThermalActivityAnalyzer.project(
             processes: batch.processes, families: scored.families, now: request.now)

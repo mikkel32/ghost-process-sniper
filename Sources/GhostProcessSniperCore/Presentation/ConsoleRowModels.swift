@@ -137,7 +137,7 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         smoothnessText: "0 ms publish / 0 coalesced / 0 UI hits",
         expensiveCallText: "0",
         storeBacklogText: "0",
-        storeCoalescingText: "0/0 forecasts, 0 rec skipped",
+        storeCoalescingText: "0 baseline writes, 0 deferred, 0 flushes skipped",
         pressureText: "Nominal",
         diagnosticsReport: "Ghost Process Sniper Diagnostics\nWarming up."
     )
@@ -204,7 +204,8 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         smoothnessText = "\(Int(metrics.mainActorPublishMilliseconds.rounded())) ms publish / \(metrics.coalescedRefreshCount) coalesced / \(metrics.diagnosticsOnlyPublishCount) diag-only / \(metrics.contentPublishSkippedCount) content skips / \(metrics.uiCacheHitCount) UI hits / \(metrics.uiPublishSkippedCount) UI skips\(hitchText)"
         expensiveCallText = "\(metrics.scannerHealth.expensiveCallCount)"
         storeBacklogText = "\(storeHealth.backlogCount + storeHealth.pendingActionCount)"
-        storeCoalescingText = "\(storeHealth.coalescingStats.forecastWrites)/\(storeHealth.coalescingStats.forecastCandidates) forecasts, \(storeHealth.coalescingStats.recommendationSkippedCount) rec skipped, \(storeHealth.rulesCacheHitCount) rule hits"
+        let writes = storeHealth.writeStats
+        storeCoalescingText = "\(writes.baselineWrites) baseline writes, \(writes.baselinesDeferred) deferred, \(writes.transactionsSkipped) flushes skipped, \(storeHealth.rulesCacheHitCount) rule hits"
         pressureText = metrics.pressureLevel.rawValue.capitalized
         let optimization = RadarOptimizationReport(scannerHealth: metrics.scannerHealth, metrics: metrics)
         diagnosticsReport = [
@@ -239,42 +240,14 @@ public struct RuleMatchPreview: Identifiable, Equatable, Sendable {
     public let matchedFamilyKeys: [String]
     public let matchedFamilyNames: [String]
 
-    public init(rule: RadarRule, families: [ProcessFamily]) {
+    public init(rule: RadarRule, families: [ProcessFamily], now: Date = Date()) {
         id = rule.id
         ruleName = rule.name
-        let matched = families.filter { RadarRuleMatcher.matches(rule: rule, family: $0) }
+        let engine = RadarRuleEngine()
+        let matched = families.filter { engine.matches(rule: rule, family: $0, now: now) }
         matchCount = matched.count
         matchedFamilyKeys = matched.map(\.familyKey)
         matchedFamilyNames = matched.map(\.displayName)
-    }
-}
-
-private enum RadarRuleMatcher {
-    static func matches(rule: RadarRule, family: ProcessFamily) -> Bool {
-        guard rule.isEnabled else {
-            return false
-        }
-        if let signatureID = rule.match.signatureID, signatureID != family.signature.id {
-            return false
-        }
-        let command = family.root.commandLine.lowercased()
-        let path = family.root.executablePath.lowercased()
-        if let contains = rule.match.commandContains?.lowercased(), !command.contains(contains) {
-            return false
-        }
-        if let contains = rule.match.pathContains?.lowercased(), !path.contains(contains) {
-            return false
-        }
-        if family.score.level < rule.match.minimumLevel || family.score.value < rule.match.minimumScore {
-            return false
-        }
-        if let leak = rule.match.minimumLeakVelocity, family.trend.memoryVelocityMegabytesPerMinute < leak {
-            return false
-        }
-        if let count = rule.match.minimumIncidentCount, family.recentIncidentCount < count {
-            return false
-        }
-        return true
     }
 }
 

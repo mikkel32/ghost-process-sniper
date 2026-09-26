@@ -104,6 +104,10 @@ private actor HeldProjector: ConsoleProjecting {
         return ConsoleDerivedSnapshot.build(snapshot: request.source, incidents: request.incidents, state: request.state)
     }
 
+    func panel(familyKey: String, request: ConsoleProjectionRequest) async throws -> FamilyDetailPanelModel? {
+        request.source.detailPanel(for: familyKey)
+    }
+
     func release() { continuation?.resume(); continuation = nil }
 }
 

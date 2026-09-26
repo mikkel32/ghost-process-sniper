@@ -1,9 +1,5 @@
 import Foundation
 
-public enum ConsoleLayoutMode: String, Codable, CaseIterable, Sendable {
-    case compact
-}
-
 public struct EngineStatusSnapshot: Equatable, Sendable {
     public let statusLine: String
     public let refreshText: String
@@ -189,48 +185,6 @@ public struct OverviewCommandCenterModel: Equatable, Sendable {
     }
 }
 
-public struct CompactFamilyDetailModel: Identifiable, Equatable, Sendable {
-    public var id: String { familyKey }
-
-    public let familyKey: String
-    public let title: String
-    public let subtitle: String
-    public let commandLine: String
-    public let kindText: String
-    public let statusText: String
-    public let scoreText: String
-    public let heatText: String
-    public let heatValue: Double
-    public let pidText: String
-    public let forecastText: String
-    public let actionText: String
-    public let level: GhostLevel
-    public let quickCards: [FamilyMetricCard]
-    public let baselineCards: [FamilyMetricCard]
-    public let scoreComponents: [GhostScoreComponent]
-    public let trendPoints: [Double]
-
-    public init(panel: FamilyDetailPanelModel) {
-        familyKey = panel.familyKey
-        title = panel.title
-        subtitle = "\(panel.kind.label) - \(panel.statusText)"
-        commandLine = panel.commandLine
-        kindText = panel.kind.label
-        statusText = panel.statusText
-        scoreText = panel.scoreText
-        heatText = panel.heatText
-        heatValue = panel.heatValue
-        pidText = "PID \(panel.rootPID)"
-        forecastText = "\(panel.forecastStateText) - \(panel.forecastETA) - \(panel.forecastConfidenceText)"
-        actionText = "\(panel.forecastRecommendationTitle): \(panel.forecastRecommendationDetail)"
-        level = panel.level
-        quickCards = Array(panel.summaryCards.prefix(5))
-        baselineCards = Array(panel.baselineCards.prefix(4))
-        scoreComponents = Array(panel.scoreComponents.prefix(6))
-        trendPoints = panel.trendPoints
-    }
-}
-
 public struct RadarIntelligenceBrief: Equatable, Sendable {
     public let eyebrow: String
     public let title: String
@@ -243,6 +197,9 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
     public let actionTitle: String
     public let systemImage: String
     public let level: GhostLevel
+    /// What stopping the target would do, when it is confirmed trouble the
+    /// user can stop.
+    public let stopConsequence: String?
 
     public static let empty = RadarIntelligenceBrief(
         eyebrow: "Live guidance",
@@ -269,7 +226,8 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         familyName: String?,
         actionTitle: String,
         systemImage: String,
-        level: GhostLevel
+        level: GhostLevel,
+        stopConsequence: String? = nil
     ) {
         self.eyebrow = eyebrow
         self.title = title
@@ -282,6 +240,7 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         self.actionTitle = actionTitle
         self.systemImage = systemImage
         self.level = level
+        self.stopConsequence = stopConsequence
     }
 
     public static func build(
@@ -290,7 +249,9 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         warmingRows: [CompactSidebarRowModel],
         detailPanels: [String: FamilyDetailPanelModel]
     ) -> RadarIntelligenceBrief {
-        guard let row = topRiskRows.first ?? warmingRows.first,
+        // Confirmed trouble outranks a hotter spike that may still settle.
+        let confirmed = topRiskRows.first { detailPanels[$0.familyKey]?.heatConfirmed == true }
+        guard let row = confirmed ?? topRiskRows.first ?? warmingRows.first,
               let panel = detailPanels[row.familyKey]
         else {
             let hasFamilies = summary.familyCount > 0
@@ -319,8 +280,12 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         let hasCredibleForecastEscalation = row.forecastState >= .leaking && row.forecastConfidence >= 0.55
         let isConfirmedUrgent = row.level >= .hot && panel.heatConfirmed
         let isUnconfirmedHeat = row.level >= .hot && !panel.heatConfirmed
+        let stopRisk = isConfirmedUrgent && panel.hasOwnedTargets ? panel.stopRisk : nil
+        let consequence = stopRisk.flatMap(Self.consequence(of:))
         let recommendation: String
-        if isConfirmedUrgent, panel.hasOwnedTargets {
+        if let consequence {
+            recommendation = consequence
+        } else if isConfirmedUrgent, panel.hasOwnedTargets {
             recommendation = "Review the process tree, then use Kill Preview only if this work is no longer needed."
         } else if isConfirmedUrgent {
             recommendation = "Inspect the process tree and its evidence; no user-owned target is available to stop."
@@ -336,7 +301,7 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         let actionTitle: String
         if isConfirmedUrgent {
             eyebrow = "Recommended now"
-            actionTitle = "Review family"
+            actionTitle = stopRisk.map(Self.actionTitle(for:)) ?? "Review family"
         } else if isUnconfirmedHeat {
             eyebrow = "Confirming activity"
             actionTitle = "Inspect signals"
@@ -356,52 +321,68 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
             familyName: row.title,
             actionTitle: actionTitle,
             systemImage: panel.verdict.systemImage,
-            level: max(row.level, panel.verdict.level)
+            level: max(row.level, panel.verdict.level),
+            stopConsequence: stopRisk?.headline
         )
+    }
+
+    /// The headline, then the hazard most worth knowing first: a supervisor
+    /// that restarts the process makes stopping it pointless.
+    private static func consequence(of risk: KillRiskAssessment) -> String? {
+        let hazard = risk.hazards.first { $0.kind == .respawn } ?? risk.hazards.first
+        let parts = [risk.headline, hazard?.detail].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// Mirrors the stop planner's strategy choice for the cases it takes
+    /// from the risk assessment alone.
+    private static func actionTitle(for risk: KillRiskAssessment) -> String {
+        if risk.appQuitPID != nil {
+            return "Quit app"
+        }
+        if risk.kind == .dataStore || risk.kind == .containerRuntime {
+            return "Stop safely"
+        }
+        if risk.supervisor != nil || risk.risks.contains(where: { $0.kind == .respawn }) {
+            return "Review supervisor"
+        }
+        return "Review family"
     }
 }
 
 public struct CompactConsoleSnapshot: Equatable, Sendable {
-    public let layoutMode: ConsoleLayoutMode
     public let commandCenter: OverviewCommandCenterModel
     public let engineStatus: EngineStatusSnapshot
     public let allRows: [CompactSidebarRowModel]
     public let topRiskRows: [CompactSidebarRowModel]
     public let warmingRows: [CompactSidebarRowModel]
-    public let detailModels: [String: CompactFamilyDetailModel]
     public let duplicateCount: Int
     public let intelligenceBrief: RadarIntelligenceBrief
 
     public static let empty = CompactConsoleSnapshot(
-        layoutMode: .compact,
         commandCenter: .empty,
         engineStatus: .empty,
         allRows: [],
         topRiskRows: [],
         warmingRows: [],
-        detailModels: [:],
         duplicateCount: 0,
         intelligenceBrief: .empty
     )
 
     public init(
-        layoutMode: ConsoleLayoutMode,
         commandCenter: OverviewCommandCenterModel,
         engineStatus: EngineStatusSnapshot,
         allRows: [CompactSidebarRowModel],
         topRiskRows: [CompactSidebarRowModel],
         warmingRows: [CompactSidebarRowModel],
-        detailModels: [String: CompactFamilyDetailModel],
         duplicateCount: Int = 0,
         intelligenceBrief: RadarIntelligenceBrief = .empty
     ) {
-        self.layoutMode = layoutMode
         self.commandCenter = commandCenter
         self.engineStatus = engineStatus
         self.allRows = allRows
         self.topRiskRows = topRiskRows
         self.warmingRows = warmingRows
-        self.detailModels = detailModels
         self.duplicateCount = duplicateCount
         self.intelligenceBrief = intelligenceBrief
     }
@@ -414,14 +395,27 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
         duplicateCount: Int = 0
     ) -> CompactConsoleSnapshot {
         let rows = triage.map(CompactSidebarRowModel.init(item:))
-        let priorities = priorityRows(from: rows)
+        return build(
+            summary: summary,
+            rows: rows,
+            priorities: priorityRows(from: rows),
+            detailPanels: detailPanels,
+            engineStatus: engineStatus,
+            duplicateCount: duplicateCount
+        )
+    }
+
+    /// For callers that already built the rows and their priorities.
+    static func build(
+        summary: RadarSummary,
+        rows: [CompactSidebarRowModel],
+        priorities: (risk: [CompactSidebarRowModel], warming: [CompactSidebarRowModel]),
+        detailPanels: [String: FamilyDetailPanelModel],
+        engineStatus: EngineStatusSnapshot,
+        duplicateCount: Int
+    ) -> CompactConsoleSnapshot {
         let topRiskRows = priorities.risk
         let warmingRows = priorities.warming
-        let detailModels = Dictionary(
-            uniqueKeysWithValues: detailPanels.map { key, panel in
-                (key, CompactFamilyDetailModel(panel: panel))
-            }
-        )
         let intelligenceBrief = RadarIntelligenceBrief.build(
             summary: summary,
             topRiskRows: topRiskRows,
@@ -429,13 +423,11 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
             detailPanels: detailPanels
         )
         return CompactConsoleSnapshot(
-            layoutMode: .compact,
             commandCenter: OverviewCommandCenterModel(summary: summary, engineStatus: engineStatus, duplicateCount: duplicateCount),
             engineStatus: engineStatus,
             allRows: rows,
             topRiskRows: Array(topRiskRows.prefix(8)),
             warmingRows: Array(warmingRows.prefix(6)),
-            detailModels: detailModels,
             duplicateCount: duplicateCount,
             intelligenceBrief: intelligenceBrief
         )
@@ -465,13 +457,11 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
 
     public func updatingEngineStatus(_ engineStatus: EngineStatusSnapshot, summary: RadarSummary) -> CompactConsoleSnapshot {
         CompactConsoleSnapshot(
-            layoutMode: layoutMode,
             commandCenter: OverviewCommandCenterModel(summary: summary, engineStatus: engineStatus, duplicateCount: duplicateCount),
             engineStatus: engineStatus,
             allRows: allRows,
             topRiskRows: topRiskRows,
             warmingRows: warmingRows,
-            detailModels: detailModels,
             duplicateCount: duplicateCount,
             intelligenceBrief: intelligenceBrief
         )

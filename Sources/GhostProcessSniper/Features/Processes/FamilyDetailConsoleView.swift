@@ -33,6 +33,10 @@ struct FamilyDetailConsoleView: View {
     /// What stopping this family would do, shown before any preview opens.
     let stopRisk: KillRiskAssessment
     let actions: FamilyPageActions
+    /// Live dates from the family: a reused panel's own strings freeze at
+    /// the time it was built.
+    let lastScoredAt: Date?
+    let forensicsFreshness: Date?
 
     @State private var selectedTab: FamilyDetailTab = .overview
 
@@ -66,8 +70,8 @@ struct FamilyDetailConsoleView: View {
                     .font(.caption)
                     .foregroundStyle(panel.change.level > .quiet ? RadarStyle.color(for: panel.change.level) : .secondary)
                     .lineLimit(1)
-                    .help("What changed since the last scan")
-                Label(panel.lastScoredText, systemImage: "clock")
+                    .help("How memory and CPU moved over the last half minute")
+                Label(FamilyDetailPanelModel.lastScoredText(lastScoredAt), systemImage: "clock")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -144,7 +148,7 @@ struct FamilyDetailConsoleView: View {
             EmptyView()
         case .details:
             FamilyCommandPanel(commandLine: panel.commandLine, rootPID: panel.rootPID, actions: actions)
-            FamilyForensicsPanel(forensics: panel.forensics)
+            FamilyForensicsPanel(forensics: panel.forensics, freshness: forensicsFreshness)
                 .equatable()
         }
     }

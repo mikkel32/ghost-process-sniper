@@ -44,6 +44,7 @@ extension RadarConsoleSession {
         state.focusedSelection = selection
         updateFocusedFamilies()
         updateCanStopSelection()
+        schedulePanelUpdate()
     }
 
     /// Opens the stop preview for the action's target, on its own page.

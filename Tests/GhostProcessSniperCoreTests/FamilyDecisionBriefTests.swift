@@ -9,7 +9,7 @@ final class FamilyDecisionBriefTests: XCTestCase {
     func testSteadyClimbWithHighFitRecommendsStopWithHighConfidence() {
         let family = makeFamily(points: (0..<8).map { Double(400 + $0 * 40) * mebibyte }, fit: 0.95, forecast: forecast(.leaking, confidence: 0.8))
 
-        let brief = FamilyDetailPanelModel(family: family, previous: nil).brief
+        let brief = FamilyDetailPanelModel(family: family).brief
 
         XCTAssertEqual(brief.headline, "Likely leak")
         XCTAssertEqual(brief.recommendation, .stop)
@@ -23,7 +23,7 @@ final class FamilyDecisionBriefTests: XCTestCase {
         let points: [Double] = [400, 520, 430, 560, 450, 590, 470, 610].map { $0 * mebibyte }
         let family = makeFamily(points: points, fit: 0.3, forecast: forecast(.warming, confidence: 0.6))
 
-        let brief = FamilyDetailPanelModel(family: family, previous: nil).brief
+        let brief = FamilyDetailPanelModel(family: family).brief
 
         XCTAssertEqual(brief.headline, "Churning, not leaking")
         XCTAssertEqual(brief.recommendation, .watch)
@@ -37,7 +37,7 @@ final class FamilyDecisionBriefTests: XCTestCase {
             measurement: .unavailable
         )
 
-        let brief = FamilyDetailPanelModel(family: family, previous: nil).brief
+        let brief = FamilyDetailPanelModel(family: family).brief
 
         XCTAssertEqual(brief.recommendation, .waitForReading)
         XCTAssertEqual(brief.confidence, .low)
@@ -51,7 +51,7 @@ final class FamilyDecisionBriefTests: XCTestCase {
             alert: AlertState(kind: .snoozed, message: "Snoozed", since: now)
         )
 
-        let brief = FamilyDetailPanelModel(family: family, previous: nil).brief
+        let brief = FamilyDetailPanelModel(family: family).brief
 
         XCTAssertEqual(brief.recommendation, .leaveAlone)
         XCTAssertEqual(brief.mute, .snoozed)
@@ -65,7 +65,7 @@ final class FamilyDecisionBriefTests: XCTestCase {
             owned: false
         )
 
-        let brief = FamilyDetailPanelModel(family: family, previous: nil).brief
+        let brief = FamilyDetailPanelModel(family: family).brief
 
         XCTAssertNotEqual(brief.recommendation, .stop)
         XCTAssertEqual(brief.recommendation, .watch)
@@ -82,7 +82,7 @@ final class FamilyDecisionBriefTests: XCTestCase {
             components: components
         )
 
-        let evidence = FamilyDetailPanelModel(family: family, previous: nil).brief.evidence
+        let evidence = FamilyDetailPanelModel(family: family).brief.evidence
 
         XCTAssertEqual(Array(evidence.prefix(3)), ["signal 5: detail 5", "signal 4: detail 4", "signal 3: detail 3"])
         XCTAssertGreaterThan(evidence.count, 3, "culprit evidence follows the score components")

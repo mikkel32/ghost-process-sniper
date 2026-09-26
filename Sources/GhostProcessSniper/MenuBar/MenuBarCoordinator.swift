@@ -90,6 +90,11 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         }
     }
 
+    /// Persists pending settings and closes the store before the app exits.
+    func shutdown() async {
+        await monitor.shutdown()
+    }
+
     func stop() {
         for id in [statusObserverID, quickStopObserverID].compactMap({ $0 }) {
             monitor.removePublishedStateObserver(id)

@@ -66,7 +66,6 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
     public let scoreText: String
     public let heat: Double
     public let heatText: String
-    public let heatConfidenceText: String
     public let memoryBytes: UInt64
     public let memoryText: String
     public let cpuPercent: Double
@@ -80,29 +79,16 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
     public let isKillable: Bool
     public let kind: DevProcessKind
     public let kindText: String
-    public let classificationReason: String
-    public let likelyCauseText: String
-    public let nextActionText: String
     public let forecastState: ForecastState
     public let forecastConfidence: Double
-    public let forecastPresentationLevel: GhostLevel
     public let forecastPriority: Int
     public let hasCredibleLeak: Bool
-    public let forecastText: String
     public let etaText: String
     public let confidenceText: String
-    public let whyNowText: String
-    public let recommendationText: String
-    public let alertMessage: String
-    public let primaryComponent: GhostScoreComponent?
-    public let reasonCount: Int
-    public let metricsVersion: UInt64
-    public let forensicsFreshness: Date?
 
     public init(
         family: ProcessFamily,
-        classification providedClassification: DevClassification? = nil,
-        culprit providedCulprit: CulpritAnalysis? = nil
+        classification providedClassification: DevClassification? = nil
     ) {
         familyKey = family.familyKey
         assessment = ProcessAssessment(family: family)
@@ -115,7 +101,6 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
         scoreText = "\(Int(family.score.value.rounded()))"
         heat = family.score.heat.value
         heatText = family.score.heat.valueText
-        heatConfidenceText = family.score.heat.confidenceText
         memoryBytes = family.totalPhysicalFootprintBytes
         memoryText = RadarFormat.bytes(family.totalPhysicalFootprintBytes)
         cpuPercent = family.totalCPUPercent
@@ -128,35 +113,14 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
         devConfidence = family.devConfidence
         isKillable = family.isKillable
         let classification = providedClassification ?? family.classification ?? DevProcessClassifier().classification(for: family)
-        let culprit = providedCulprit ?? CulpritAnalysis(family: family, classification: classification)
         kind = classification.kind
         kindText = classification.kind.label
-        classificationReason = classification.reason
-        likelyCauseText = culprit.likelyCause
-        nextActionText = culprit.nextAction
         forecastState = family.forecast.state
         forecastConfidence = family.forecast.confidence
-        forecastPresentationLevel = family.forecastPresentationLevel
         forecastPriority = family.forecastPresentationPriority
         hasCredibleLeak = family.hasCredibleLeak
-        forecastText = family.forecastPresentationText
         etaText = family.forecast.etaText
         confidenceText = "\(Int((family.forecast.confidence * 100).rounded()))%"
-        whyNowText = family.forecast.whyNow
-        recommendationText = family.presentedForecastRecommendation.title
-        if family.alertState.kind != .normal {
-            alertMessage = family.alertState.message
-        } else if family.forecastIsCredibleEarlyWarning {
-            alertMessage = "\(family.forecast.state.label) - \(family.forecast.etaText)"
-        } else if family.forecast.state >= .warming {
-            alertMessage = "Confirming \(family.forecast.state.label.lowercased()) signal"
-        } else {
-            alertMessage = level.label
-        }
-        primaryComponent = family.score.components.max { $0.impact < $1.impact }
-        reasonCount = family.score.reasons.count
-        metricsVersion = family.metricsVersion
-        forensicsFreshness = family.forensicsFreshness
     }
 
     /// Elevated now, or trending toward trouble. Sidebar sections, the
@@ -179,13 +143,7 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
     public static func areInIncreasingOrder(_ lhs: Self, _ rhs: Self, by sort: RadarSort) -> Bool {
         switch sort {
         case .smart:
-            if lhs.level != rhs.level { return lhs.level > rhs.level }
-            if lhs.heat != rhs.heat { return lhs.heat > rhs.heat }
-            if lhs.forecastPriority != rhs.forecastPriority { return lhs.forecastPriority > rhs.forecastPriority }
-            if lhs.score != rhs.score { return lhs.score > rhs.score }
-            if lhs.leakVelocity != rhs.leakVelocity { return lhs.leakVelocity > rhs.leakVelocity }
-            if lhs.memoryBytes != rhs.memoryBytes { return lhs.memoryBytes > rhs.memoryBytes }
-            if lhs.cpuPercent != rhs.cpuPercent { return lhs.cpuPercent > rhs.cpuPercent }
+            return SmartSortKey(lhs) < SmartSortKey(rhs)
         case .memory:
             if lhs.memoryBytes != rhs.memoryBytes { return lhs.memoryBytes > rhs.memoryBytes }
             if lhs.score != rhs.score { return lhs.score > rhs.score }
@@ -200,5 +158,41 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
             if comparison != .orderedSame { return comparison == .orderedAscending }
         }
         return lhs.id < rhs.id
+    }
+
+    /// The smart order's inputs, small enough that sorting keys and permuting
+    /// rows once beats swapping whole rows during the sort.
+    struct SmartSortKey: Comparable {
+        let level: GhostLevel
+        let heat: Double
+        let forecastPriority: Int
+        let score: Double
+        let leakVelocity: Double
+        let memoryBytes: UInt64
+        let cpuPercent: Double
+        let familyKey: String
+
+        init(_ row: FamilyTriageViewModel) {
+            level = row.level
+            heat = row.heat
+            forecastPriority = row.forecastPriority
+            score = row.score
+            leakVelocity = row.leakVelocity
+            memoryBytes = row.memoryBytes
+            cpuPercent = row.cpuPercent
+            familyKey = row.familyKey
+        }
+
+        /// Earlier means more urgent.
+        static func < (lhs: Self, rhs: Self) -> Bool {
+            if lhs.level != rhs.level { return lhs.level > rhs.level }
+            if lhs.heat != rhs.heat { return lhs.heat > rhs.heat }
+            if lhs.forecastPriority != rhs.forecastPriority { return lhs.forecastPriority > rhs.forecastPriority }
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            if lhs.leakVelocity != rhs.leakVelocity { return lhs.leakVelocity > rhs.leakVelocity }
+            if lhs.memoryBytes != rhs.memoryBytes { return lhs.memoryBytes > rhs.memoryBytes }
+            if lhs.cpuPercent != rhs.cpuPercent { return lhs.cpuPercent > rhs.cpuPercent }
+            return lhs.familyKey < rhs.familyKey
+        }
     }
 }

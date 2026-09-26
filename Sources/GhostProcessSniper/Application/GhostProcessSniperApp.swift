@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = MenuBarCoordinator()
     // The notification center holds its delegate weakly.
     private var notificationRouter: NotificationRouter?
+    private var isTerminating = false
+    private var didReplyToTermination = false
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Unbundled dev builds have no notification center.
@@ -37,6 +39,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.arguments.contains("--console") {
             coordinator.openConsole()
         }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isTerminating else {
+            return .terminateLater
+        }
+        isTerminating = true
+        Task {
+            await coordinator.shutdown()
+            replyToTermination()
+        }
+        Task {
+            // A stuck disk must never hold up quitting.
+            try? await Task.sleep(for: .seconds(1))
+            replyToTermination()
+        }
+        return .terminateLater
+    }
+
+    private func replyToTermination() {
+        guard !didReplyToTermination else {
+            return
+        }
+        didReplyToTermination = true
+        NSApp.reply(toApplicationShouldTerminate: true)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -525,7 +525,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
             lastScoredAt: now
         )
         let triage = [FamilyTriageViewModel(family: family)]
-        let panel = FamilyDetailPanelModel(family: family, previous: nil)
+        let panel = FamilyDetailPanelModel(family: family)
         let summary = RadarSummary(
             statusText: "1 hot",
             level: .hot,

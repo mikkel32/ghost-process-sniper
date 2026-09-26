@@ -7,9 +7,7 @@ public struct ProcessMonitorPublishedState: Equatable, Sendable {
     public let incidents: [RadarIncident]
     public let rules: [RadarRule]
     public let model: RadarModel
-    public let viewModel: RadarViewModel
     public let triageFamilies: [FamilyTriageViewModel]
-    public let detailViewModels: [String: FamilyDetailViewModel]
     public let consoleSnapshot: RadarConsoleSnapshot
     public let engineDiagnostics: EngineDiagnosticsViewModel
     public let engineStatus: EngineStatusSnapshot
@@ -25,9 +23,7 @@ public struct ProcessMonitorPublishedState: Equatable, Sendable {
         incidents: [],
         rules: [],
         model: .empty,
-        viewModel: .empty,
         triageFamilies: [],
-        detailViewModels: [:],
         consoleSnapshot: .empty,
         engineDiagnostics: .empty,
         engineStatus: .empty,
@@ -44,9 +40,7 @@ public struct ProcessMonitorPublishedState: Equatable, Sendable {
         incidents: [RadarIncident],
         rules: [RadarRule],
         model: RadarModel,
-        viewModel: RadarViewModel,
         triageFamilies: [FamilyTriageViewModel],
-        detailViewModels: [String: FamilyDetailViewModel],
         consoleSnapshot: RadarConsoleSnapshot,
         engineDiagnostics: EngineDiagnosticsViewModel = .empty,
         engineStatus: EngineStatusSnapshot = .empty,
@@ -61,9 +55,7 @@ public struct ProcessMonitorPublishedState: Equatable, Sendable {
         self.incidents = incidents
         self.rules = rules
         self.model = model
-        self.viewModel = viewModel
         self.triageFamilies = triageFamilies
-        self.detailViewModels = detailViewModels
         self.consoleSnapshot = consoleSnapshot
         self.engineDiagnostics = engineDiagnostics
         self.engineStatus = engineStatus
@@ -87,9 +79,7 @@ public struct ProcessMonitorPublishedState: Equatable, Sendable {
             incidents: incidents,
             rules: rules,
             model: model,
-            viewModel: viewModel,
             triageFamilies: triageFamilies,
-            detailViewModels: detailViewModels,
             consoleSnapshot: consoleSnapshot ?? self.consoleSnapshot,
             engineDiagnostics: engineDiagnostics ?? self.engineDiagnostics,
             engineStatus: engineStatus ?? self.engineStatus,
@@ -159,7 +149,8 @@ public struct RadarPublishPayload: Equatable, Sendable {
         performance: RadarPerformanceMetrics,
         previous: RadarConsoleSnapshot?,
         generatedAt: Date,
-        detailSignatures: Set<String>? = nil
+        detailSignatures: Set<String>? = nil,
+        processes: [ProcessMetrics] = []
     ) -> RadarPublishPayload {
         let contentRevision = SnapshotContentRevision.compute(
             families: families,
@@ -202,14 +193,7 @@ public struct RadarPublishPayload: Equatable, Sendable {
                         health: health,
                         generatedAt: generatedAt
                     ),
-                    viewModel: RadarViewModel(
-                        summary: summary,
-                        families: [],
-                        performance: diagnosticsPerformance,
-                        generatedAt: generatedAt
-                    ),
                     triageFamilies: previous.families,
-                    detailViewModels: [:],
                     consoleSnapshot: snapshot,
                     engineDiagnostics: engine,
                     engineStatus: snapshot.compact.engineStatus,
@@ -236,35 +220,13 @@ public struct RadarPublishPayload: Equatable, Sendable {
             health: health,
             generatedAt: generatedAt
         )
-        let viewModel = RadarViewModel(
-            summary: summary,
-            families: families.map(RadarFamilyViewModel.init(family:)),
-            performance: revisedPerformance,
-            generatedAt: generatedAt
-        )
         let snapshot = RadarConsoleSnapshot.build(
             families: families, duplicateClusters: duplicateClusters, summary: summary,
             incidents: incidents, rules: rules, metrics: revisedPerformance, health: health,
             storeHealth: storeHealth, storeError: storeError, previous: previous,
-            generatedAt: generatedAt, detailSignatures: detailSignatures
+            generatedAt: generatedAt, detailSignatures: detailSignatures, processes: processes,
+            contentRevision: contentRevision
         )
-        var details: [String: FamilyDetailViewModel] = [:]
-        var bestBySignature: [String: FamilyDetailViewModel] = [:]
-        details.reserveCapacity(snapshot.detailPanels.count)
-        for family in families where snapshot.detailPanels[family.familyKey] != nil {
-            let detail = FamilyDetailViewModel(family: family)
-            details[family.familyKey] = detail
-            if let current = bestBySignature[family.signature.id] {
-                if detail.score > current.score || (detail.score == current.score && detail.memoryBytes > current.memoryBytes) {
-                    bestBySignature[family.signature.id] = detail
-                }
-            } else {
-                bestBySignature[family.signature.id] = detail
-            }
-        }
-        for (signatureID, detail) in bestBySignature where details[signatureID] == nil {
-            details[signatureID] = detail
-        }
         let triage = snapshot.families
         let engineDiagnostics = snapshot.engine
         let engineStatus = snapshot.compact.engineStatus
@@ -276,9 +238,7 @@ public struct RadarPublishPayload: Equatable, Sendable {
                 incidents: incidents,
                 rules: rules,
                 model: model,
-                viewModel: viewModel,
                 triageFamilies: triage,
-                detailViewModels: details,
                 consoleSnapshot: snapshot,
                 engineDiagnostics: engineDiagnostics,
                 engineStatus: engineStatus,

@@ -146,9 +146,10 @@ struct FamilyCommandPanel: View {
 
 struct FamilyForensicsPanel: View, Equatable {
     let forensics: FamilyForensicsSummary
+    let freshness: Date?
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.forensics == rhs.forensics
+        lhs.forensics == rhs.forensics && lhs.freshness == rhs.freshness
     }
 
     var body: some View {
@@ -162,7 +163,7 @@ struct FamilyForensicsPanel: View, Equatable {
             )
         ) {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 10)], spacing: 10) {
-                fact("Fresh", forensics.freshnessText)
+                fact("Fresh", FamilyForensicsSummary.freshnessText(freshness))
                 fact("Ports", forensics.portsText)
                 fact("CWD", forensics.currentDirectory)
                 fact("Root", forensics.rootDirectory)

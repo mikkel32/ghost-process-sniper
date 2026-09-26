@@ -5,6 +5,8 @@ import SwiftUI
 /// processes of the tree, saying how many more there are.
 struct FamilyInspectorView: View {
     let panel: FamilyDetailPanelModel
+    /// The family's live forensics date; the panel's own text can be stale.
+    let forensicsFreshness: Date?
 
     private static let treeLimit = 10
 
@@ -13,7 +15,7 @@ struct FamilyInspectorView: View {
             VStack(alignment: .leading, spacing: 14) {
                 RadarSection(title: "Forensics") {
                     VStack(alignment: .leading, spacing: 8) {
-                        row("Fresh", panel.forensics.freshnessText)
+                        row("Fresh", FamilyForensicsSummary.freshnessText(forensicsFreshness))
                         row("CWD", panel.forensics.currentDirectory)
                         row("Files", panel.forensics.openFileText)
                         row("Ports", panel.forensics.portsText)

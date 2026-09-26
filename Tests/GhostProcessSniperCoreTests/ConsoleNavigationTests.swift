@@ -36,7 +36,6 @@ final class ConsoleNavigationTests: XCTestCase {
 
     func testBrowserDoesNotImplyASelectedProcess() {
         XCTAssertNil(RadarFocusedSelection.processes.familyKey)
-        XCTAssertNil(RadarFocusedSelection.processes.signatureID)
         XCTAssertEqual(RadarFocusedSelection.family("example").familyKey, "example")
     }
 

@@ -12,9 +12,7 @@ public final class ProcessMonitor {
     public private(set) var incidents: [RadarIncident] = []
     public private(set) var rules: [RadarRule] = []
     public private(set) var model: RadarModel = .empty
-    public private(set) var viewModel: RadarViewModel = .empty
     public private(set) var triageFamilies: [FamilyTriageViewModel] = []
-    public private(set) var detailViewModels: [String: FamilyDetailViewModel] = [:]
     public private(set) var consoleSnapshot: RadarConsoleSnapshot = .empty
     public private(set) var engineDiagnostics: EngineDiagnosticsViewModel = .empty
     public private(set) var engineStatus: EngineStatusSnapshot = .empty
@@ -35,14 +33,14 @@ public final class ProcessMonitor {
     @ObservationIgnored private let thermalSampler = ThermalSampler()
     @ObservationIgnored private var selfUsageMonitor = SelfUsageMonitor()
     @ObservationIgnored private let notifier: RadarNotifying
-    @ObservationIgnored private let store: RadarStore?
+    @ObservationIgnored let store: RadarStore?
     @ObservationIgnored private let worker: RadarRefreshWorker
     @ObservationIgnored private let refreshGate = RefreshGate()
     @ObservationIgnored private var pipeline: RadarPipeline
     @ObservationIgnored private var scheduler = RadarScheduler()
     @ObservationIgnored private var injectedThermalHistory = ThermalActivityHistory()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
-    @ObservationIgnored private var settingsSaveTask: Task<Void, Never>?
+    @ObservationIgnored var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
     @ObservationIgnored private var popoverVisible = false
     @ObservationIgnored var consoleVisible = false
@@ -443,16 +441,6 @@ public final class ProcessMonitor {
         families.first { $0.familyKey == signatureID || $0.signature.id == signatureID }
     }
 
-    public func detailViewModel(signatureID: String) -> FamilyDetailViewModel? {
-        if let detail = detailViewModels[signatureID] {
-            return detail
-        }
-        guard let family = family(signatureID: signatureID) else {
-            return nil
-        }
-        return detailViewModels[family.familyKey] ?? FamilyDetailViewModel(family: family)
-    }
-
     public func snooze(signatureID: String, minutes: TimeInterval = 60) async {
         guard let family = family(signatureID: signatureID) else {
             return
@@ -468,7 +456,7 @@ public final class ProcessMonitor {
     }
 
     nonisolated public static func createDefaultStore() -> RadarStore? {
-        try? RadarStore()
+        RadarStore()
     }
 
     private func loadPersistedSettingsIfNeeded() async {
@@ -518,7 +506,7 @@ public final class ProcessMonitor {
             latestSpikePhase: mergedReport.latestSpikePhase,
             smoothnessReport: mergedReport
         )
-        storeError = state.storeError
+        storeError = state.storeError ?? state.storeHealth.errorMessage
         storeHealth = state.storeHealth
         scannerHealth = state.scannerHealth
 
@@ -535,7 +523,7 @@ public final class ProcessMonitor {
             metrics: performance,
             health: state.health,
             storeHealth: state.storeHealth,
-            storeError: state.storeError,
+            storeError: storeError,
             summary: state.summary,
             generatedAt: payload.generatedAt
         )
@@ -565,17 +553,7 @@ public final class ProcessMonitor {
             rules = state.rules
             incidents = state.incidents
             triageFamilies = state.triageFamilies
-            detailViewModels = state.detailViewModels
             consoleSnapshot = finalConsoleSnapshot
-        }
-
-        if contentChanged {
-            viewModel = RadarViewModel(
-                summary: state.summary,
-                families: state.viewModel.families,
-                performance: performance,
-                generatedAt: payload.generatedAt
-            )
         }
         performanceMetrics = performance
         state = ProcessMonitorPublishedState(
@@ -585,9 +563,7 @@ public final class ProcessMonitor {
             incidents: incidents,
             rules: rules,
             model: model,
-            viewModel: viewModel,
             triageFamilies: triageFamilies,
-            detailViewModels: detailViewModels,
             consoleSnapshot: consoleSnapshot,
             engineDiagnostics: engineDiagnostics,
             engineStatus: engineStatus,
