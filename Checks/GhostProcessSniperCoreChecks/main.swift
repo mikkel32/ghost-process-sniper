@@ -706,7 +706,7 @@ private func compactDefaultsAndEngineIsolationBehave() throws {
         summary: summary,
         incidents: [],
         rules: RadarRule.builtIns(settings: .aggressive),
-        metrics: .empty.updatingSmoothness(mainActorPublishMilliseconds: 5),
+        metrics: performanceMetrics { $0.mainActorPublishMilliseconds = 5 },
         health: SamplerHealth(engineName: "test", lastSampleDate: nil, processCount: 84, familyCount: 1, errorMessage: nil),
         storeHealth: StoreHealth(
             backlogCount: 2,
@@ -1228,6 +1228,15 @@ private func selfUsageMonitorMeasuresOwnCost() throws {
     try check(second.averageCPUPercent > 0, "self usage should keep a rolling average")
 }
 
+private func performanceMetrics(
+    from base: RadarPerformanceMetrics = .empty,
+    _ update: (inout RadarSmoothnessState) -> Void
+) -> RadarPerformanceMetrics {
+    var metrics = base
+    update(&metrics.smoothness)
+    return metrics
+}
+
 private func scannerDeadlineAndCachesBehave() throws {
     let budget = ScannerBudget.budget(for: .batterySaver)
     let deadline = SamplerDeadline(
@@ -1331,10 +1340,14 @@ private func scannerHealthFeedsDiagnostics() throws {
         lastStoreFlushDate: nil,
         budget: RadarPerformanceBudget.budget(for: .batterySaver),
         scannerHealth: health,
-        taskInfoReadCount: 2,
-        reusedProcessRecordCount: 7,
-        hardwareOffenderCount: 2,
-        hardwareDetectorMilliseconds: 1
+        smoothness: {
+            var smoothness = RadarSmoothnessState()
+            smoothness.taskInfoReadCount = 2
+            smoothness.reusedProcessRecordCount = 7
+            smoothness.hardwareOffenderCount = 2
+            smoothness.hardwareDetectorMilliseconds = 1
+            return smoothness
+        }()
     )
     let engine = EngineDiagnosticsViewModel(
         metrics: metrics,
@@ -1425,7 +1438,7 @@ private func radarPublishPayloadSkipsUnchangedContentRebuild() throws {
         health: SamplerHealth(engineName: "test", lastSampleDate: nil, processCount: 1, familyCount: 1, errorMessage: nil),
         storeHealth: .empty,
         storeError: nil,
-        performance: .empty.updatingSmoothness(mainActorPublishMilliseconds: 4),
+        performance: performanceMetrics { $0.mainActorPublishMilliseconds = 4 },
         previous: first.state.consoleSnapshot,
         generatedAt: Date(timeIntervalSince1970: 2_301)
     )
@@ -1481,10 +1494,10 @@ private func menuBarPresentationKeepsDiagnosticsOutOfTitle() throws {
         topFamilyName: "node",
         leakingCount: 1
     )
-    let metrics = RadarPerformanceMetrics.empty.updatingSmoothness(
-        mainActorPublishMilliseconds: 9,
-        duplicateClusterCount: 3
-    )
+    let metrics = performanceMetrics {
+        $0.mainActorPublishMilliseconds = 9
+        $0.duplicateClusterCount = 3
+    }
     let first = MenuBarStatusPresentation(
         summary: summary,
         engineStatus: .empty,
@@ -1493,7 +1506,7 @@ private func menuBarPresentationKeepsDiagnosticsOutOfTitle() throws {
     let second = MenuBarStatusPresentation(
         summary: summary,
         engineStatus: .empty,
-        metrics: metrics.updatingSmoothness(mainActorPublishMilliseconds: 15)
+        metrics: performanceMetrics(from: metrics) { $0.mainActorPublishMilliseconds = 15 }
     )
 
     try check(first.title.isEmpty, "hot/leak diagnostics should never appear in menu bar title")
@@ -2175,7 +2188,7 @@ private func consoleSnapshotContentRevisionAvoidsGeneratedAtInvalidation() throw
         summary: summary,
         incidents: [],
         rules: RadarRule.builtIns(settings: .aggressive),
-        metrics: .empty.updatingSmoothness(mainActorPublishMilliseconds: 4),
+        metrics: performanceMetrics { $0.mainActorPublishMilliseconds = 4 },
         health: .starting,
         storeHealth: StoreHealth(
             backlogCount: 1,
@@ -2296,7 +2309,7 @@ private func radarSnapshotSurfacesDuplicateRowsAndStableRevision() throws {
         summary: summary,
         incidents: [],
         rules: RadarRule.builtIns(settings: .aggressive),
-        metrics: .empty.updatingSmoothness(duplicateClusterCount: duplicateSet.visibleClusters.count),
+        metrics: performanceMetrics { $0.duplicateClusterCount = duplicateSet.visibleClusters.count },
         health: .starting,
         storeHealth: .empty,
         storeError: nil,
@@ -2309,7 +2322,10 @@ private func radarSnapshotSurfacesDuplicateRowsAndStableRevision() throws {
         summary: summary,
         incidents: [],
         rules: RadarRule.builtIns(settings: .aggressive),
-        metrics: .empty.updatingSmoothness(mainActorPublishMilliseconds: 3, duplicateClusterCount: duplicateSet.visibleClusters.count),
+        metrics: performanceMetrics {
+            $0.mainActorPublishMilliseconds = 3
+            $0.duplicateClusterCount = duplicateSet.visibleClusters.count
+        },
         health: .starting,
         storeHealth: .empty,
         storeError: nil,

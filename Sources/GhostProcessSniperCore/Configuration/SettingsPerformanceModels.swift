@@ -282,6 +282,50 @@ public struct RefreshStats: Equatable, Sendable {
     }
 }
 
+/// Publish, hitch and scanner-shape diagnostics that ride along with each
+/// refresh. Callers copy the metrics and mutate this in place, so a new
+/// counter is one stored property here and nothing else.
+public struct RadarSmoothnessState: Equatable, Sendable {
+    public var mainActorPublishMilliseconds: Double = 0
+    public var coalescedRefreshCount = 0
+    public var refreshInFlight = false
+    public var uiCacheHitCount = 0
+    public var scannerWorkerCount = 0
+    public var skippedOptionalWorkCount = 0
+    public var hitchCount = 0
+    public var worstHitchMilliseconds: Double = 0
+    public var latestSpikePhase = "none"
+    public var uiPublishSkippedCount = 0
+    public var contentRevision: SnapshotContentRevision = .zero
+    public var statusUpdateMilliseconds: Double = 0
+    public var scannerTaskCount = 0
+    public var tinyQueueSequentialCount = 0
+    public var diagnosticsOnlyPublishCount = 0
+    public var contentPublishSkippedCount = 0
+    public var samplerAllocationReuseCount = 0
+    public var taskInfoReadCount = 0
+    public var reusedProcessRecordCount = 0
+    public var duplicateClusterCount = 0
+    public var promotedDuplicateCandidateCount = 0
+    public var duplicateDetectorMilliseconds: Double = 0
+    public var hardwareOffenderCount = 0
+    public var hardwareDetectorMilliseconds: Double = 0
+    public var smoothnessReport: RadarSmoothnessReport = .empty
+
+    public init() {}
+
+    /// Adopts a hitch report together with the summary fields derived from it.
+    public mutating func record(_ report: RadarSmoothnessReport) {
+        hitchCount = report.hitchCount
+        worstHitchMilliseconds = report.worstHitchMilliseconds
+        latestSpikePhase = report.latestSpikePhase
+        smoothnessReport = report
+    }
+}
+
+/// Smoothness fields read straight through (`metrics.hitchCount`); writes go
+/// through `smoothness` on a copy.
+@dynamicMemberLookup
 public struct RadarPerformanceMetrics: Equatable, Sendable {
     public let mode: RadarPerformanceMode
     public let pressureLevel: SystemPressureLevel
@@ -295,31 +339,7 @@ public struct RadarPerformanceMetrics: Equatable, Sendable {
     public let lastStoreFlushDate: Date?
     public let budget: RadarPerformanceBudget
     public let scannerHealth: ScannerHealthSnapshot
-    public let mainActorPublishMilliseconds: Double
-    public let coalescedRefreshCount: Int
-    public let refreshInFlight: Bool
-    public let uiCacheHitCount: Int
-    public let scannerWorkerCount: Int
-    public let skippedOptionalWorkCount: Int
-    public let hitchCount: Int
-    public let worstHitchMilliseconds: Double
-    public let latestSpikePhase: String
-    public let uiPublishSkippedCount: Int
-    public let contentRevision: SnapshotContentRevision
-    public let statusUpdateMilliseconds: Double
-    public let scannerTaskCount: Int
-    public let tinyQueueSequentialCount: Int
-    public let diagnosticsOnlyPublishCount: Int
-    public let contentPublishSkippedCount: Int
-    public let samplerAllocationReuseCount: Int
-    public let taskInfoReadCount: Int
-    public let reusedProcessRecordCount: Int
-    public let duplicateClusterCount: Int
-    public let promotedDuplicateCandidateCount: Int
-    public let duplicateDetectorMilliseconds: Double
-    public let hardwareOffenderCount: Int
-    public let hardwareDetectorMilliseconds: Double
-    public let smoothnessReport: RadarSmoothnessReport
+    public var smoothness: RadarSmoothnessState
 
     public static let empty = RadarPerformanceMetrics(
         mode: .balanced,
@@ -349,31 +369,7 @@ public struct RadarPerformanceMetrics: Equatable, Sendable {
         lastStoreFlushDate: Date?,
         budget: RadarPerformanceBudget,
         scannerHealth: ScannerHealthSnapshot = .starting,
-        mainActorPublishMilliseconds: Double = 0,
-        coalescedRefreshCount: Int = 0,
-        refreshInFlight: Bool = false,
-        uiCacheHitCount: Int = 0,
-        scannerWorkerCount: Int = 0,
-        skippedOptionalWorkCount: Int = 0,
-        hitchCount: Int = 0,
-        worstHitchMilliseconds: Double = 0,
-        latestSpikePhase: String = "none",
-        uiPublishSkippedCount: Int = 0,
-        contentRevision: SnapshotContentRevision = .zero,
-        statusUpdateMilliseconds: Double = 0,
-        scannerTaskCount: Int = 0,
-        tinyQueueSequentialCount: Int = 0,
-        diagnosticsOnlyPublishCount: Int = 0,
-        contentPublishSkippedCount: Int = 0,
-        samplerAllocationReuseCount: Int = 0,
-        taskInfoReadCount: Int = 0,
-        reusedProcessRecordCount: Int = 0,
-        duplicateClusterCount: Int = 0,
-        promotedDuplicateCandidateCount: Int = 0,
-        duplicateDetectorMilliseconds: Double = 0,
-        hardwareOffenderCount: Int = 0,
-        hardwareDetectorMilliseconds: Double = 0,
-        smoothnessReport: RadarSmoothnessReport = .empty
+        smoothness: RadarSmoothnessState = RadarSmoothnessState()
     ) {
         self.mode = mode
         self.pressureLevel = pressureLevel
@@ -387,99 +383,11 @@ public struct RadarPerformanceMetrics: Equatable, Sendable {
         self.lastStoreFlushDate = lastStoreFlushDate
         self.budget = budget
         self.scannerHealth = scannerHealth
-        self.mainActorPublishMilliseconds = mainActorPublishMilliseconds
-        self.coalescedRefreshCount = coalescedRefreshCount
-        self.refreshInFlight = refreshInFlight
-        self.uiCacheHitCount = uiCacheHitCount
-        self.scannerWorkerCount = scannerWorkerCount
-        self.skippedOptionalWorkCount = skippedOptionalWorkCount
-        self.hitchCount = hitchCount
-        self.worstHitchMilliseconds = worstHitchMilliseconds
-        self.latestSpikePhase = latestSpikePhase
-        self.uiPublishSkippedCount = uiPublishSkippedCount
-        self.contentRevision = contentRevision
-        self.statusUpdateMilliseconds = statusUpdateMilliseconds
-        self.scannerTaskCount = scannerTaskCount
-        self.tinyQueueSequentialCount = tinyQueueSequentialCount
-        self.diagnosticsOnlyPublishCount = diagnosticsOnlyPublishCount
-        self.contentPublishSkippedCount = contentPublishSkippedCount
-        self.samplerAllocationReuseCount = samplerAllocationReuseCount
-        self.taskInfoReadCount = taskInfoReadCount
-        self.reusedProcessRecordCount = reusedProcessRecordCount
-        self.duplicateClusterCount = duplicateClusterCount
-        self.promotedDuplicateCandidateCount = promotedDuplicateCandidateCount
-        self.duplicateDetectorMilliseconds = duplicateDetectorMilliseconds
-        self.hardwareOffenderCount = hardwareOffenderCount
-        self.hardwareDetectorMilliseconds = hardwareDetectorMilliseconds
-        self.smoothnessReport = smoothnessReport
+        self.smoothness = smoothness
     }
 
-    public func updatingSmoothness(
-        mainActorPublishMilliseconds: Double? = nil,
-        coalescedRefreshCount: Int? = nil,
-        refreshInFlight: Bool? = nil,
-        uiCacheHitCount: Int? = nil,
-        scannerWorkerCount: Int? = nil,
-        skippedOptionalWorkCount: Int? = nil,
-        hitchCount: Int? = nil,
-        worstHitchMilliseconds: Double? = nil,
-        latestSpikePhase: String? = nil,
-        uiPublishSkippedCount: Int? = nil,
-        contentRevision: SnapshotContentRevision? = nil,
-        statusUpdateMilliseconds: Double? = nil,
-        scannerTaskCount: Int? = nil,
-        tinyQueueSequentialCount: Int? = nil,
-        diagnosticsOnlyPublishCount: Int? = nil,
-        contentPublishSkippedCount: Int? = nil,
-        samplerAllocationReuseCount: Int? = nil,
-        taskInfoReadCount: Int? = nil,
-        reusedProcessRecordCount: Int? = nil,
-        duplicateClusterCount: Int? = nil,
-        promotedDuplicateCandidateCount: Int? = nil,
-        duplicateDetectorMilliseconds: Double? = nil,
-        hardwareOffenderCount: Int? = nil,
-        hardwareDetectorMilliseconds: Double? = nil,
-        smoothnessReport: RadarSmoothnessReport? = nil
-    ) -> RadarPerformanceMetrics {
-        RadarPerformanceMetrics(
-            mode: mode,
-            pressureLevel: pressureLevel,
-            lastRefresh: lastRefresh,
-            averageRefreshMilliseconds: averageRefreshMilliseconds,
-            nextRefreshInterval: nextRefreshInterval,
-            forensicsDeferredCount: forensicsDeferredCount,
-            forensicsRefreshCount: forensicsRefreshCount,
-            commandCacheHitCount: commandCacheHitCount,
-            storeBacklogCount: storeBacklogCount,
-            lastStoreFlushDate: lastStoreFlushDate,
-            budget: budget,
-            scannerHealth: scannerHealth,
-            mainActorPublishMilliseconds: mainActorPublishMilliseconds ?? self.mainActorPublishMilliseconds,
-            coalescedRefreshCount: coalescedRefreshCount ?? self.coalescedRefreshCount,
-            refreshInFlight: refreshInFlight ?? self.refreshInFlight,
-            uiCacheHitCount: uiCacheHitCount ?? self.uiCacheHitCount,
-            scannerWorkerCount: scannerWorkerCount ?? self.scannerWorkerCount,
-            skippedOptionalWorkCount: skippedOptionalWorkCount ?? self.skippedOptionalWorkCount,
-            hitchCount: hitchCount ?? self.hitchCount,
-            worstHitchMilliseconds: worstHitchMilliseconds ?? self.worstHitchMilliseconds,
-            latestSpikePhase: latestSpikePhase ?? self.latestSpikePhase,
-            uiPublishSkippedCount: uiPublishSkippedCount ?? self.uiPublishSkippedCount,
-            contentRevision: contentRevision ?? self.contentRevision,
-            statusUpdateMilliseconds: statusUpdateMilliseconds ?? self.statusUpdateMilliseconds,
-            scannerTaskCount: scannerTaskCount ?? self.scannerTaskCount,
-            tinyQueueSequentialCount: tinyQueueSequentialCount ?? self.tinyQueueSequentialCount,
-            diagnosticsOnlyPublishCount: diagnosticsOnlyPublishCount ?? self.diagnosticsOnlyPublishCount,
-            contentPublishSkippedCount: contentPublishSkippedCount ?? self.contentPublishSkippedCount,
-            samplerAllocationReuseCount: samplerAllocationReuseCount ?? self.samplerAllocationReuseCount,
-            taskInfoReadCount: taskInfoReadCount ?? self.taskInfoReadCount,
-            reusedProcessRecordCount: reusedProcessRecordCount ?? self.reusedProcessRecordCount,
-            duplicateClusterCount: duplicateClusterCount ?? self.duplicateClusterCount,
-            promotedDuplicateCandidateCount: promotedDuplicateCandidateCount ?? self.promotedDuplicateCandidateCount,
-            duplicateDetectorMilliseconds: duplicateDetectorMilliseconds ?? self.duplicateDetectorMilliseconds,
-            hardwareOffenderCount: hardwareOffenderCount ?? self.hardwareOffenderCount,
-            hardwareDetectorMilliseconds: hardwareDetectorMilliseconds ?? self.hardwareDetectorMilliseconds,
-            smoothnessReport: smoothnessReport ?? self.smoothnessReport
-        )
+    public subscript<Value>(dynamicMember keyPath: KeyPath<RadarSmoothnessState, Value>) -> Value {
+        smoothness[keyPath: keyPath]
     }
 }
 

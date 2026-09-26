@@ -117,10 +117,10 @@ public final class ProcessMonitor {
         let gateDecision = await refreshGate.begin()
         guard gateDecision.shouldRun else {
             if case .coalesced(let count) = gateDecision {
-                performanceMetrics = performanceMetrics.updatingSmoothness(
-                    coalescedRefreshCount: count,
-                    refreshInFlight: true
-                )
+                var metrics = performanceMetrics
+                metrics.smoothness.coalescedRefreshCount = count
+                metrics.smoothness.refreshInFlight = true
+                performanceMetrics = metrics
             }
             return
         }
@@ -140,10 +140,10 @@ public final class ProcessMonitor {
             await notifier.process(model: model)
         } catch {
             let coalesced = await refreshGate.finish()
-            performanceMetrics = performanceMetrics.updatingSmoothness(
-                coalescedRefreshCount: coalesced,
-                refreshInFlight: false
-            )
+            var metrics = performanceMetrics
+            metrics.smoothness.coalescedRefreshCount = coalesced
+            metrics.smoothness.refreshInFlight = false
+            performanceMetrics = metrics
             health = SamplerHealth(
                 engineName: "libproc",
                 lastSampleDate: health.lastSampleDate,
@@ -193,7 +193,8 @@ public final class ProcessMonitor {
     }
 
     public func recordStatusUpdateCost(_ milliseconds: Double) {
-        let updated = performanceMetrics.updatingSmoothness(statusUpdateMilliseconds: milliseconds)
+        var updated = performanceMetrics
+        updated.smoothness.statusUpdateMilliseconds = milliseconds
         performanceMetrics = updated
         publishedState = publishedState.updating(performanceMetrics: updated)
     }
@@ -447,28 +448,17 @@ public final class ProcessMonitor {
             hitchMonitor.recordPublish(milliseconds: lastCompletedPublishMilliseconds)
         }
         var state = payload.state
-        let mergedReport = state.performanceMetrics.smoothnessReport.merging(hitchMonitor.report)
-        var performance = state.performanceMetrics.updatingSmoothness(
-            coalescedRefreshCount: coalescedRefreshCount,
-            refreshInFlight: false,
-            hitchCount: mergedReport.hitchCount,
-            worstHitchMilliseconds: mergedReport.worstHitchMilliseconds,
-            latestSpikePhase: mergedReport.latestSpikePhase,
-            smoothnessReport: mergedReport
-        )
+        var performance = state.performanceMetrics
+        performance.smoothness.coalescedRefreshCount = coalescedRefreshCount
+        performance.smoothness.refreshInFlight = false
+        performance.smoothness.record(performance.smoothness.smoothnessReport.merging(hitchMonitor.report))
         storeError = state.storeError
         storeHealth = state.storeHealth
         scannerHealth = state.scannerHealth
 
         let finalPublishCost = lastCompletedPublishMilliseconds
-        let finalReport = performance.smoothnessReport.merging(hitchMonitor.report)
-        performance = performance.updatingSmoothness(
-            mainActorPublishMilliseconds: finalPublishCost,
-            hitchCount: finalReport.hitchCount,
-            worstHitchMilliseconds: finalReport.worstHitchMilliseconds,
-            latestSpikePhase: finalReport.latestSpikePhase,
-            smoothnessReport: finalReport
-        )
+        performance.smoothness.mainActorPublishMilliseconds = finalPublishCost
+        performance.smoothness.record(performance.smoothness.smoothnessReport.merging(hitchMonitor.report))
         let finalEngine = EngineDiagnosticsViewModel(
             metrics: performance,
             health: state.health,
@@ -536,7 +526,7 @@ public final class ProcessMonitor {
         )
         publishedState = state
         notifyPublishedStateObservers(state)
-        RadarLogger.performance.debug("Refresh \(performance.lastRefresh.totalMilliseconds, privacy: .public)ms, next \(performance.nextRefreshInterval, privacy: .public)s, publish \(finalPublishCost, privacy: .public)ms, hitches \(performance.hitchCount, privacy: .public), forensics \(performance.forensicsRefreshCount, privacy: .public)/\(performance.forensicsDeferredCount, privacy: .public)")
+        RadarLogger.performance.debug("Refresh \(performance.lastRefresh.totalMilliseconds, privacy: .public)ms, next \(performance.nextRefreshInterval, privacy: .public)s, publish \(finalPublishCost, privacy: .public)ms, hitches \(performance.smoothness.hitchCount, privacy: .public), forensics \(performance.forensicsRefreshCount, privacy: .public)/\(performance.forensicsDeferredCount, privacy: .public)")
     }
 
     private func notifyPublishedStateObservers(_ state: ProcessMonitorPublishedState) {

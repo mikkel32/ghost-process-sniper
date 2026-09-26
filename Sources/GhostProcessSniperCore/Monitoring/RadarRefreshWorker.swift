@@ -308,14 +308,10 @@ public actor RadarRefreshWorker {
         let spikeThreshold = RadarPerformanceBudget.budget(for: scheduler.currentPerformanceMode).targetRefreshMilliseconds
         spikeRing.record(trace: phaseTrace, threshold: spikeThreshold, at: request.now)
         let spikeReport = spikeRing.report
-        let tracedPerformance = performance.updatingSmoothness(
-            hitchCount: spikeReport.hitchCount,
-            worstHitchMilliseconds: spikeReport.worstHitchMilliseconds,
-            latestSpikePhase: spikeReport.latestSpikePhase,
-            scannerTaskCount: batch.stats.scannerTaskCount,
-            tinyQueueSequentialCount: batch.stats.tinyQueueSequentialCount,
-            smoothnessReport: spikeReport
-        )
+        var tracedPerformance = performance
+        tracedPerformance.smoothness.record(spikeReport)
+        tracedPerformance.smoothness.scannerTaskCount = batch.stats.scannerTaskCount
+        tracedPerformance.smoothness.tinyQueueSequentialCount = batch.stats.tinyQueueSequentialCount
         let payload = RadarPublishPayload.build(
             families: scored.families,
             duplicateClusters: build.duplicateClusters,
@@ -368,6 +364,20 @@ public actor RadarRefreshWorker {
     ) -> RadarPerformanceMetrics {
         let alpha = averageRefreshMilliseconds == 0 ? 1 : 0.18
         averageRefreshMilliseconds = averageRefreshMilliseconds * (1 - alpha) + stats.totalMilliseconds * alpha
+        var smoothness = RadarSmoothnessState()
+        smoothness.refreshInFlight = true
+        smoothness.scannerWorkerCount = samplerStats.scannerWorkerCount
+        smoothness.skippedOptionalWorkCount = samplerStats.skippedOptionalWorkCount
+        smoothness.scannerTaskCount = samplerStats.scannerTaskCount
+        smoothness.tinyQueueSequentialCount = samplerStats.tinyQueueSequentialCount
+        smoothness.samplerAllocationReuseCount = samplerStats.scratchpadReuseCount
+        smoothness.taskInfoReadCount = samplerStats.taskInfoReadCount
+        smoothness.reusedProcessRecordCount = samplerStats.reusedRecordCount
+        smoothness.duplicateClusterCount = duplicateClusterCount
+        smoothness.promotedDuplicateCandidateCount = promotedDuplicateCandidateCount
+        smoothness.duplicateDetectorMilliseconds = duplicateDetectorMilliseconds
+        smoothness.hardwareOffenderCount = hardwareOffenderCount
+        smoothness.hardwareDetectorMilliseconds = hardwareDetectorMilliseconds
         return RadarPerformanceMetrics(
             mode: performanceMode,
             pressureLevel: scheduler.currentPressure,
@@ -381,19 +391,7 @@ public actor RadarRefreshWorker {
             lastStoreFlushDate: storeHealth.lastFlushDate,
             budget: RadarPerformanceBudget.budget(for: performanceMode),
             scannerHealth: scannerHealth,
-            refreshInFlight: true,
-            scannerWorkerCount: samplerStats.scannerWorkerCount,
-            skippedOptionalWorkCount: samplerStats.skippedOptionalWorkCount,
-            scannerTaskCount: samplerStats.scannerTaskCount,
-            tinyQueueSequentialCount: samplerStats.tinyQueueSequentialCount,
-            samplerAllocationReuseCount: samplerStats.scratchpadReuseCount,
-            taskInfoReadCount: samplerStats.taskInfoReadCount,
-            reusedProcessRecordCount: samplerStats.reusedRecordCount,
-            duplicateClusterCount: duplicateClusterCount,
-            promotedDuplicateCandidateCount: promotedDuplicateCandidateCount,
-            duplicateDetectorMilliseconds: duplicateDetectorMilliseconds,
-            hardwareOffenderCount: hardwareOffenderCount,
-            hardwareDetectorMilliseconds: hardwareDetectorMilliseconds
+            smoothness: smoothness
         )
     }
 
