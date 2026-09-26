@@ -8,7 +8,7 @@ final class KillForceHoldTests: XCTestCase {
     func testHeldForceStillWaitsForTheCleanExit() async {
         let table = FakeProcessTable()
         let postgres = KillProcessLite.fake(pid: 400, name: "postgres")
-        table.add(postgres, .exits(on: SIGTERM, afterTicks: 3))
+        table.add(postgres, .exits(on: SIGINT, afterTicks: 3))
 
         let report = await table.killer().kill(
             plan: .fixture(postgres, commands: [400: KillFixture.postgresCommand]),
@@ -20,7 +20,7 @@ final class KillForceHoldTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(table.tick, 3, "the database gets its shutdown time")
         XCTAssertTrue(report.survivorPIDs.isEmpty, report.summary)
         XCTAssertFalse(report.summary.hasPrefix("Still running"), report.summary)
-        XCTAssertEqual(table.log.map(\.signal), [SIGTERM])
+        XCTAssertEqual(table.log.map(\.signal), [SIGINT], "Postgres's fast shutdown")
     }
 
     func testHeldForceWaitsTheWholeGraceForAnAppThatStaysOpen() async {
@@ -63,7 +63,7 @@ final class KillForceHoldTests: XCTestCase {
     func testGraceWaitAnnouncesItsDeadline() async {
         let table = FakeProcessTable()
         let postgres = KillProcessLite.fake(pid: 550, name: "postgres")
-        table.add(postgres, .exits(on: SIGTERM, afterTicks: 4))
+        table.add(postgres, .exits(on: SIGINT, afterTicks: 4))
         let events = EventLog()
 
         _ = await table.killer().kill(plan: .fixture(postgres, commands: [550: KillFixture.postgresCommand]),

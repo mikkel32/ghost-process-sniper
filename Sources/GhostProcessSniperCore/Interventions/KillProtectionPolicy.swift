@@ -144,6 +144,7 @@ extension KillRiskAssessment {
         }
         return KillRiskAssessment(kind: kind, risks: merged, supervisor: supervisor, appQuitPID: appQuitPID,
                                   graceSeconds: graceSeconds, forceNeedsConfirmation: forceNeedsConfirmation,
-                                  freedPorts: freedPorts, headline: override ?? headline)
+                                  freedPorts: freedPorts, headline: override ?? headline,
+                                  shutsDownThroughRoot: shutsDownThroughRoot, rootShutdownSignal: rootShutdownSignal)
     }
 }

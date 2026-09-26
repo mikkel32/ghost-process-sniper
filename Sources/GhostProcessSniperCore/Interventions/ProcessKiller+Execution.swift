@@ -117,6 +117,7 @@ extension ProcessKiller {
         to target: KillTarget,
         stage: String,
         operationID: KillOperationID,
+        message: String? = nil,
         report: inout KillReport,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
     ) -> KillSendOutcome {
@@ -125,7 +126,7 @@ extension ProcessKiller {
             try signaler.send(signal: signal, to: target.identity)
             let attempt = KillAttempt(pid: target.pid, signal: signal, stage: stage, succeeded: true)
             report.attempts.append(attempt)
-            appendEvent(.signaled, operationID: operationID, pid: target.pid, signalName: attempt.signalName, targetState: stage == "forced" ? .forceKilled : .stopping, message: "\(attempt.signalName) sent to \(target.name).", report: &report, eventSink: eventSink)
+            appendEvent(.signaled, operationID: operationID, pid: target.pid, signalName: attempt.signalName, targetState: stage == "forced" ? .forceKilled : .stopping, message: message ?? "\(attempt.signalName) sent to \(target.name).", report: &report, eventSink: eventSink)
             if stage == "forced" {
                 if !report.forcedPIDs.contains(target.pid) {
                     report.forcedPIDs.append(target.pid)

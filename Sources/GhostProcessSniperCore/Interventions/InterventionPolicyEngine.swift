@@ -205,7 +205,9 @@ public struct InterventionPolicyEngine: Sendable {
                 strategy: .carefulShutdown,
                 confidence: max(0.8, decisionScore.confidence),
                 reasons: ["\(risk.kind.label): needs time to flush data before it exits."],
-                previewText: "SIGTERM with a long grace period; SIGKILL only if you allow it."
+                previewText: risk.rootShutdownSignal == nil
+                    ? "SIGTERM with a long grace period; SIGKILL only if you allow it."
+                    : "Asks the database alone to shut down, so it stops its own workers in order; SIGKILL only if you allow it."
             )
         }
         if let history = plan.killHistory, history.operationCount >= 2, history.forceRate >= 0.5 {
@@ -250,18 +252,25 @@ public struct InterventionPolicyEngine: Sendable {
         risk: KillRiskAssessment
     ) -> KillStrategyProfile {
         let cleanShutdownGrace = max(forceKillDelay, risk.graceSeconds ?? forceKillDelay)
+        // A database or prefork master stops its workers in order; a worker
+        // signalled first is a crash to it, or is simply forked again.
+        let first: KillSignalReach = risk.shutsDownThroughRoot ? .rootOnly : .tree
+        let ask = { (label: String) in first == .rootOnly ? "Ask the main process to stop its workers" : label }
+        let force = { (order: Int, wait: TimeInterval) in
+            KillSignalPhase(order: order, label: "Force same-identity survivors", action: .signal(SIGKILL), waitAfterSeconds: wait)
+        }
         let phases: [KillSignalPhase] = switch recommendation.strategy {
         case .standard: [
-            KillSignalPhase(order: 0, label: "Ask target to terminate", action: .signal(SIGTERM), waitAfterSeconds: forceKillDelay),
-            KillSignalPhase(order: 1, label: "Force same-identity survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.35)
+            KillSignalPhase(order: 0, label: ask("Ask target to terminate"), action: .signal(SIGTERM), waitAfterSeconds: forceKillDelay, reach: first),
+            force(1, 0.35)
         ]
         case .gentleDevServer: [
-            KillSignalPhase(order: 0, label: "Interrupt dev server cleanly", action: .signal(SIGINT), waitAfterSeconds: min(forceKillDelay, 1.2)),
+            KillSignalPhase(order: 0, label: ask("Interrupt dev server cleanly"), action: .signal(SIGINT), waitAfterSeconds: min(forceKillDelay, 1.2), reach: first),
             KillSignalPhase(order: 1, label: "Terminate survivors", action: .signal(SIGTERM), waitAfterSeconds: 0.45),
-            KillSignalPhase(order: 2, label: "Force same-identity survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.35)
+            force(2, 0.35)
         ]
         case .stubbornRunaway: [
-            KillSignalPhase(order: 0, label: "Terminate runaway", action: .signal(SIGTERM), waitAfterSeconds: min(forceKillDelay, 0.8)),
+            KillSignalPhase(order: 0, label: ask("Terminate runaway"), action: .signal(SIGTERM), waitAfterSeconds: min(forceKillDelay, 0.8), reach: first),
             KillSignalPhase(order: 1, label: "Force verified survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.25)
         ]
         // The app itself is never sent SIGTERM: it would close past a
@@ -269,12 +278,23 @@ public struct InterventionPolicyEngine: Sendable {
         case .quitApp: [
             KillSignalPhase(order: 0, label: "Ask the app to quit, like \u{2318}Q", action: .quitRequest, waitAfterSeconds: cleanShutdownGrace),
             KillSignalPhase(order: 1, label: "Terminate leftover helpers", action: .signal(SIGTERM), waitAfterSeconds: 1.5),
-            KillSignalPhase(order: 2, label: "Force same-identity survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.35)
+            force(2, 0.35)
         ]
-        case .carefulShutdown: [
-            KillSignalPhase(order: 0, label: "Request a clean shutdown", action: .signal(SIGTERM), waitAfterSeconds: cleanShutdownGrace),
-            KillSignalPhase(order: 1, label: "Force same-identity survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.5)
-        ]
+        // Force still reaches every process: SIGKILL on the postmaster alone
+        // leaves backends holding the shared memory the next start needs.
+        case .carefulShutdown: if let signal = risk.rootShutdownSignal {
+            [
+                KillSignalPhase(order: 0, label: "Ask the database to shut down cleanly", action: .signal(signal),
+                                waitAfterSeconds: cleanShutdownGrace, reach: .rootOnly),
+                KillSignalPhase(order: 1, label: "Terminate leftover workers", action: .signal(SIGTERM), waitAfterSeconds: 3),
+                force(2, 0.5)
+            ]
+        } else {
+            [
+                KillSignalPhase(order: 0, label: "Request a clean shutdown", action: .signal(SIGTERM), waitAfterSeconds: cleanShutdownGrace),
+                force(1, 0.5)
+            ]
+        }
         case .inspectOnly: []
         }
         return KillStrategyProfile(

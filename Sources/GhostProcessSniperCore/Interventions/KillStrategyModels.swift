@@ -109,6 +109,15 @@ public enum KillPhaseAction: Codable, Equatable, Sendable {
     }
 }
 
+/// Who a phase's signal goes to.
+public enum KillSignalReach: String, Codable, Sendable {
+    /// Every target still running, deepest first.
+    case tree
+    /// Only the root, which stops its own workers in order; targets outside
+    /// its tree still get the signal.
+    case rootOnly
+}
+
 public struct KillSignalPhase: Identifiable, Codable, Equatable, Sendable {
     public var id: String { "\(order)-\(signalName)-\(label)" }
 
@@ -117,16 +126,23 @@ public struct KillSignalPhase: Identifiable, Codable, Equatable, Sendable {
     public let action: KillPhaseAction
     /// The longest wait for the targets to exit before the next phase.
     public let waitAfterSeconds: TimeInterval
+    public let reach: KillSignalReach
 
     public var signalName: String { action.name }
     /// Force cannot be caught or answered; it is the step a hold stops before.
     public var isForce: Bool { action == .signal(SIGKILL) }
 
-    public init(order: Int, label: String, action: KillPhaseAction, waitAfterSeconds: TimeInterval) {
+    public init(order: Int, label: String, action: KillPhaseAction, waitAfterSeconds: TimeInterval, reach: KillSignalReach = .tree) {
         self.order = order
         self.label = label
         self.action = action
         self.waitAfterSeconds = max(0, waitAfterSeconds)
+        self.reach = reach
+    }
+
+    /// The same step with a different wait.
+    func waiting(_ seconds: TimeInterval) -> KillSignalPhase {
+        KillSignalPhase(order: order, label: label, action: action, waitAfterSeconds: seconds, reach: reach)
     }
 }
 
@@ -179,8 +195,7 @@ public struct KillStrategyProfile: Codable, Equatable, Sendable {
     /// The same phases with the first wait raised to at least `seconds`.
     func extendingGrace(to seconds: TimeInterval) -> KillStrategyProfile {
         guard let first = phases.first, !first.isForce, seconds > first.waitAfterSeconds else { return self }
-        let longer = KillSignalPhase(order: first.order, label: first.label, action: first.action, waitAfterSeconds: seconds)
-        return KillStrategyProfile(strategy: strategy, confidence: confidence, phases: [longer] + phases.dropFirst(), summary: summary)
+        return KillStrategyProfile(strategy: strategy, confidence: confidence, phases: [first.waiting(seconds)] + phases.dropFirst(), summary: summary)
     }
 }
 

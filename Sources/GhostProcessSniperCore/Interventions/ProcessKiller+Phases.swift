@@ -48,7 +48,10 @@ extension ProcessKiller {
             }
             // An app that accepted the quit request may be showing a save
             // prompt, and SIGTERM would close it past that; only force may.
-            let recipients = phase.isForce ? live : live.filter { $0.pid != quitAccepted }
+            var recipients = phase.isForce ? live : live.filter { $0.pid != quitAccepted }
+            if phase.reach == .rootOnly, !phase.isForce {
+                recipients = Self.rootAndOutsiders(of: recipients, tree: targets)
+            }
             guard !recipients.isEmpty else { continue }
             let stage = phase.isForce ? "forced" : index == 0 ? "graceful" : "secondary"
             if phase.isForce {
@@ -56,7 +59,7 @@ extension ProcessKiller {
                             message: "\(live.count) same-identity target\(live.count == 1 ? "" : "s") still live.",
                             report: &report, eventSink: context.eventSink)
             }
-            let dropped = await deliver(phase.action, to: recipients, stage: stage, context: context,
+            let dropped = await deliver(phase, to: recipients, stage: stage, context: context,
                                         report: &report, quitAccepted: &quitAccepted)
             remaining.removeAll { dropped.contains($0.identity) }
             live.removeAll { dropped.contains($0.identity) }
@@ -80,7 +83,7 @@ extension ProcessKiller {
     /// Sends one phase's action and returns the targets it can never reach:
     /// refused by macOS, or their PID now belongs to another process.
     private func deliver(
-        _ action: KillPhaseAction,
+        _ phase: KillSignalPhase,
         to recipients: [KillTarget],
         stage: String,
         context: KillPhaseContext,
@@ -89,9 +92,9 @@ extension ProcessKiller {
     ) async -> Set<ProcessIdentity> {
         let started = Date()
         let attemptsBefore = report.attempts.count
-        var sent = action
+        var sent = phase.action
         var signalled = recipients
-        if action == .quitRequest {
+        if phase.action == .quitRequest {
             // A quitting app saves its state and closes its own helpers;
             // signalling them now would race that.
             let app = context.appQuitPID.flatMap { pid in recipients.first { $0.pid == pid } }
@@ -109,7 +112,8 @@ extension ProcessKiller {
         var dropped = Set<ProcessIdentity>()
         if case .signal(let signal) = sent {
             for target in signalled {
-                let outcome = send(signal, to: target, stage: stage, operationID: context.operationID,
+                let message = phase.reach == .rootOnly && target.isRoot ? "Asked \(target.name) to shut down its workers." : nil
+                let outcome = send(signal, to: target, stage: stage, operationID: context.operationID, message: message,
                                    report: &report, eventSink: context.eventSink)
                 if outcome == .refused || outcome == .recycled {
                     dropped.insert(target.identity)
@@ -124,6 +128,22 @@ extension ProcessKiller {
                        attempts: Array(report.attempts.dropFirst(attemptsBefore)))
         )
         return dropped
+    }
+
+    /// The root alone, plus any target outside its tree; everyone when the
+    /// root is not among them, since then nothing stops the workers for us.
+    static func rootAndOutsiders(of recipients: [KillTarget], tree: [KillTarget]) -> [KillTarget] {
+        guard let root = recipients.first(where: \.isRoot) else { return recipients }
+        let parents = Dictionary(tree.map { ($0.pid, $0.parentPID) }, uniquingKeysWith: { first, _ in first })
+        return recipients.filter { target in
+            var cursor = target.isRoot ? nil : target.parentPID
+            for _ in 0..<64 {
+                guard let pid = cursor else { break }
+                if pid == root.pid { return false }
+                cursor = parents[pid] ?? nil
+            }
+            return true
+        }
     }
 
     private func waitForExit(

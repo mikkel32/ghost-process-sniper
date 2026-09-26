@@ -35,6 +35,35 @@ final class KillRiskAssessorTests: XCTestCase {
         XCTAssertEqual(assess(root: process(21, "java", command: "java -Xms1g org.elasticsearch.bootstrap.Elasticsearch")).kind, .dataStore)
     }
 
+    func testDatabasesAreShutDownThroughTheirMainProcess() {
+        let postgres = assess(root: process(22, "postgres", command: "/opt/homebrew/bin/postgres -D /opt/homebrew/var/postgres"))
+        XCTAssertEqual(postgres.rootShutdownSignal, SIGINT, "SIGTERM is Smart Shutdown, which waits for every client")
+        XCTAssertTrue(postgres.shutsDownThroughRoot)
+        XCTAssertEqual(assess(root: process(23, "mysqld", command: "/opt/homebrew/opt/mysql/bin/mysqld")).rootShutdownSignal, SIGTERM)
+        XCTAssertEqual(assess(root: process(24, "redis-server", command: "redis-server *:6379")).rootShutdownSignal, SIGTERM)
+
+        let backend = assess(root: process(25, "postgres", command: "postgres: checkpointer", parent: 22),
+                             ancestors: [KillWorkloadAncestor(pid: 22, name: "postgres", executablePath: "",
+                                                              commandLine: "/opt/homebrew/bin/postgres -D /opt/homebrew/var/postgres")])
+        XCTAssertNil(backend.rootShutdownSignal, "a backend on its own is stopped directly")
+        XCTAssertFalse(backend.shutsDownThroughRoot)
+
+        let runner = KillWorkloadProfile(
+            processes: [process(26, "npm", command: "npm run db", isRoot: true),
+                        process(27, "postgres", command: "/opt/homebrew/bin/postgres -D db", parent: 26)],
+            ancestors: [], parentIsLaunchd: false
+        )
+        XCTAssertEqual(assessor.assess(runner).kind, .dataStore)
+        XCTAssertNil(assessor.assess(runner).rootShutdownSignal, "only a database root shuts its tree down")
+    }
+
+    func testPreforkMastersShutDownThroughTheRoot() {
+        XCTAssertTrue(assess(root: process(28, "Python", command: "/usr/bin/python3 /venv/bin/gunicorn app:app")).shutsDownThroughRoot)
+        XCTAssertTrue(assess(root: process(29, "nginx", command: "nginx: master process nginx")).shutsDownThroughRoot)
+        XCTAssertTrue(assess(root: process(31, "ruby", command: "puma 6.4.0 (tcp://0.0.0.0:3000) [app]")).shutsDownThroughRoot)
+        XCTAssertFalse(assess(root: process(32, "node", command: "node server.js")).shutsDownThroughRoot)
+    }
+
     func testContainerRuntimesWarnThatEveryContainerStops() {
         let risk = assess(root: process(30, "com.docker.backend", path: "/Applications/Docker.app/Contents/MacOS/com.docker.backend"))
         XCTAssertEqual(risk.kind, .containerRuntime)

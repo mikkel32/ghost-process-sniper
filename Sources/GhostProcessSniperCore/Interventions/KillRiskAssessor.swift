@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// What kind of work a stop interrupts. It decides how politely to stop it
@@ -75,10 +76,15 @@ public struct KillRiskAssessment: Equatable, Sendable {
     public let freedPorts: [Int]
     /// One plain sentence: what stopping this will do.
     public let headline: String?
+    /// The root stops its own workers in order: a database or a prefork
+    /// server. Signalling a worker first looks like a crash to it.
+    public let shutsDownThroughRoot: Bool
+    /// The clean-shutdown signal for a database root, sent to it alone.
+    public let rootShutdownSignal: Int32?
 
     public static let none = KillRiskAssessment(
         kind: .general, risks: [], supervisor: nil, appQuitPID: nil, graceSeconds: nil,
-        forceNeedsConfirmation: false, freedPorts: [], headline: nil
+        forceNeedsConfirmation: false, freedPorts: [], headline: nil, shutsDownThroughRoot: false, rootShutdownSignal: nil
     )
 
     public var hazards: [KillRisk] { risks.filter { !$0.isBenefit } }
@@ -102,6 +108,13 @@ public struct KillRiskAssessor: Sendable {
         let name = appName ?? root.name
 
         let kind = classify(root: rootPrint, processes: processes)
+        // A backend or worker stopped on its own is not the one that shuts
+        // the others down.
+        let underSameServer = workload.ancestors.first.map {
+            let parent = Fingerprint(name: $0.name, path: $0.executablePath, command: $0.commandLine)
+            return parent.isDataStore || parent.isPreforkMaster
+        } ?? false
+        let rootSignal = rootPrint.isDataStore && !underSameServer ? rootPrint.databaseShutdownSignal : nil
         let supervisor = findSupervisor(workload, rootPrint: rootPrint, processes: processes)
         let ports = Array(Set(workload.processes.flatMap(\.listeningPorts))).sorted().prefix(8).map { $0 }
 
@@ -196,7 +209,9 @@ public struct KillRiskAssessor: Sendable {
             graceSeconds: grace,
             forceNeedsConfirmation: confirmForce,
             freedPorts: ports,
-            headline: headline
+            headline: headline,
+            shutsDownThroughRoot: rootSignal != nil || (rootPrint.isPreforkMaster && !underSameServer),
+            rootShutdownSignal: rootSignal
         )
     }
 
@@ -329,6 +344,20 @@ private struct Fingerprint {
         if binary == "beam.smp" { return mentions(["rabbit", "couchdb"]) }
         if binary == "java" { return mentions(["org.elasticsearch", "opensearch", "kafka.kafka", "zookeeper", "cassandra", "neo4j", "solr"]) }
         return false
+    }
+
+    /// Postgres treats SIGTERM as Smart Shutdown, which waits for every
+    /// client to disconnect; SIGINT is its fast, clean shutdown.
+    var databaseShutdownSignal: Int32 {
+        named(["postgres", "postmaster"]) ? SIGINT : SIGTERM
+    }
+
+    /// Servers whose master re-forks any worker that exits before it does.
+    var isPreforkMaster: Bool {
+        let masters: Set = ["gunicorn", "unicorn", "puma", "uwsgi", "php-fpm", "nginx", "httpd"]
+        let launcher = binary.hasSuffix(":") ? String(binary.dropLast()) : binary
+        let script = args.first { !$0.hasPrefix("-") }.map { ($0 as NSString).lastPathComponent }
+        return named(masters) || masters.contains(launcher) || script.map(masters.contains) == true
     }
 
     var isVersionControl: Bool {

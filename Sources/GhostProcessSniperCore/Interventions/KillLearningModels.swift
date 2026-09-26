@@ -256,7 +256,7 @@ public struct KillStrategyCalibrator: Sendable {
             guard phase.order == 0, !phase.isForce else {
                 return phase
             }
-            return KillSignalPhase(order: phase.order, label: phase.label, action: phase.action, waitAfterSeconds: tunedGrace)
+            return phase.waiting(tunedGrace)
         }
         return KillStrategyProfile(
             strategy: base.strategy,
