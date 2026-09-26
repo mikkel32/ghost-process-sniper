@@ -139,7 +139,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             }
         }
 
-        let previews = rules.map { RuleMatchPreview(rule: $0, families: families) }
+        let previews = rules.map { RuleMatchPreview(rule: $0, families: families, now: generatedAt) }
         let matchCounts = Dictionary(uniqueKeysWithValues: previews.map { ($0.id, $0.matchCount) })
         let duplicateRows = DuplicateClusterViewModel.rows(from: duplicateClusters)
 

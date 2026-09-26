@@ -48,6 +48,7 @@ public actor RadarStore {
     private var cachedStoredRules: [RadarRule]?
     private var cachedRulesKey: String?
     private var cachedComposedRules: [RadarRule] = []
+    private var nextRuleExpiry: Date?
     private var rulesCacheHitCount = 0
     private var rulesRevision = 0
 
@@ -115,7 +116,7 @@ public actor RadarStore {
         try ensureOpen()
         try pruneIfNeeded(now: now)
         let signatureIDs = Array(Set(families.map(\.signature.id)))
-        let rules = try rulesForContext(settings: settings)
+        let rules = try rulesForContext(settings: settings, now: now)
         return RadarContext(
             baselines: try baselineBook.baselines(for: signatureIDs),
             recentIncidentCounts: try incidentLedger.recentCounts(
@@ -212,41 +213,47 @@ public actor RadarStore {
     }
 
     public func loadRules(includeBuiltIns: Bool = true, settings: ThresholdSettings = .aggressive) throws -> [RadarRule] {
+        let now = Date()
         if includeBuiltIns {
-            return try rulesForContext(settings: settings)
+            return try rulesForContext(settings: settings, now: now)
         }
+        return try storedRules().filter { !Self.isExpired($0, at: now) }
+    }
+
+    /// Every stored rule, expired or not; callers filter with their own clock.
+    private func storedRules() throws -> [RadarRule] {
         if let cachedStoredRules {
             rulesCacheHitCount += 1
             return cachedStoredRules
         }
-        let db = try ensureOpen()
         var rules: [RadarRule] = []
-        let now = Date()
-        try db.query("SELECT json FROM rules ORDER BY created_at DESC") { row in
-            guard let rule = codec.decode(RadarRule.self, from: row.string(0)) else {
-                return
+        try ensureOpen().query("SELECT json FROM rules ORDER BY created_at DESC") { row in
+            if let rule = codec.decode(RadarRule.self, from: row.string(0)) {
+                rules.append(rule)
             }
-            if rule.expiresAt.map({ $0 <= now }) == true {
-                return
-            }
-            rules.append(rule)
         }
-
         cachedStoredRules = rules
         return rules
     }
 
-    private func rulesForContext(settings: ThresholdSettings) throws -> [RadarRule] {
+    /// Cached per settings and rules revision, but only until the earliest
+    /// expiry, so a snooze ends on time instead of at the next rule edit.
+    private func rulesForContext(settings: ThresholdSettings, now: Date) throws -> [RadarRule] {
         let key = "\(rulesRevision)|\(settings.memoryBytes)|\(Int(settings.cpuPercent.rounded()))|\(Int(settings.leakVelocityMegabytesPerMinute.rounded()))|\(settings.radarMode.rawValue)"
-        if cachedRulesKey == key {
+        if cachedRulesKey == key, nextRuleExpiry.map({ now < $0 }) ?? true {
             rulesCacheHitCount += 1
             return cachedComposedRules
         }
-        let stored = try loadRules(includeBuiltIns: false, settings: settings)
-        let composed = RadarRule.builtIns(settings: settings) + stored
+        let composed = try (RadarRule.builtIns(settings: settings) + storedRules())
+            .filter { !Self.isExpired($0, at: now) }
         cachedRulesKey = key
         cachedComposedRules = composed
+        nextRuleExpiry = composed.compactMap(\.expiresAt).min()
         return composed
+    }
+
+    private static func isExpired(_ rule: RadarRule, at now: Date) -> Bool {
+        rule.expiresAt.map { $0 <= now } ?? false
     }
 
     private func invalidateRulesCache() {
@@ -254,6 +261,7 @@ public actor RadarStore {
         cachedStoredRules = nil
         cachedRulesKey = nil
         cachedComposedRules.removeAll(keepingCapacity: true)
+        nextRuleExpiry = nil
     }
 
     public func saveRule(_ rule: RadarRule) throws {
@@ -329,7 +337,14 @@ public actor RadarStore {
         for table in RadarStoreSchema.createdAtRetentionTables {
             try db.execute("DELETE FROM \(table) WHERE created_at < ?", .double(cutoff))
         }
-        try db.execute("DELETE FROM rules WHERE json LIKE '%\"expiresAt\"%' AND created_at < ?", .double(cutoff))
+        // Rules encode dates as seconds since 1970.
+        try db.execute(
+            "DELETE FROM rules WHERE json_extract(json, '$.expiresAt') IS NOT NULL AND json_extract(json, '$.expiresAt') < ?",
+            .double(now.timeIntervalSince1970)
+        )
+        if db.changes > 0 {
+            invalidateRulesCache()
+        }
         lastPruneDate = now
     }
 
