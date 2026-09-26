@@ -268,6 +268,7 @@ public struct RadarIntelligence: Sendable {
         let weightedImpact = impact * forecast.confidence
         let value = min(100, score.value + weightedImpact)
         let forecastComponent = GhostScoreComponent(
+            slot: "forecast",
             kind: .forecast,
             title: "Forecast: \(forecast.state.label)",
             detail: forecast.whyNow.isEmpty ? forecast.etaText : forecast.whyNow,
@@ -315,11 +316,9 @@ public struct RadarIntelligence: Sendable {
     private func mergedSuggestions(
         _ suggestions: [RadarActionSuggestion]
     ) -> [RadarActionSuggestion] {
-        var seen = Set<String>()
-        return suggestions.filter { suggestion in
-            let source = suggestion.ruleID?.uuidString ?? "forecast"
-            return seen.insert("\(source)|\(suggestion.type.rawValue)|\(suggestion.title)").inserted
-        }
+        // Ids are per (rule or forecast, action), so they must stay unique.
+        var seen = Set<UUID>()
+        return suggestions.filter { seen.insert($0.id).inserted }
     }
 
     private func baselineAwareScore(
@@ -348,6 +347,7 @@ public struct RadarIntelligence: Sendable {
             value += impact
             reasons.insert(reason, at: 0)
             components.append(GhostScoreComponent(
+                slot: "baseline.memory",
                 kind: .baseline,
                 title: reason,
                 detail: "Current memory is far above this family's learned normal",
@@ -360,6 +360,7 @@ public struct RadarIntelligence: Sendable {
             value += impact
             reasons.insert(reason, at: 0)
             components.append(GhostScoreComponent(
+                slot: "baseline.memory",
                 kind: .baseline,
                 title: reason,
                 detail: "Current memory is meaningfully above this family's learned normal",
@@ -373,6 +374,7 @@ public struct RadarIntelligence: Sendable {
             value += impact
             reasons.insert(cpuAnomaly.reason, at: 0)
             components.append(GhostScoreComponent(
+                slot: "baseline.cpu",
                 kind: .baseline,
                 title: cpuAnomaly.reason,
                 detail: "CPU use is well above this family's learned normal",
@@ -387,6 +389,7 @@ public struct RadarIntelligence: Sendable {
             value += impact
             reasons.append("recurring family")
             components.append(GhostScoreComponent(
+                slot: "recurrence",
                 kind: .recurrence,
                 title: "Recurring family",
                 detail: "\(incidentCount) prior incident\(incidentCount == 1 ? "" : "s") raise the chance this is a real repeat",
@@ -399,6 +402,7 @@ public struct RadarIntelligence: Sendable {
             value += 6
             reasons.append("leak and CPU are accelerating together")
             components.append(GhostScoreComponent(
+                slot: "acceleration",
                 kind: .leak,
                 title: "Memory and CPU accelerating",
                 detail: "Two independent signals are worsening together, increasing confidence",
@@ -432,6 +436,7 @@ public struct RadarIntelligence: Sendable {
         let boost: Double = pressure.level == .critical ? 12 : 7
         let reason = "system memory pressure is \(pressure.level.label.lowercased())"
         let pressureComponent = GhostScoreComponent(
+            slot: "pressure",
             kind: .system,
             title: "Host memory pressure",
             detail: "This footprint matters more while system pressure is \(pressure.level.label.lowercased())",
@@ -457,6 +462,7 @@ public struct RadarIntelligence: Sendable {
                 reasons: ["ignored by rule"],
                 components: [
                     GhostScoreComponent(
+                        slot: "rules",
                         kind: .rules,
                         title: "Ignored by rule",
                         detail: "The underlying signals remain visible, but alerts are muted by your rule",
@@ -475,6 +481,7 @@ public struct RadarIntelligence: Sendable {
                 reasons: ["snoozed"],
                 components: [
                     GhostScoreComponent(
+                        slot: "rules",
                         kind: .rules,
                         title: "Snoozed",
                         detail: "The family remains visible while alerts are temporarily paused",

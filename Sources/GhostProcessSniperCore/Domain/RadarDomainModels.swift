@@ -72,20 +72,40 @@ public struct RadarActionSuggestion: Identifiable, Codable, Equatable, Sendable 
     public let ruleID: UUID?
     public let createdAt: Date
 
+    /// Without an explicit `id`, the same rule (or the forecast) and action
+    /// always get the same id, so a suggestion card keeps its identity
+    /// across refreshes.
     public init(
-        id: UUID = UUID(),
+        id: UUID? = nil,
         type: RadarActionType,
         title: String,
         detail: String,
         ruleID: UUID? = nil,
         createdAt: Date = Date()
     ) {
-        self.id = id
+        self.id = id ?? Self.stableID(ruleID: ruleID, type: type)
         self.type = type
         self.title = title
         self.detail = detail
         self.ruleID = ruleID
         self.createdAt = createdAt
+    }
+
+    public static func stableID(ruleID: UUID?, type: RadarActionType) -> UUID {
+        let key = Array("\(ruleID?.uuidString ?? "forecast")|\(type.rawValue)".utf8)
+        let basis: UInt64 = 0xcbf2_9ce4_8422_2325
+        let high = fnv1a(key, seed: basis)
+        let low = fnv1a(key, seed: basis ^ 1)
+        var bytes = (0..<8).map { UInt8(truncatingIfNeeded: high >> (56 - 8 * $0)) } +
+            (0..<8).map { UInt8(truncatingIfNeeded: low >> (56 - 8 * $0)) }
+        bytes[6] = (bytes[6] & 0x0F) | 0x80 // version 8: custom
+        bytes[8] = (bytes[8] & 0x3F) | 0x80 // RFC 4122 variant
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                           bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+    }
+
+    private static func fnv1a(_ bytes: [UInt8], seed: UInt64) -> UInt64 {
+        bytes.reduce(seed) { ($0 ^ UInt64($1)) &* 0x0000_0100_0000_01B3 }
     }
 }
 

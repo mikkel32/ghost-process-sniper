@@ -73,6 +73,7 @@ public struct RadarPipeline: Sendable {
     private var trendWindow = TrendWindow()
     private var differ = RadarSnapshotDiffer()
     private var hysteresis = RadarHysteresis()
+    private var continuity = RadarContinuity()
     private var metricsVersions: [String: UInt64] = [:]
     private var signatureVersions: [String: UInt64] = [:]
     private var scoringCache = FamilyScoringCache()
@@ -159,7 +160,7 @@ public struct RadarPipeline: Sendable {
         }
         .sorted(by: FamilyPriorityOrder.areInIncreasingOrder)
         let versioned = enriched.map { versionedFamily($0, diff: diff, now: now) }
-        let stable = hysteresis.apply(to: versioned, now: now)
+        let stable = continuity.apply(to: hysteresis.apply(to: versioned, now: now))
         return (stable, Date().timeIntervalSince(scoreStart) * 1_000)
     }
 

@@ -46,6 +46,7 @@ struct FamilyEvidenceScorer: Sendable {
 
         var components: [GhostScoreComponent] = [
             GhostScoreComponent(
+                slot: "memory",
                 kind: .memory,
                 title: memoryRatio >= 1 ? "memory above threshold" : "Memory footprint",
                 detail: String(
@@ -58,6 +59,7 @@ struct FamilyEvidenceScorer: Sendable {
                 level: componentLevel(memoryRatio)
             ),
             GhostScoreComponent(
+                slot: "cpu",
                 kind: .cpu,
                 title: cpuRatio >= 1 ? "CPU above threshold" : "CPU activity",
                 detail: String(format: "%.0f%% is %.1fx the %.0f%% limit", cpu, cpuRatio, settings.cpuPercent),
@@ -65,6 +67,7 @@ struct FamilyEvidenceScorer: Sendable {
                 level: componentLevel(cpuRatio, critical: 1.15)
             ),
             GhostScoreComponent(
+                slot: "gpu",
                 kind: .gpu,
                 title: gpuRatio >= 1 ? "GPU above threshold" : "GPU activity",
                 detail: String(format: "%.0f%% GPU utilization", gpu),
@@ -72,6 +75,7 @@ struct FamilyEvidenceScorer: Sendable {
                 level: componentLevel(gpuRatio, hot: 0.55, critical: 1)
             ),
             GhostScoreComponent(
+                slot: "leak",
                 kind: .leak,
                 title: leakRatio >= 1 ? "memory climbing \(Int(leakVelocity.rounded())) MB/min" : "Memory growth",
                 detail: String(
@@ -84,6 +88,7 @@ struct FamilyEvidenceScorer: Sendable {
                 level: componentLevel(leakRatio, critical: 1.6)
             ),
             GhostScoreComponent(
+                slot: "relevance",
                 kind: .background,
                 title: "Process relevance",
                 detail: "\(Int((confidence * 100).rounded()))% confidence this belongs to the selected radar scope",
@@ -94,6 +99,7 @@ struct FamilyEvidenceScorer: Sendable {
 
         if fanoutImpact > 0 {
             components.append(GhostScoreComponent(
+                slot: "fanout",
                 kind: .fanout,
                 title: "\(members.count - 1) child processes",
                 detail: "Large process trees consume more resources and are harder to leave behind cleanly",
@@ -103,6 +109,7 @@ struct FamilyEvidenceScorer: Sendable {
         }
         if let duplicateCluster, duplicateImpact > 0 {
             components.append(GhostScoreComponent(
+                slot: "duplicate",
                 kind: .fanout,
                 title: "\(duplicateCluster.memberCount) matching instances",
                 detail: duplicateCluster.reason,
@@ -112,6 +119,7 @@ struct FamilyEvidenceScorer: Sendable {
         }
         if orphanBonus > 0 {
             components.append(GhostScoreComponent(
+                slot: "orphan",
                 kind: .background,
                 title: "background dev process",
                 detail: "Detached from its original parent and still running in the background",
@@ -121,6 +129,7 @@ struct FamilyEvidenceScorer: Sendable {
         }
         if ageImpact > 0 {
             components.append(GhostScoreComponent(
+                slot: "age",
                 kind: .background,
                 title: "long-running dev session",
                 detail: "This process family has been alive for more than three hours",
@@ -132,7 +141,10 @@ struct FamilyEvidenceScorer: Sendable {
         if hardwareImpact > 0 {
             let rawHardwareImpact = hardwareSignals.reduce(0) { $0 + $1.impact }
             let hardwareScale = rawHardwareImpact > 0 ? hardwareImpact / rawHardwareImpact : 0
+            var signalIndex: [HardwareOffenderSignalKind: Int] = [:]
             components.append(contentsOf: hardwareSignals.map { signal in
+                let index = signalIndex[signal.kind, default: 0]
+                signalIndex[signal.kind] = index + 1
                 let kind: GhostScoreComponentKind = switch signal.kind {
                 case .memoryPressure: .memory
                 case .cpuPressure: .cpu
@@ -140,6 +152,7 @@ struct FamilyEvidenceScorer: Sendable {
                 case .threadPressure, .sampleOutlier: .system
                 }
                 return GhostScoreComponent(
+                    slot: "hardware.\(signal.kind.rawValue).\(index)",
                     kind: kind,
                     title: signal.reason,
                     detail: "Host-wide offender evidence: \(signal.kind.label.lowercased())",
