@@ -113,7 +113,7 @@ public enum GhostHeatModel {
         heat = min(100, heat)
 
         let sustainedCPU = trend.hasSustainedHistory && sustainedCPUFraction >= 0.6 && cpuRatio >= 1
-        let pattern = MemoryPatternAnalysis.analyze(points: trend.memoryPoints, fitQuality: trend.memoryFitQuality)
+        let pattern = trend.resolvedPattern
         let sustainedLeak = trend.hasSustainedHistory && trend.memoryFitQuality >= 0.5 && leakRatio >= 1 && pattern.indicatesAccumulation
         let corroboratingAxes = axes.filter { $0 >= 55 }.count
         let instantCorroboration = [memoryRatio >= 1, cpuRatio >= 0.8, gpuRatio >= 0.55, leakRatio >= 0.8]

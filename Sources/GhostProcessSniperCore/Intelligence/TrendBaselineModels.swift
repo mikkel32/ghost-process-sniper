@@ -24,6 +24,33 @@ public struct TrendMetrics: Equatable, Sendable {
     public let sampleCount: Int
     /// The dated samples behind memoryPoints, for time-axis charts.
     public let samples: [TrendSample]
+    /// The memory shape, computed once per window update. Nil for hand-built
+    /// metrics; read resolvedPattern instead.
+    public let pattern: MemoryPatternAnalysis?
+
+    public var resolvedPattern: MemoryPatternAnalysis {
+        if let pattern { return pattern }
+        if samples.count == memoryPoints.count, samples.count >= 4 {
+            return MemoryPatternAnalysis.analyze(samples: samples, fitQuality: memoryFitQuality)
+        }
+        return MemoryPatternAnalysis.analyze(points: memoryPoints, fitQuality: memoryFitQuality)
+    }
+
+    /// Growth that is proven by history: enough samples over enough time, a
+    /// trend that explains the data, and a shape that accumulates. Two close
+    /// samples can make any jump look like thousands of MB/min; this cannot.
+    /// A leak under GC counts at its floor's slope. The raw velocity stays
+    /// available for charts.
+    public var credibleMemoryVelocity: Double {
+        guard hasSustainedHistory else { return 0 }
+        let shape = resolvedPattern
+        guard shape.indicatesAccumulation else { return 0 }
+        if shape.pattern == .risingFloor, !samples.isEmpty {
+            return max(0, shape.floorSlopeMegabytesPerMinute)
+        }
+        guard memoryFitQuality >= 0.5 else { return 0 }
+        return max(0, memoryVelocityMegabytesPerMinute)
+    }
 
     public var observedSeconds: TimeInterval {
         guard let first = samples.first, let last = samples.last else { return 0 }
@@ -40,7 +67,8 @@ public struct TrendMetrics: Equatable, Sendable {
         memoryPoints: [Double],
         memoryFitQuality: Double = 1,
         sampleCount: Int? = nil,
-        samples: [TrendSample] = []
+        samples: [TrendSample] = [],
+        pattern: MemoryPatternAnalysis? = nil
     ) {
         self.memoryVelocityMegabytesPerMinute = memoryVelocityMegabytesPerMinute
         self.cpuSlopePerMinute = cpuSlopePerMinute
@@ -48,6 +76,7 @@ public struct TrendMetrics: Equatable, Sendable {
         self.memoryFitQuality = min(1, max(0, memoryFitQuality))
         self.sampleCount = sampleCount ?? memoryPoints.count
         self.samples = samples
+        self.pattern = pattern
     }
 
     public static let empty = TrendMetrics(
@@ -55,7 +84,8 @@ public struct TrendMetrics: Equatable, Sendable {
         cpuSlopePerMinute: 0,
         memoryPoints: [],
         memoryFitQuality: 0,
-        sampleCount: 0
+        sampleCount: 0,
+        pattern: .unknown
     )
 }
 
@@ -173,6 +203,7 @@ public struct FamilyBaselineLearner: Sendable {
 
 public struct TrendWindow: Sendable {
     private var signatureSamples: [String: [TrendSample]] = [:]
+    private var latestMetrics: [String: TrendMetrics] = [:]
     private let retention: TimeInterval
     private let maxSamples: Int
     private var lastCleanupDate: Date?
@@ -191,12 +222,16 @@ public struct TrendWindow: Sendable {
     ) -> TrendMetrics {
         var values = signatureSamples[signatureID, default: []]
         // Reusing a cached reading is not another independent sample.
-        if let last = values.last, date <= last.date { return metrics(for: values) }
+        if let last = values.last, date <= last.date {
+            return latestMetrics[signatureID] ?? metrics(for: values)
+        }
         values.append(TrendSample(date: date, memoryBytes: memoryBytes, cpuPercent: cpuPercent))
         prune(&values, keeping: date)
         signatureSamples[signatureID] = values
+        let result = metrics(for: values)
+        latestMetrics[signatureID] = result
         cleanupIfNeeded(keeping: date)
-        return metrics(for: values)
+        return result
     }
 
     private func prune(_ values: inout [TrendSample], keeping date: Date) {
@@ -225,6 +260,7 @@ public struct TrendWindow: Sendable {
         signatureSamples = signatureSamples.filter { _, values in
             values.contains { date.timeIntervalSince($0.date) <= retention }
         }
+        latestMetrics = latestMetrics.filter { signatureSamples[$0.key] != nil }
     }
 
     // A least-squares fit over the whole window instead of the two endpoints:
@@ -239,7 +275,8 @@ public struct TrendWindow: Sendable {
                 memoryPoints: points,
                 memoryFitQuality: 0,
                 sampleCount: values.count,
-                samples: values
+                samples: values,
+                pattern: .unknown
             )
         }
 
@@ -283,13 +320,19 @@ public struct TrendWindow: Sendable {
             )
         }
 
+        let pattern = MemoryPatternAnalysis.analyze(samples: values, fitQuality: memoryFitQuality)
+        // With enough points, the Theil-Sen slope shrugs off a jittery or
+        // spiky sample that would drag the least-squares slope; R² stays the
+        // least-squares measure of how linear the window is.
+        let velocity = values.count >= 8 ? pattern.robustSlopeMegabytesPerMinute : memorySlope
         return TrendMetrics(
-            memoryVelocityMegabytesPerMinute: memorySlope,
+            memoryVelocityMegabytesPerMinute: velocity,
             cpuSlopePerMinute: cpuSlope,
             memoryPoints: points,
             memoryFitQuality: memoryFitQuality,
             sampleCount: values.count,
-            samples: values
+            samples: values,
+            pattern: pattern
         )
     }
 }

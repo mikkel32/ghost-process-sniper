@@ -15,7 +15,7 @@ final class ForecastSemanticsTests: XCTestCase {
         XCTAssertLessThan(forecast.state, .leaking)
         XCTAssertNotEqual(forecast.horizon, .breached, "the horizon is a memory horizon")
         XCTAssertTrue(forecast.whyNow.contains("CPU above its 90% limit"), forecast.whyNow)
-        let verdict = FamilyVerdict.synthesize(family: family.enriched(forecast: forecast), pattern: MemoryPatternAnalysis.analyze(points: trend.memoryPoints, fitQuality: trend.memoryFitQuality))
+        let verdict = FamilyVerdict.synthesize(family: family.enriched(forecast: forecast), pattern: trend.resolvedPattern)
         XCTAssertFalse(verdict.headline.localizedCaseInsensitiveContains("leak"), verdict.headline)
     }
 

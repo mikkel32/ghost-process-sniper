@@ -152,10 +152,7 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         trendSamples = family.trend.samples
         trendFitQuality = family.trend.memoryFitQuality
         trendVelocityMegabytesPerMinute = family.trend.memoryVelocityMegabytesPerMinute
-        let patternAnalysis = MemoryPatternAnalysis.analyze(
-            points: family.trend.memoryPoints,
-            fitQuality: family.trend.memoryFitQuality
-        )
+        let patternAnalysis = family.trend.resolvedPattern
         memoryPattern = patternAnalysis
         verdict = FamilyVerdict.synthesize(family: family, pattern: patternAnalysis)
         forecastETASeconds = family.forecast.etaSeconds

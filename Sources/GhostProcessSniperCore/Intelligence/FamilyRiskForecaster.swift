@@ -10,12 +10,9 @@ public struct FamilyRiskForecaster: Sendable {
     ) -> RiskForecast {
         let baseline = AnomalyBaseline(family: family)
         let trustedWindow = family.trend.hasSustainedHistory && family.hasRecentMeasurements(at: now)
-        let memoryVelocity = trustedWindow && family.trend.memoryFitQuality >= 0.5 ? max(0, family.trend.memoryVelocityMegabytesPerMinute) : 0
+        let patternAnalysis = family.trend.resolvedPattern
+        let memoryVelocity = forecastVelocity(trend: family.trend, pattern: patternAnalysis, trusted: trustedWindow)
         let cpuSlope = trustedWindow ? max(0, family.trend.cpuSlopePerMinute) : 0
-        let patternAnalysis = MemoryPatternAnalysis.analyze(
-            points: family.trend.memoryPoints,
-            fitQuality: family.trend.memoryFitQuality
-        )
         let acceleration = trustedWindow && patternAnalysis.indicatesAccumulation ? leakAcceleration(samples: family.trend.samples) : 0
         // Only memory has a meaningful time-to-limit. A linear CPU% ETA is an
         // extrapolation of noise; CPU above its limit feeds CPU evidence instead.
@@ -92,6 +89,17 @@ public struct FamilyRiskForecaster: Sendable {
             generatedAt: now,
             etaKind: etaKind
         )
+    }
+
+    // The ETA follows the net slope whenever the fit is trustworthy; the
+    // shape gate later decides whether that growth is a leak or churn. A leak
+    // under GC grows at the rate of its floor, not its saw teeth.
+    private func forecastVelocity(trend: TrendMetrics, pattern: MemoryPatternAnalysis, trusted: Bool) -> Double {
+        guard trusted else { return 0 }
+        if pattern.pattern == .risingFloor, !trend.samples.isEmpty {
+            return max(0, pattern.floorSlopeMegabytesPerMinute)
+        }
+        return trend.memoryFitQuality >= 0.5 ? max(0, trend.memoryVelocityMegabytesPerMinute) : 0
     }
 
     struct CPUEvidence {
@@ -388,6 +396,9 @@ public struct FamilyRiskForecaster: Sendable {
         }
         if pattern.pattern == .sawtooth {
             parts.append("churns in reclaim cycles (likely GC), not accumulating")
+        }
+        if pattern.pattern == .risingFloor {
+            parts.append("reclaims in cycles but its floor keeps rising")
         }
         if pattern.pattern == .stepJump {
             parts.append("growth came from one allocation step")

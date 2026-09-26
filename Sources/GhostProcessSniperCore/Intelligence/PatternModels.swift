@@ -8,6 +8,8 @@ public enum MemoryPattern: String, Codable, CaseIterable, Sendable {
     case flat
     case steadyClimb
     case sawtooth
+    /// Reclaims in cycles, but every trough sits higher: a leak under GC.
+    case risingFloor
     case stepJump
     case volatile
     case declining
@@ -18,6 +20,7 @@ public enum MemoryPattern: String, Codable, CaseIterable, Sendable {
         case .flat: "Flat"
         case .steadyClimb: "Steady Climb"
         case .sawtooth: "Sawtooth"
+        case .risingFloor: "Leaking under GC"
         case .stepJump: "Step Jump"
         case .volatile: "Volatile"
         case .declining: "Declining"
@@ -30,6 +33,7 @@ public enum MemoryPattern: String, Codable, CaseIterable, Sendable {
         case .flat: "minus"
         case .steadyClimb: "chart.line.uptrend.xyaxis"
         case .sawtooth: "waveform.path"
+        case .risingFloor: "drop.triangle"
         case .stepJump: "stairs"
         case .volatile: "waveform.path.ecg"
         case .declining: "chart.line.downtrend.xyaxis"
@@ -41,7 +45,7 @@ public enum MemoryPattern: String, Codable, CaseIterable, Sendable {
     /// MemoryPatternAnalysis.indicatesAccumulation adds the fit evidence.
     public var indicatesAccumulation: Bool {
         switch self {
-        case .steadyClimb: true
+        case .steadyClimb, .risingFloor: true
         case .flat, .sawtooth, .stepJump, .declining, .volatile, .unknown: false
         }
     }
@@ -53,6 +57,14 @@ public struct MemoryPatternAnalysis: Equatable, Sendable {
     public let detail: String
     /// R² of the memory regression the shape was judged with.
     public let fitQuality: Double
+    /// Theil-Sen slope of the series, robust to jitter and single spikes.
+    public let robustSlopeMegabytesPerMinute: Double
+    /// Lower end of the slope's ~95% confidence band; > 0 means real growth.
+    public let slopeLowerBoundMegabytesPerMinute: Double
+    /// Theil-Sen slope through the reclaim troughs (0 without two dips).
+    public let floorSlopeMegabytesPerMinute: Double
+    /// Per-sample measurement noise estimated from first differences.
+    public let noiseMegabytes: Double
 
     public static let unknown = MemoryPatternAnalysis(
         pattern: .unknown,
@@ -60,100 +72,32 @@ public struct MemoryPatternAnalysis: Equatable, Sendable {
         detail: "Collecting samples"
     )
 
-    public init(pattern: MemoryPattern, confidence: Double, detail: String, fitQuality: Double = 0) {
+    public init(
+        pattern: MemoryPattern,
+        confidence: Double,
+        detail: String,
+        fitQuality: Double = 0,
+        robustSlopeMegabytesPerMinute: Double = 0,
+        slopeLowerBoundMegabytesPerMinute: Double = 0,
+        floorSlopeMegabytesPerMinute: Double = 0,
+        noiseMegabytes: Double = 0
+    ) {
         self.pattern = pattern
         self.confidence = min(1, max(0, confidence))
         self.detail = detail
         self.fitQuality = min(1, max(0, fitQuality))
+        self.robustSlopeMegabytesPerMinute = robustSlopeMegabytesPerMinute
+        self.slopeLowerBoundMegabytesPerMinute = slopeLowerBoundMegabytesPerMinute
+        self.floorSlopeMegabytesPerMinute = floorSlopeMegabytesPerMinute
+        self.noiseMegabytes = noiseMegabytes
     }
 
-    /// An irregular series still accumulates when the trend explains most
-    /// of it; every other shape answers by itself.
+    /// An irregular series still accumulates when the trend explains most of
+    /// it or its robust slope is significantly positive; every other shape
+    /// answers by itself.
     public var indicatesAccumulation: Bool {
-        pattern == .volatile ? fitQuality >= 0.5 : pattern.indicatesAccumulation
-    }
-
-    /// Classify a memory series (bytes) by its shape.
-    public static func analyze(points: [Double], fitQuality: Double) -> MemoryPatternAnalysis {
-        guard points.count >= 4, let first = points.first, let last = points.last else {
-            return .unknown
-        }
-
-        let megabytes = points.map { $0 / 1_048_576 }
-        var totalRise = 0.0
-        var totalFall = 0.0
-        var largestStep = 0.0
-        var dipCount = 0
-        for index in 1..<megabytes.count {
-            let delta = megabytes[index] - megabytes[index - 1]
-            if delta > 0 {
-                totalRise += delta
-                largestStep = max(largestStep, delta)
-            } else if delta < 0 {
-                totalFall += -delta
-                dipCount += 1
-            }
-        }
-
-        let netMegabytes = (last - first) / 1_048_576
-        let mean = megabytes.reduce(0, +) / Double(megabytes.count)
-        let range = (megabytes.max() ?? 0) - (megabytes.min() ?? 0)
-
-        if range < max(16, mean * 0.03) {
-            return MemoryPatternAnalysis(
-                pattern: .flat,
-                confidence: 0.9,
-                detail: String(format: "Memory holds within %.0f MB of %.0f MB", range, mean),
-                fitQuality: fitQuality
-            )
-        }
-
-        if netMegabytes < -max(16, mean * 0.03) {
-            return MemoryPatternAnalysis(
-                pattern: .declining,
-                confidence: 0.8,
-                detail: String(format: "Released %.0f MB across the window", -netMegabytes),
-                fitQuality: fitQuality
-            )
-        }
-
-        // One jump that dominates the total growth is an allocation event,
-        // not a continuous leak.
-        if totalRise > 0, largestStep >= totalRise * 0.7, largestStep >= 32 {
-            return MemoryPatternAnalysis(
-                pattern: .stepJump,
-                confidence: min(1, largestStep / max(1, totalRise)),
-                detail: String(format: "One %.0f MB step accounts for the growth", largestStep),
-                fitQuality: fitQuality
-            )
-        }
-
-        // Repeated meaningful dips mean memory is being reclaimed in cycles.
-        if dipCount >= 2, totalRise > 0, totalFall >= totalRise * 0.35 {
-            let reclaimed = Int(min(1, totalFall / totalRise) * 100)
-            return MemoryPatternAnalysis(
-                pattern: .sawtooth,
-                confidence: min(1, totalFall / totalRise),
-                detail: "Reclaims \(reclaimed)% of what it allocates across \(dipCount) dips",
-                fitQuality: fitQuality
-            )
-        }
-
-        if fitQuality >= 0.7, netMegabytes > 0 {
-            return MemoryPatternAnalysis(
-                pattern: .steadyClimb,
-                confidence: fitQuality,
-                detail: String(format: "Monotonic growth of %.0f MB with little reclaim", netMegabytes),
-                fitQuality: fitQuality
-            )
-        }
-
-        return MemoryPatternAnalysis(
-            pattern: .volatile,
-            confidence: 0.5,
-            detail: String(format: "Irregular swings across a %.0f MB range", range),
-            fitQuality: fitQuality
-        )
+        guard pattern == .volatile else { return pattern.indicatesAccumulation }
+        return fitQuality >= 0.5 || slopeLowerBoundMegabytesPerMinute > 0
     }
 }
 
@@ -237,6 +181,14 @@ public struct FamilyVerdict: Equatable, Sendable {
                 return FamilyVerdict(
                     headline: "Likely leak",
                     detail: "Climbing \(Int(velocity.rounded())) MB/min with little reclaim. \(leakETASentence(forecast))",
+                    level: .hot,
+                    systemImage: "drop.triangle"
+                )
+            }
+            if pattern.pattern == .risingFloor {
+                return FamilyVerdict(
+                    headline: "Leaking under GC",
+                    detail: "\(pattern.detail): memory is reclaimed in cycles, but not all of it.",
                     level: .hot,
                     systemImage: "drop.triangle"
                 )
