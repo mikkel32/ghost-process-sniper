@@ -53,13 +53,21 @@ public struct KillWorkloadProfile: Equatable, Sendable {
     /// Nearest parent first, stopping before launchd.
     public let ancestors: [KillWorkloadAncestor]
     public let parentIsLaunchd: Bool
+    /// The launchd job that runs the root, found when the stop is previewed.
+    public let launchdJob: LaunchdJob?
 
     public static let empty = KillWorkloadProfile(processes: [], ancestors: [], parentIsLaunchd: false)
 
-    public init(processes: [KillWorkloadProcess], ancestors: [KillWorkloadAncestor], parentIsLaunchd: Bool) {
+    public init(
+        processes: [KillWorkloadProcess],
+        ancestors: [KillWorkloadAncestor],
+        parentIsLaunchd: Bool,
+        launchdJob: LaunchdJob? = nil
+    ) {
         self.processes = processes
         self.ancestors = ancestors
         self.parentIsLaunchd = parentIsLaunchd
+        self.launchdJob = launchdJob
     }
 
     public var root: KillWorkloadProcess? {
@@ -93,8 +101,13 @@ public struct KillWorkloadProfile: Equatable, Sendable {
         return KillWorkloadProfile(
             processes: [single],
             ancestors: chain + ancestors,
-            parentIsLaunchd: isRootOfFamily ? parentIsLaunchd : process.parentPID == 1
+            parentIsLaunchd: isRootOfFamily ? parentIsLaunchd : process.parentPID == 1,
+            launchdJob: isRootOfFamily ? launchdJob : nil
         )
+    }
+
+    public func withLaunchdJob(_ job: LaunchdJob?) -> KillWorkloadProfile {
+        KillWorkloadProfile(processes: processes, ancestors: ancestors, parentIsLaunchd: parentIsLaunchd, launchdJob: job)
     }
 
     /// The context of stopping an ancestor instead, such as the supervisor

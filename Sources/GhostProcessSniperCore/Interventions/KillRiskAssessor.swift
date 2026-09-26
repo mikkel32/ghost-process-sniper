@@ -170,13 +170,18 @@ public struct KillRiskAssessor: Sendable {
 
         if let supervisor {
             let who = supervisor.pid.map { "\(supervisor.name) (PID \($0))" } ?? supervisor.name
-            risks.append(KillRisk(
-                kind: .respawn, severity: .caution, title: "Will restart",
-                detail: supervisor.kind == .launchd
-                    ? "launchd manages this process and will likely start it again. Quit the app or disable the login item that owns it."
-                    : "\(who) watches this process and restarts it. Stop \(supervisor.name) instead to make it stay stopped."
-            ))
-        } else if workload.parentIsLaunchd, !isAppMain, kind == .devServer || kind == .build || kind == .general {
+            let detail = if let job = workload.launchdJob, job.keepAlive, supervisor.kind == .launchd {
+                Self.launchdAdvice(job)
+            } else if supervisor.kind == .launchd {
+                "launchd manages this process and will likely start it again. Quit the app or disable the login item that owns it."
+            } else {
+                "\(who) watches this process and restarts it. Stop \(supervisor.name) instead to make it stay stopped."
+            }
+            risks.append(KillRisk(kind: .respawn, severity: .caution, title: "Will restart", detail: detail))
+        } else if workload.parentIsLaunchd, workload.launchdJob == nil, !isAppMain,
+                  kind == .devServer || kind == .build || kind == .general {
+            // Never for a launchd job, even one without KeepAlive: launchd
+            // started it on purpose, so it is no orphan.
             risks.append(KillRisk(kind: .orphaned, severity: .info, title: "Orphaned",
                                   detail: "Its terminal or parent is gone, so nothing will restart it."))
         }
@@ -225,6 +230,11 @@ public struct KillRiskAssessor: Sendable {
         rootPrint: Fingerprint,
         processes: [Fingerprint]
     ) -> KillSupervisor? {
+        // Checked first: launchd restarts a kept-alive job even when it is
+        // itself a supervisor, such as pm2 started at login.
+        if let job = workload.launchdJob, job.keepAlive {
+            return KillSupervisor(pid: nil, name: job.label, kind: .launchd)
+        }
         // A supervisor inside the stop goes down with its children.
         if processes.contains(where: { $0.supervisorKind != nil }) { return nil }
         for ancestor in workload.ancestors {
@@ -237,6 +247,20 @@ public struct KillRiskAssessor: Sendable {
             return KillSupervisor(pid: nil, name: "launchd", kind: .launchd)
         }
         return nil
+    }
+
+    /// Apps are asked to quit, and LaunchServices rather than a launchd
+    /// job keeps them running.
+    public func isAppMainBinary(_ process: KillWorkloadProcess) -> Bool {
+        Fingerprint(process).isAppMainBinary
+    }
+
+    private static func launchdAdvice(_ job: LaunchdJob) -> String {
+        let restarts = "launchd keeps it running (KeepAlive in \(job.plistName)), so a normal stop is undone within seconds."
+        if job.homebrewFormula != nil {
+            return "\(restarts) Run \(job.stopCommand) to keep it stopped."
+        }
+        return "\(restarts) Stop the launchd service instead, or run \(job.stopCommand)."
     }
 
     private static func portList(_ ports: [Int]) -> String {
