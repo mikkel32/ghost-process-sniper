@@ -38,7 +38,9 @@ public final class ProcessMonitor {
     @ObservationIgnored private let thermalSampler: any ThermalSampling
     @ObservationIgnored var lastThermalReadAt: Date?
     @ObservationIgnored private var selfUsageMonitor = SelfUsageMonitor()
-    @ObservationIgnored private let notifier: RadarNotifying
+    @ObservationIgnored let notifier: RadarNotifying
+    @ObservationIgnored var notifyTask: Task<Void, Never>?
+    @ObservationIgnored var pendingNotification: RadarModel?
     @ObservationIgnored let store: RadarStore?
     @ObservationIgnored private let worker: RadarRefreshWorker
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
@@ -102,6 +104,7 @@ public final class ProcessMonitor {
         refreshTask?.cancel()
         sleeper?.cancel()
         settingsSaveTask?.cancel()
+        notifyTask?.cancel()
     }
 
     public func start() {
@@ -133,6 +136,7 @@ public final class ProcessMonitor {
         sleeper?.cancel()
         settingsSaveTask?.cancel()
         settingsSaveTask = nil
+        pendingNotification = nil
         updateHitchMonitor()
         Task { [store] in
             try? await store?.flush()
@@ -200,7 +204,7 @@ public final class ProcessMonitor {
                 selfUsage = usage
             }
             apply(outcome)
-            await notifier.process(model: model)
+            scheduleNotification(for: model)
         } catch {
             var metrics = performanceMetrics
             metrics.smoothness.coalescedRefreshCount = coalescedCount

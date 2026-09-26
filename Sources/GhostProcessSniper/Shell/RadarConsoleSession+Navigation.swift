@@ -50,7 +50,7 @@ extension RadarConsoleSession {
     /// Opens the stop preview for the action's target, on its own page.
     func quickStop(_ action: QuickStopAction) {
         // One stop at a time; a second click must not move the page under the first.
-        guard action.isAvailable, preparingStop == nil, pendingKill == nil else { return }
+        guard action.isAvailable, preparingStop == nil, pendingKill == nil, !refusesStopDuringCull() else { return }
         focus(.family(action.targetFamilyKey))
         prepareKill(
             familyKey: action.targetFamilyKey,

@@ -29,6 +29,9 @@ final class RadarConsoleSession {
     private(set) var memoryPulse: [MemoryPulseSample] = []
     /// Set from the moment a stop is requested until its preview is ready.
     var preparingStop: PreparingStop?
+    /// The open "Stop the extras" run. It lives here, not on the Duplicates
+    /// page, so its sheet survives moving to another page mid-run.
+    var cullRun: DuplicateCullRun?
     /// Changes only when the thermal panel should move on the Overview.
     var overviewThermalBand: OverviewThermalBand = .normal
     var history = NavigationHistory()
@@ -407,7 +410,7 @@ final class RadarConsoleSession {
     }
 
     func prepareKillSelected() {
-        guard let family = selectedFamily else {
+        guard let family = selectedFamily, !refusesStopDuringCull() else {
             return
         }
         prepareKill(family)
@@ -415,6 +418,7 @@ final class RadarConsoleSession {
 
     /// - Parameter name: shown when the family exited before the stop began.
     func prepareKill(familyKey: String, name: String? = nil, redirectedFrom: String? = nil) {
+        guard !refusesStopDuringCull() else { return }
         guard let family = self.family(forKey: familyKey) else {
             showToast("\(name ?? "That process") is no longer running", systemImage: "info.circle")
             return
@@ -434,6 +438,15 @@ final class RadarConsoleSession {
     var isPreparingIntervention: Bool { preparingStop != nil }
     /// The open stop preview is being computed again.
     var isRefreshingPreview = false
+
+    /// Stops from outside the window (a notification, Quick Stop, the menu)
+    /// wait while the cull sheet is open: it holds the window, so a stop
+    /// preview could not be shown.
+    func refusesStopDuringCull() -> Bool {
+        guard cullRun != nil else { return false }
+        showToast("Finish stopping the duplicate copies first", systemImage: "hourglass")
+        return true
+    }
 
     /// Keeps the last stop per family for RecentStopView, at most 20.
     func rememberStop(_ report: KillReport, familyKey: String) {

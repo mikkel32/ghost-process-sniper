@@ -150,12 +150,15 @@ public struct OverviewCommandCenterModel: Equatable, Sendable {
 
     public static let empty = OverviewCommandCenterModel(
         summary: .empty,
-        engineStatus: .empty
+        engineStatus: .empty,
+        hasSampled: false
     )
 
-    public init(summary: RadarSummary, engineStatus: EngineStatusSnapshot, duplicateCount: Int = 0) {
+    /// Only a model built before the first sample says the scan is starting;
+    /// a scan that found nothing in scope is simply quiet.
+    public init(summary: RadarSummary, engineStatus: EngineStatusSnapshot, duplicateCount: Int = 0, hasSampled: Bool = true) {
         title = "Command Center"
-        if summary.familyCount == 0 {
+        if !hasSampled {
             statusText = "Starting scan"
         } else if summary.hotCount > 0 {
             statusText = "\(summary.hotCount) to review"
@@ -254,22 +257,24 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         guard let row = confirmed ?? topRiskRows.first ?? warmingRows.first,
               let panel = detailPanels[row.familyKey]
         else {
+            // Built from a finished sample, so no families means nothing in
+            // scope, not a scan still running (that is `.empty`).
             let hasFamilies = summary.familyCount > 0
             return RadarIntelligenceBrief(
-                eyebrow: hasFamilies ? "Live guidance" : "Getting started",
-                title: hasFamilies ? "No credible problems right now" : "Learning what is normal",
+                eyebrow: "Live guidance",
+                title: hasFamilies ? "No credible problems right now" : "Nothing to watch right now",
                 detail: hasFamilies
                     ? "Current readings and trends show no credible leak, runaway load, or forgotten process tree."
-                    : "The radar is collecting enough history to separate ordinary bursts from persistent problems.",
+                    : "The last scan found nothing in the radar's scope: no developer tools, and nothing heavy or duplicated.",
                 recommendation: hasFamilies
                     ? "Keep working normally. The radar will surface a clear next step if behavior changes."
-                    : "No setup is required; useful guidance appears automatically as processes are observed.",
-                confidenceText: hasFamilies ? "Continuous" : "Warming up",
+                    : "Nothing to do. To watch more of your Mac, widen the scope to Heavy or All in Settings.",
+                confidenceText: "Continuous",
                 evidence: hasFamilies ? ["Current readings", "Trend shape", "Host pressure"] : [],
                 familyKey: nil,
                 familyName: nil,
                 actionTitle: "Review",
-                systemImage: hasFamilies ? "checkmark.seal" : "wand.and.stars",
+                systemImage: "checkmark.seal",
                 level: .quiet
             )
         }
@@ -358,6 +363,9 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
     public let warmingRows: [CompactSidebarRowModel]
     public let duplicateCount: Int
     public let intelligenceBrief: RadarIntelligenceBrief
+    /// False only before the first sample. Empty rows after it mean nothing
+    /// in scope, which views must show as quiet rather than as a scan.
+    public let hasSampled: Bool
 
     public static let empty = CompactConsoleSnapshot(
         commandCenter: .empty,
@@ -366,7 +374,8 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
         topRiskRows: [],
         warmingRows: [],
         duplicateCount: 0,
-        intelligenceBrief: .empty
+        intelligenceBrief: .empty,
+        hasSampled: false
     )
 
     public init(
@@ -376,7 +385,8 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
         topRiskRows: [CompactSidebarRowModel],
         warmingRows: [CompactSidebarRowModel],
         duplicateCount: Int = 0,
-        intelligenceBrief: RadarIntelligenceBrief = .empty
+        intelligenceBrief: RadarIntelligenceBrief = .empty,
+        hasSampled: Bool = true
     ) {
         self.commandCenter = commandCenter
         self.engineStatus = engineStatus
@@ -385,6 +395,7 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
         self.warmingRows = warmingRows
         self.duplicateCount = duplicateCount
         self.intelligenceBrief = intelligenceBrief
+        self.hasSampled = hasSampled
     }
 
     public static func build(
@@ -457,13 +468,15 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
 
     public func updatingEngineStatus(_ engineStatus: EngineStatusSnapshot, summary: RadarSummary) -> CompactConsoleSnapshot {
         CompactConsoleSnapshot(
-            commandCenter: OverviewCommandCenterModel(summary: summary, engineStatus: engineStatus, duplicateCount: duplicateCount),
+            commandCenter: OverviewCommandCenterModel(summary: summary, engineStatus: engineStatus, duplicateCount: duplicateCount,
+                                                      hasSampled: hasSampled),
             engineStatus: engineStatus,
             allRows: allRows,
             topRiskRows: topRiskRows,
             warmingRows: warmingRows,
             duplicateCount: duplicateCount,
-            intelligenceBrief: intelligenceBrief
+            intelligenceBrief: intelligenceBrief,
+            hasSampled: hasSampled
         )
     }
 

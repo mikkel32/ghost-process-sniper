@@ -152,13 +152,15 @@ public struct RadarPublishPayload: Equatable, Sendable {
         detailSignatures: Set<String>? = nil,
         processes: [ProcessMetrics] = []
     ) -> RadarPublishPayload {
-        let contentRevision = SnapshotContentRevision.compute(
+        let contentBaseline = SnapshotContentBaseline.measure(
             families: families,
             summary: summary,
             incidents: incidents,
             rules: rules,
-            duplicateClusters: duplicateClusters
+            duplicateClusters: duplicateClusters,
+            previous: previous?.contentBaseline
         )
+        let contentRevision = contentBaseline.revision
         var revisedPerformance = performance
         revisedPerformance.smoothness.contentRevision = contentRevision
         if let previous, previous.contentRevision == contentRevision,
@@ -225,7 +227,7 @@ public struct RadarPublishPayload: Equatable, Sendable {
             incidents: incidents, rules: rules, metrics: revisedPerformance, health: health,
             storeHealth: storeHealth, storeError: storeError, previous: previous,
             generatedAt: generatedAt, detailSignatures: detailSignatures, processes: processes,
-            contentRevision: contentRevision
+            contentBaseline: contentBaseline
         )
         let triage = snapshot.families
         let engineDiagnostics = snapshot.engine

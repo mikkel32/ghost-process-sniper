@@ -165,7 +165,7 @@ private struct PopoverCulprits: View {
                 // Early warnings are not stop-worthy yet: the action lives in the menu.
                 rows(warnings, showsStopButton: false)
             } else {
-                PopoverQuietState(familyCount: compact.allRows.count)
+                PopoverQuietState(familyCount: compact.allRows.count, hasSampled: compact.hasSampled)
             }
         }
         .padding(8)
@@ -227,11 +227,12 @@ private struct PopoverCulprits: View {
 
 private struct PopoverQuietState: View {
     let familyCount: Int
+    let hasSampled: Bool
 
     var body: some View {
         HStack(spacing: 10) {
             // No green seal before the first scan: nothing is known to be quiet yet.
-            if familyCount == 0 {
+            if !hasSampled {
                 RadarWaitLabel("Scanning your processes…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -240,7 +241,9 @@ private struct PopoverQuietState: View {
                     .font(.title3)
                     .foregroundStyle(.green.gradient)
                     .accessibilityHidden(true)
-                Text("\(familyCount) families watched, nothing misbehaving")
+                Text(familyCount == 0
+                     ? "Nothing in scope to watch. Widen it to Heavy or All in Settings."
+                     : "\(familyCount) families watched, nothing misbehaving")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

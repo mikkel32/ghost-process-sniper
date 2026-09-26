@@ -32,7 +32,8 @@ struct OverviewQueuesSection: View {
             accent: .red
         ) {
             if rows.isEmpty {
-                QuietOverviewState(familyCount: session.compactSnapshot.allRows.count)
+                QuietOverviewState(familyCount: session.compactSnapshot.allRows.count,
+                                   hasSampled: session.compactSnapshot.hasSampled)
                     .frame(maxWidth: .infinity, minHeight: 130)
             } else {
                 queueRows(rows, showsStopButton: true)
@@ -199,6 +200,14 @@ private struct CompactFamilyQueueRow: View {
 
 private struct QuietOverviewState: View {
     let familyCount: Int
+    let hasSampled: Bool
+
+    private var detail: String {
+        if !hasSampled { return "The first scan is still running" }
+        return familyCount == 0
+            ? "Nothing in the radar's scope is running"
+            : "\(familyCount) families watched; emerging signals remain in Warming Up"
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -207,9 +216,7 @@ private struct QuietOverviewState: View {
                 .foregroundStyle(.green.gradient)
             Text("No urgent families")
                 .font(.subheadline.weight(.semibold))
-            Text(familyCount == 0
-                 ? "The first scan is still running"
-                 : "\(familyCount) families watched; emerging signals remain in Warming Up")
+            Text(detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

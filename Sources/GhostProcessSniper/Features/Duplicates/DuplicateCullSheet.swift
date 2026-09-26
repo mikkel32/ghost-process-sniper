@@ -1,6 +1,5 @@
 import GhostProcessSniperCore
 import SwiftUI
-import ThinkingOrbsKit
 
 /// "Stop the extras" as a checklist. Confirming checks every copy in a stop
 /// preview of its own and stops the ones that pass, with live states.
@@ -95,10 +94,10 @@ struct DuplicateCullSheet: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             case .stopping:
-                // Each stop waits out a grace period of 2 s or more.
-                ThinkingOrb(state: .breathing, size: .px20)
-                    .accessibilityHidden(true)
-                Text("Stopping \u{2014} each copy gets its grace period to exit\u{2026}")
+                // Idle copies usually exit on SIGTERM at once, and a run whose
+                // copies were all skipped ends straight away: the orb joins
+                // only a wait that lasts.
+                RadarWaitLabel("Stopping \u{2014} each copy gets its grace period to exit\u{2026}")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()

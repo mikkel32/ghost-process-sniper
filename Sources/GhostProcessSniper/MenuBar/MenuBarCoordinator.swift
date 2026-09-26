@@ -66,15 +66,18 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
 
     /// A notification click or action. Keys come from the notification, so the
     /// family is resolved again in case it restarted since the alert.
-    func handleNotification(action: String, familyKey: String?, signatureID: String?) {
+    func handleNotification(action: String, familyKey: String?, signatureID: String?, familyName: String? = nil) {
         let family = familyKey.flatMap { monitor.family(signatureID: $0) }
             ?? signatureID.flatMap { monitor.family(signatureID: $0) }
         switch action {
         case NotificationRouter.snoozeAction:
+            // By signature, so it holds even when this action relaunched the
+            // app and nothing has been sampled yet.
             guard let target = signatureID ?? familyKey else {
                 return
             }
-            Task { [monitor] in await monitor.snooze(signatureID: target, minutes: 60) }
+            let name = family?.displayName ?? familyName ?? "notified family"
+            Task { [monitor] in await monitor.snooze(signatureID: target, name: name, minutes: 60) }
         case NotificationRouter.stopAction:
             openConsole()
             if let family {

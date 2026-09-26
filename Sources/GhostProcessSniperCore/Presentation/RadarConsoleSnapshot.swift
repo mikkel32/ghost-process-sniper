@@ -20,6 +20,9 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
     public let compact: CompactConsoleSnapshot
     public let generatedAt: Date
     public let contentRevision: SnapshotContentRevision
+    /// The values `contentRevision` was measured from; the next sample's
+    /// revision holds its own against them.
+    var contentBaseline: SnapshotContentBaseline?
 
     public static let empty = RadarConsoleSnapshot(
         summary: .empty,
@@ -84,18 +87,19 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             incidents: incidents, rules: rules, metrics: metrics, health: health,
             storeHealth: storeHealth, storeError: storeError, previous: previous,
             generatedAt: generatedAt, detailSignatures: detailSignatures, processes: processes,
-            contentRevision: SnapshotContentRevision.compute(
+            contentBaseline: SnapshotContentBaseline.measure(
                 families: families,
                 summary: summary,
                 incidents: incidents,
                 rules: rules,
-                duplicateClusters: duplicateClusters
+                duplicateClusters: duplicateClusters,
+                previous: previous?.contentBaseline
             )
         )
     }
 
-    /// `contentRevision` must be the revision of exactly these inputs; the
-    /// publish payload computes it once and passes it here. `processes` is
+    /// `contentBaseline` must be measured from exactly these inputs; the
+    /// publish payload measures it once and passes it here. `processes` is
     /// the whole sample, which stop assessments search for supervisors.
     static func build(
         families: [ProcessFamily],
@@ -111,8 +115,9 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
         generatedAt: Date,
         detailSignatures: Set<String>?,
         processes: [ProcessMetrics],
-        contentRevision: SnapshotContentRevision
+        contentBaseline: SnapshotContentBaseline
     ) -> RadarConsoleSnapshot {
+        let contentRevision = contentBaseline.revision
         let engine = EngineDiagnosticsViewModel(
             metrics: metrics,
             health: health,
@@ -190,7 +195,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
         let matchCounts = Dictionary(uniqueKeysWithValues: previews.map { ($0.id, $0.matchCount) })
         let duplicateRows = DuplicateClusterViewModel.rows(from: duplicateClusters)
 
-        return RadarConsoleSnapshot(
+        var snapshot = RadarConsoleSnapshot(
             summary: summary,
             families: triage,
             detailPanels: detailPanels,
@@ -211,6 +216,8 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             generatedAt: generatedAt,
             contentRevision: contentRevision
         )
+        snapshot.contentBaseline = contentBaseline
+        return snapshot
     }
 
     public func updatingEngine(
@@ -224,7 +231,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             processText: health.map { "\($0.processCount)" } ?? compact.engineStatus.processText,
             generatedAt: generatedAt
         )
-        return RadarConsoleSnapshot(
+        var snapshot = RadarConsoleSnapshot(
             summary: summary,
             families: families,
             detailPanels: detailPanels,
@@ -238,6 +245,8 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             generatedAt: generatedAt,
             contentRevision: contentRevision
         )
+        snapshot.contentBaseline = contentBaseline
+        return snapshot
     }
 
     /// Rows matching a search, filter and sort, via the console's search
