@@ -5,7 +5,6 @@
     "GhostProcessSniperCore": ["Domain", "Configuration", "Monitoring", "Sampling", "Thermals", "Intelligence", "Persistence", "Search", "Presentation", "Diagnostics", "Interventions", "Cleanup"]
   },
   "legacy_line_budgets": {
-    "GhostProcessSniper/Features/Interventions/KillPreviewSheet.swift": 635,
     "GhostProcessSniperCore/Sampling/ProcessSampler.swift": 917,
     "GhostProcessSniperCore/Intelligence/ProcessFamilyBuilder.swift": 828,
     "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 657,
@@ -16,7 +15,7 @@
   "test_roots": {
     "roots": ["Tests/GhostProcessSniperCoreTests", "Checks/GhostProcessSniperCoreChecks"],
     "legacy_line_budgets": {
-      "Checks/GhostProcessSniperCoreChecks/main.swift": 3925,
+      "Checks/GhostProcessSniperCoreChecks/main.swift": 3946,
       "Tests/GhostProcessSniperCoreTests/AdaptiveIntelligenceTests.swift": 605
     }
   }

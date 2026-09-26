@@ -30,6 +30,7 @@ public final class ProcessMonitor {
     /// console re-queries on each publish, and views never read it directly.
     @ObservationIgnored public private(set) var sampledProcesses: [ProcessMetrics] = []
     @ObservationIgnored public private(set) var sampleRevision: UInt64 = 0
+    @ObservationIgnored var stopRiskCache = StopRiskCache()
 
     @ObservationIgnored private let thermalSampler = ThermalSampler()
     @ObservationIgnored private var selfUsageMonitor = SelfUsageMonitor()
@@ -41,6 +42,7 @@ public final class ProcessMonitor {
     @ObservationIgnored private var scheduler = RadarScheduler()
     @ObservationIgnored private var injectedThermalHistory = ThermalActivityHistory()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var postKillTask: Task<Void, Never>?
     @ObservationIgnored var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
     @ObservationIgnored private var popoverVisible = false
@@ -342,14 +344,10 @@ public final class ProcessMonitor {
         }
     }
 
-    public func recordKill(report: KillReport, family: ProcessFamily) async {
+    public func recordKill(report: KillReport, family: ProcessFamily, learnsFromOutcome: Bool = true) async {
         do {
-            try await store?.recordAction(
-                kind: .kill,
-                family: family,
-                summary: report.diagnosticText
-            )
-            try await store?.recordKillOperation(report: report, family: family)
+            try await store?.recordAction(kind: .kill, family: family, summary: report.diagnosticText)
+            try await store?.recordKillOperation(report: report, family: family, learnsFromOutcome: learnsFromOutcome)
             try await store?.flush()
             RadarLogger.kill.info("Kill report for \(family.displayName, privacy: .public): \(report.summary, privacy: .public)")
         } catch {
@@ -357,53 +355,55 @@ public final class ProcessMonitor {
         }
     }
 
+    /// Returns as soon as the processes are handled. Recording and the
+    /// radar refresh follow in order, and the next plan waits for them.
     public func confirmKill(
         family: ProcessFamily,
         killer: ProcessKiller,
         approvedPlan: KillPlan? = nil,
         forceKillDelay: TimeInterval? = nil,
         skipForce: Bool = false,
+        learnsFromOutcome: Bool = true,
         control: KillOperationControl? = nil,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
     ) async -> KillReport {
-        let plan: KillPlan
-        if let approvedPlan { plan = approvedPlan }
-        else { plan = await killPlan(for: family) }
+        await postKillTask?.value
+        let plan = if let approvedPlan { approvedPlan } else { await killPlan(for: family) }
         let operationControl = control ?? KillOperationControl()
-        if skipForce {
-            await operationControl.requestSkipForce()
+        if skipForce { await operationControl.holdForce() }
+        let report = await KillOperationRunner().runReport(plan: plan, killer: killer, forceKillDelay: forceKillDelay ?? settings.forceKillDelay,
+                                                           control: operationControl, eventSink: eventSink)
+        postKillTask = Task { @MainActor [weak self] in
+            await self?.recordKill(report: report, family: family, learnsFromOutcome: learnsFromOutcome)
+            await self?.refresh()
         }
-        let runner = KillOperationRunner()
-        let report = await runner.runReport(
-            plan: plan,
-            killer: killer,
-            forceKillDelay: forceKillDelay ?? settings.forceKillDelay,
-            control: operationControl,
-            eventSink: eventSink
-        )
-        await recordKill(report: report, family: family)
-        await refresh()
         return report
     }
 
-    public func killPlan(for family: ProcessFamily) async -> KillPlan {
-        let workload = KillWorkloadProfile(family: family, sample: sampledProcesses)
-        guard let store else {
-            return family.killPlan(workload: workload)
-        }
-        do {
-            let devKind = family.classification?.kind.rawValue
-            let history = try await store.killStrategyHistory(signatureID: family.signature.id, devKind: devKind)
-            var calibrations: [KillStrategy: KillCalibrationSnapshot] = [:]
-            for strategy in KillStrategy.allCases where strategy != .inspectOnly {
-                let snapshot = try await store.killCalibrationSnapshot(
-                    signatureID: family.signature.id,
-                    devKind: devKind,
-                    strategy: strategy
-                )
-                if snapshot.operationCount > 0 { calibrations[strategy] = snapshot }
+    /// Records stops that ran outside `confirmKill`, such as a batch of
+    /// duplicate copies, then refreshes once. They queue behind any other
+    /// stop's follow-ups, and the next plan waits for them.
+    public func recordKills(_ stops: [(family: ProcessFamily, report: KillReport)]) {
+        guard !stops.isEmpty else { return }
+        let previous = postKillTask
+        postKillTask = Task { @MainActor [weak self] in
+            await previous?.value
+            for stop in stops {
+                await self?.recordKill(report: stop.report, family: stop.family)
             }
-            return family.killPlan(killHistory: history, workload: workload, strategyCalibrations: calibrations)
+            await self?.refresh()
+        }
+    }
+
+    public func killPlan(for family: ProcessFamily) async -> KillPlan {
+        await postKillTask?.value
+        let workload = stopWorkload(for: family)
+        guard let store else { return family.killPlan(workload: workload) }
+        do {
+            let history = try await store.killStrategyHistory(signatureID: family.signature.id)
+            let outcomes = try await store.killOutcomeHistory(signatureID: family.signature.id,
+                                                              devKind: family.classification?.kind.rawValue)
+            return family.killPlan(killHistory: history, workload: workload, strategyCalibrations: outcomes)
         } catch {
             storeError = error.localizedDescription
             return family.killPlan(workload: workload)

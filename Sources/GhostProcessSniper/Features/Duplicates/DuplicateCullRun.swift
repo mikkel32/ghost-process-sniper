@@ -109,7 +109,7 @@ final class DuplicateCullRun: Identifiable {
         if report.succeeded { stoppedCount += 1 }
         reclaimedBytes += report.realizedMemoryReclaimBytes
         update(id) { copy in
-            copy.status = .finished(succeeded: report.succeeded, summary: report.summary)
+            copy.status = .finished(succeeded: report.succeeded, summary: report.narrative.headline)
             if !report.targetResults.isEmpty { copy.targets = report.targetResults }
         }
     }
@@ -177,7 +177,7 @@ extension RadarConsoleSession {
             let approvedPlan = stop.plan.binding(
                 to: previewed.preview.targetIdentities,
                 expiresAt: Date().addingTimeInterval(60),
-                strategy: previewed.preview.strategyRecommendation.strategy
+                profile: previewed.preview.strategyProfile
             )
             let report = await killer.kill(plan: approvedPlan, forceKillDelay: delay, eventSink: { event in
                 sink.yield((stop.id, event))
@@ -191,10 +191,9 @@ extension RadarConsoleSession {
         await liveStates.value
         run.end()
 
-        for (family, report) in reports {
-            await monitor.recordKill(report: report, family: family)
-        }
-        if !reports.isEmpty { await monitor.refresh() }
+        // Recorded and refreshed in order with single stops, so the next
+        // stop plan sees these outcomes.
+        monitor.recordKills(reports)
         let skipped = run.skippedCount
         let stopped = "Stopped \(run.stoppedCount) \(run.stoppedCount == 1 ? "copy" : "copies") of \(run.clusterName)"
         showToast(skipped > 0 ? "\(stopped), skipped \(skipped)" : stopped,

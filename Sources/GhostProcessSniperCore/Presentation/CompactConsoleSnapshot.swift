@@ -286,7 +286,7 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         if let consequence {
             recommendation = consequence
         } else if isConfirmedUrgent, panel.hasOwnedTargets {
-            recommendation = "Review the process tree, then use Kill Preview only if this work is no longer needed."
+            recommendation = "Review the process tree, then use Stop… only if this work is no longer needed."
         } else if isConfirmedUrgent {
             recommendation = "Inspect the process tree and its evidence; no user-owned target is available to stop."
         } else if isUnconfirmedHeat {

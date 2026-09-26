@@ -426,64 +426,13 @@ final class RadarConsoleSession {
         return hours == hours.rounded() ? "\(Int(hours)) h" : String(format: "%.1f h", hours)
     }
 
+    /// A stop preview is being computed; stop buttons show it and ignore repeat clicks.
     var isPreparingIntervention: Bool { preparingStop != nil }
+    /// The open stop preview is being computed again.
+    var isRefreshingPreview = false
 
-    func prepareKill(_ family: ProcessFamily, member: ProcessIdentity? = nil, redirectedFrom: String? = nil) {
-        guard preparingStop == nil, pendingKill == nil else { return }
-        let stop = PreparingStop(name: family.displayName)
-        preparingStop = stop
-        let returnTo = returnSelection(afterStopping: family)
-        expirePreparation(stop)
-        Task {
-            defer { if preparingStop?.id == stop.id { preparingStop = nil } }
-            var plan = await monitor.killPlan(for: family)
-            if let member {
-                guard family.ownedIdentities.contains(member),
-                      let process = family.members.first(where: { $0.identity == member }),
-                      !process.isSystemProcess else {
-                    showToast("This process cannot be targeted", systemImage: "lock")
-                    return
-                }
-                plan = plan.targetingOnly(process)
-            }
-            let delay = monitor.settings.forceKillDelay
-            let preview = await killer.preview(plan: plan, forceKillDelay: delay)
-            // After the timeout the user was told to try again; a late sheet would surprise them.
-            guard preparingStop?.id == stop.id else { return }
-            let expiresAt = Date().addingTimeInterval(60)
-            pendingKill = PendingKill(
-                family: family,
-                preview: preview,
-                plan: plan.binding(to: preview.targetIdentities, expiresAt: expiresAt, strategy: preview.strategyRecommendation.strategy),
-                forceKillDelay: delay,
-                expiresAt: expiresAt,
-                redirectedFrom: redirectedFrom,
-                returnSelection: returnTo
-            )
-        }
-    }
-
-    func confirmKill(
-        _ pending: PendingKill,
-        skipForce: Bool = false,
-        control: KillOperationControl? = nil,
-        eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
-    ) async -> KillReport {
-        let report = await monitor.confirmKill(
-            family: pending.family,
-            killer: killer,
-            approvedPlan: pending.plan,
-            forceKillDelay: pending.forceKillDelay,
-            skipForce: skipForce,
-            control: control,
-            eventSink: eventSink
-        )
-        lastStopResult = (pending.id, report)
-        rememberStop(report, familyKey: pending.family.familyKey)
-        return report
-    }
-
-    private func rememberStop(_ report: KillReport, familyKey: String) {
+    /// Keeps the last stop per family for RecentStopView, at most 20.
+    func rememberStop(_ report: KillReport, familyKey: String) {
         recentStopOrder.removeAll { $0 == familyKey }
         recentStopOrder.append(familyKey)
         recentStops[familyKey] = report
@@ -535,19 +484,6 @@ final class RadarConsoleViewState {
             showInspector: showInspector
         )
     }
-}
-
-struct PendingKill: Identifiable {
-    let id = UUID()
-    let family: ProcessFamily
-    let preview: KillPreview
-    let plan: KillPlan
-    let forceKillDelay: TimeInterval
-    let expiresAt: Date
-    /// The family the user asked to stop when the target is its supervisor.
-    var redirectedFrom: String?
-    /// Where to take the user after a clean stop: where they came from.
-    var returnSelection: RadarFocusedSelection?
 }
 
 struct PreparingStop: Equatable {

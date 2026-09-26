@@ -18,16 +18,6 @@ extension RadarConsoleSession {
         prepareKill(family)
     }
 
-    /// Stops the supervisor that would otherwise restart what it watches.
-    func prepareKill(supervisor: KillSupervisor) {
-        guard let pid = supervisor.pid,
-              let process = monitor.sampledProcesses.first(where: { $0.pid == pid }) else {
-            showToast("\(supervisor.name) already exited", systemImage: "checkmark.circle")
-            return
-        }
-        prepareKill(processIdentity: process.identity, name: supervisor.name)
-    }
-
     /// Removes the user's snooze or ignore rules for a family (Unsnooze,
     /// Stop Ignoring), then rescans so the page shows it as watched again.
     func unmute(signatureID: String, name: String) {

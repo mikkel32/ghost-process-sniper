@@ -20,6 +20,8 @@ public enum KillTargetState: String, Codable, CaseIterable, Sendable {
     case locked
     case stale
     case recycled
+    /// Asked to stop and not yet seen to exit; only live rows use it.
+    case stopping
     case terminated
     case forceKilled
     case survived
@@ -32,6 +34,7 @@ public enum KillTargetState: String, Codable, CaseIterable, Sendable {
         case .locked: "Locked"
         case .stale: "Stale"
         case .recycled: "Recycled"
+        case .stopping: "Stopping\u{2026}"
         case .terminated: "Terminated"
         case .forceKilled: "Force killed"
         case .survived: "Survived"
@@ -41,10 +44,35 @@ public enum KillTargetState: String, Codable, CaseIterable, Sendable {
     }
 }
 
-public struct KillTarget: Identifiable, Equatable, Sendable {
-    public var id: String {
-        "\(identity.pid)-\(identity.startTimeSeconds)-\(identity.startTimeMicroseconds)-\(state.rawValue)"
+/// What a process was doing when the stop looked at it.
+public enum KillTargetCondition: String, Sendable {
+    case running
+    /// Stopped with Ctrl-Z: a polite signal waits until it runs again.
+    case suspended
+    /// A debugger is attached; a polite signal pauses it in the debugger.
+    case traced
+    /// Already exiting in the kernel; no signal changes that.
+    case exiting
+
+    init(status: UInt32, flags: UInt32) {
+        // A debugger also stops what it traces, and SIGCONT does not undo
+        // that, so being traced outranks being stopped.
+        if flags & KillProcessLite.exitingFlag != 0 {
+            self = .exiting
+        } else if flags & KillProcessLite.tracedFlag != 0 {
+            self = .traced
+        } else if status == KillProcessLite.stoppedStatus {
+            self = .suspended
+        } else {
+            self = .running
+        }
     }
+}
+
+public struct KillTarget: Identifiable, Equatable, Sendable {
+    /// The process alone, not its state: a row that goes from ready to
+    /// terminated is the same row, updated in place.
+    public var id: ProcessIdentity { identity }
 
     public let identity: ProcessIdentity
     public let parentPID: Int32?
@@ -56,6 +84,8 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
     public let state: KillTargetState
     public let reason: String
     public let isRoot: Bool
+    public let condition: KillTargetCondition
+    public let processGroupID: Int32
 
     public var pid: Int32 { identity.pid }
 
@@ -69,7 +99,9 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
         cpuPercent: Double,
         state: KillTargetState,
         reason: String,
-        isRoot: Bool
+        isRoot: Bool,
+        condition: KillTargetCondition = .running,
+        processGroupID: Int32 = 0
     ) {
         self.identity = identity
         self.parentPID = parentPID
@@ -81,6 +113,8 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
         self.state = state
         self.reason = reason
         self.isRoot = isRoot
+        self.condition = condition
+        self.processGroupID = processGroupID
     }
 
     public init(process: ProcessMetrics, depth: Int, state: KillTargetState, reason: String, rootIdentity: ProcessIdentity) {
@@ -109,7 +143,9 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
             cpuPercent: process.cpuPercent,
             state: state,
             reason: reason,
-            isRoot: process.identity == rootIdentity
+            isRoot: process.identity == rootIdentity,
+            condition: KillTargetCondition(status: process.status, flags: process.flags),
+            processGroupID: process.processGroupID
         )
     }
 
@@ -130,6 +166,15 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
     }
 
     public func updating(state: KillTargetState, reason: String) -> KillTarget {
+        updating(state: state, reason: reason, cpuPercent: cpuPercent)
+    }
+
+    /// The same target with the radar's CPU, which a kill snapshot cannot measure.
+    func updating(cpuPercent: Double) -> KillTarget {
+        updating(state: state, reason: reason, cpuPercent: cpuPercent)
+    }
+
+    private func updating(state: KillTargetState, reason: String, cpuPercent: Double) -> KillTarget {
         KillTarget(
             identity: identity,
             parentPID: parentPID,
@@ -140,38 +185,34 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
             cpuPercent: cpuPercent,
             state: state,
             reason: reason,
-            isRoot: isRoot
+            isRoot: isRoot,
+            condition: condition,
+            processGroupID: processGroupID
         )
     }
 }
 
 public struct KillAttempt: Identifiable, Equatable, Sendable {
-    public var id: String { "\(pid)-\(signal)-\(stage)" }
+    public var id: String { "\(pid)-\(signalName)-\(stage)" }
 
     public let pid: Int32
-    public let signal: Int32
-    public let signalName: String
+    public let action: KillPhaseAction
     public let stage: String
     public let succeeded: Bool
     public let message: String
 
-    public init(pid: Int32, signal: Int32, stage: String, succeeded: Bool, message: String = "") {
+    public var signalName: String { action.name }
+
+    public init(pid: Int32, action: KillPhaseAction, stage: String, succeeded: Bool, message: String = "") {
         self.pid = pid
-        self.signal = signal
-        self.signalName = KillAttempt.name(for: signal)
+        self.action = action
         self.stage = stage
         self.succeeded = succeeded
         self.message = message
     }
 
-    private static func name(for signal: Int32) -> String {
-        switch signal {
-        case KillSignalPhase.quitRequest: "QUIT"
-        case SIGTERM: "SIGTERM"
-        case SIGKILL: "SIGKILL"
-        case SIGINT: "SIGINT"
-        default: "Signal \(signal)"
-        }
+    public init(pid: Int32, signal: Int32, stage: String, succeeded: Bool, message: String = "") {
+        self.init(pid: pid, action: .signal(signal), stage: stage, succeeded: succeeded, message: message)
     }
 }
 
@@ -206,9 +247,13 @@ public struct KillVerificationPass: Identifiable, Codable, Equatable, Sendable {
 }
 
 public struct KillOutcomeClassifier: Sendable {
+    public static let refusedReason = "macOS refused the signal (protected by security software or a system policy)"
+
     public init() {}
 
-    public func classify(target: KillTarget, report: KillReport) -> KillTarget {
+    /// `exitedIdentities` are the targets the final verification found gone;
+    /// a helper that was never signalled but left with its app is one.
+    public func classify(target: KillTarget, report: KillReport, exitedIdentities: Set<ProcessIdentity> = []) -> KillTarget {
         if report.survivorPIDs.contains(target.pid) {
             return target.updating(state: .survived, reason: "Still alive after verification")
         }
@@ -225,10 +270,13 @@ public struct KillOutcomeClassifier: Sendable {
             return target.updating(state: .terminated, reason: "Accepted graceful termination")
         }
         if report.deniedPIDs.contains(target.pid) {
-            return target.updating(state: .locked, reason: "Signal denied")
+            return target.updating(state: .locked, reason: Self.refusedReason)
         }
         if report.stalePIDs.contains(target.pid) {
             return target.updating(state: .stale, reason: "Identity disappeared")
+        }
+        if exitedIdentities.contains(target.identity) {
+            return target.updating(state: .terminated, reason: "Closed with \(report.displayName)")
         }
         return target.updating(state: .failed, reason: "No terminal status")
     }

@@ -6,7 +6,12 @@ public final class ProcessKiller: Sendable {
     let signaler: ProcessSignaling
     let currentUserID: UInt32
     let sleeper: @Sendable (UInt64) async -> Void
+    /// Bounds the waits; tests move it with their sleeper instead of the wall.
+    let clock: @Sendable () -> Date
     let outcomeClassifier = KillOutcomeClassifier()
+    let protection: KillProtectionPolicy
+    let launchdResolver: LaunchdJobResolver?
+    let portProbe: ListeningPortProbing?
     private let reclaimEstimator = KillReclaimEstimator()
     private let preflightBuilder: KillPreflightBuilder
 
@@ -17,7 +22,11 @@ public final class ProcessKiller: Sendable {
         currentUserID: UInt32 = UInt32(geteuid()),
         sleeper: @escaping @Sendable (UInt64) async -> Void = { nanoseconds in
             try? await Task.sleep(nanoseconds: nanoseconds)
-        }
+        },
+        clock: @escaping @Sendable () -> Date = { Date() },
+        protection: KillProtectionPolicy = KillProtectionPolicy(),
+        launchdResolver: LaunchdJobResolver? = nil,
+        portProbe: ListeningPortProbing? = nil
     ) {
         if let snapshotProvider {
             self.snapshotProvider = snapshotProvider
@@ -28,11 +37,18 @@ public final class ProcessKiller: Sendable {
         }
         self.signaler = signaler
         self.currentUserID = currentUserID
+        self.protection = protection
         self.preflightBuilder = KillPreflightBuilder(
             currentUserID: currentUserID,
-            usesDarwinProcessNamespace: signaler.usesDarwinProcessNamespace
+            usesDarwinProcessNamespace: signaler.usesDarwinProcessNamespace,
+            protection: protection
         )
         self.sleeper = sleeper
+        self.clock = clock
+        // Fakes run no launchctl unless tests pass their own.
+        let native = signaler.usesDarwinProcessNamespace
+        self.launchdResolver = launchdResolver ?? (native ? LaunchdJobResolver(userID: currentUserID) : nil)
+        self.portProbe = portProbe ?? (native ? DarwinListeningPortProbe() : nil)
     }
 
     public func preview(plan: KillPlan, forceKillDelay: TimeInterval = 2) async -> KillPreview {
@@ -48,6 +64,7 @@ public final class ProcessKiller: Sendable {
         snapshotPolicy: KillSnapshotPolicy,
         profile: KillEscalationProfile
     ) async -> KillPreview {
+        let plan = await withLaunchdJob(plan)
         do {
             let snapshot = try await snapshotProvider.snapshot(
                 request: KillSnapshotRequest(plan: plan, policy: snapshotPolicy)
@@ -65,29 +82,29 @@ public final class ProcessKiller: Sendable {
                     KillTarget(unresolved: $0, state: .stale, reason: "Preflight failed")
                 },
                 readiness: .locked,
-                decisionEvidence: [
-                    KillDecisionEvidence(
-                        kind: .blocking,
-                        title: "Preflight failed",
-                        detail: error.localizedDescription
-                    )
-                ]
+                decisionScore: KillDecisionScore(value: 0, confidence: 0, factors: [
+                    KillDecisionFactor(kind: .blocking, title: "Preflight failed", detail: error.localizedDescription, weight: -100)
+                ])
             )
         }
     }
 
+    /// `forceHeldCheck` holds back force and nothing else: every graceful
+    /// wait and polite follow-up still runs. `stopWaitingCheck` ends a wait.
     public func kill(
         plan: KillPlan,
         forceKillDelay: TimeInterval = 2,
         skipForce: Bool = false,
-        skipForceCheck: (@Sendable () async -> Bool)? = nil,
+        stopWaitingCheck: (@Sendable () async -> Bool)? = nil,
+        forceHeldCheck: (@Sendable () async -> Bool)? = nil,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
     ) async -> KillReport {
         await kill(
             plan: plan,
             profile: .default(gracefulSignal: plan.gracefulSignal, forceKillDelay: forceKillDelay),
             skipForce: skipForce,
-            skipForceCheck: skipForceCheck,
+            stopWaitingCheck: stopWaitingCheck,
+            forceHeldCheck: forceHeldCheck,
             eventSink: eventSink
         )
     }
@@ -96,16 +113,16 @@ public final class ProcessKiller: Sendable {
         plan: KillPlan,
         profile: KillEscalationProfile,
         skipForce: Bool = false,
-        skipForceCheck: (@Sendable () async -> Bool)? = nil,
+        stopWaitingCheck: (@Sendable () async -> Bool)? = nil,
+        forceHeldCheck: (@Sendable () async -> Bool)? = nil,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
     ) async -> KillReport {
         let totalStart = Date()
         let operationID = KillOperationID()
         let operationState = KillOperationStateMachine(operationID: operationID)
         let reactor = KillInterventionReactor(operationID: operationID)
-        let verificationPlanner = KillVerificationPlanner()
-        let graceCoordinator = KillGraceCoordinator()
         var watcherTask: Task<Void, Never>?
+        let plan = await withLaunchdJob(plan)
         do {
             await reactor.beginPhase("confirm-preflight")
             let preflightSnapshot = try await snapshotProvider.snapshot(
@@ -114,30 +131,32 @@ public final class ProcessKiller: Sendable {
             await reactor.endPhase("confirm-preflight")
             let preflight = preflightBuilder.build(plan: plan, snapshot: preflightSnapshot, profile: profile)
             await reactor.recordArenaStats(preflight.preview.arenaStats)
-            await reactor.recordCalibration(preflight.preview.strategySimulation)
-            let freshStrategy = preflight.preview.strategyRecommendation.strategy
-            let strategy = freshStrategy == .inspectOnly ? freshStrategy : plan.approvedStrategy ?? freshStrategy
-            let strategySignals = strategy.signals(gracefulSignal: profile.gracefulSignal)
-            let gracefulSignal = strategySignals.first ?? profile.gracefulSignal
-            let escalationSignal = strategy.hasSecondaryStep ? SIGTERM : profile.forcedSignal
-            let schedule = preflight.preview.strategyProfile.verificationSchedule
+            let fresh = preflight.preview.strategyProfile
+            // The approved phases are the contract; a fresh look may only
+            // make the first wait longer.
+            let runProfile = (plan.approvedProfile ?? fresh).extendingGrace(to: fresh.graceSeconds)
+            let targets = preflight.targets.sorted(by: Self.signalOrder)
             var report = KillReport(
                 operationID: operationID,
                 displayName: plan.displayName,
                 rootPID: plan.rootIdentity.pid,
                 deniedPIDs: preflight.preview.deniedPIDs,
                 stalePIDs: preflight.preview.stalePIDs,
-                targetResults: preflight.locked + preflight.stale + preflight.recycled,
+                exitedBeforeSignalPIDs: preflight.exited.map(\.pid),
+                targetResults: preflight.locked + preflight.stale + preflight.recycled + preflight.exited,
                 recycledPIDs: preflight.preview.recycledPIDs,
                 estimatedMemoryReclaimBytes: preflight.preview.estimatedMemoryReclaimBytes,
                 estimatedCPUReclaimPercent: preflight.preview.estimatedCPUReclaimPercent,
-                skipForceRequested: skipForce,
-                strategyUsed: strategy,
+                strategyUsed: runProfile.strategy,
                 scopeUsed: plan.scope,
                 targetDiff: preflight.preview.targetDiff,
                 performanceReport: preflight.preview.performanceReport
             )
-            appendEvent(.queued, operationID: operationID, message: "Queued \(strategy.label) intervention.", report: &report, eventSink: eventSink)
+            report.isForceFollowUp = plan.isForceFollowUp
+            report.zombieParentName = preflight.zombieParentName
+            appendEvent(.queued, operationID: operationID,
+                        message: "Stopping \(targets.count) process\(targets.count == 1 ? "" : "es") with the \(runProfile.strategy.label.lowercased()) strategy.",
+                        report: &report, eventSink: eventSink)
             appendEvent(.preflight, operationID: operationID, message: preflight.preview.scopePreview.summary, report: &report, eventSink: eventSink)
             appendEvent(.preflight, operationID: operationID, message: preflight.preview.targetDiff.summary, report: &report, eventSink: eventSink)
 
@@ -145,9 +164,9 @@ public final class ProcessKiller: Sendable {
                 report.failures.append("This preview expired. Open a fresh preview before confirming; no signal was sent.")
                 return report
             }
-            guard preflight.preview.canKill, strategy != .inspectOnly else {
-                if strategy == .inspectOnly {
-                    report.failures.append("Inspect-only strategy recommended; no signal sent.")
+            guard preflight.preview.canKill, fresh.strategy != .inspectOnly else {
+                if fresh.strategy == .inspectOnly {
+                    report.failures.append(Self.inspectOnlyFailure(preflight.preview, approved: plan.approvedProfile != nil))
                 }
                 report.timeline = KillExecutionTimeline(
                     preflightMilliseconds: preflightSnapshot.elapsedMilliseconds,
@@ -159,173 +178,67 @@ public final class ProcessKiller: Sendable {
             }
 
             let signalStart = Date()
-            let targets = preflight.targets.sorted(by: Self.signalOrder)
-            let signaler = signaler
-            // The exit watcher usually ends a grace period early; a cheap
-            // existence check covers the times it cannot run.
-            @Sendable func allExited(_ group: [KillTarget]) async -> Bool {
-                guard !group.isEmpty else { return false }
-                let states = await operationState.targetStates()
-                return group.allSatisfy { states[$0.pid] == .terminated || !signaler.exists(pid: $0.pid) }
-            }
             if signaler.usesDarwinProcessNamespace {
                 let hintStream = KillExitWatcher.watchHints(operationID: operationID, targets: targets)
                 watcherTask = Task {
                     for await hint in hintStream {
+                        // Forks and execs only steer verification; the
+                        // sheet hears about exits.
                         await reactor.recordHint(hint)
                         if hint.kind == .exit {
-                            let update = await operationState.recordExit(hint.exitEvent)
-                            eventSink?(update)
-                        } else {
-                            eventSink?(
-                                KillOperationEvent(
-                                    operationID: operationID,
-                                    kind: .targetUpdated,
-                                    pid: hint.pid,
-                                    message: hint.message,
-                                    createdAt: hint.observedAt
-                                )
-                            )
+                            eventSink?(await operationState.recordExit(hint.exitEvent))
                         }
                     }
                 }
             }
-            let gracefulWaveStarted = Date()
-            let attemptsBeforeGrace = report.attempts.count
-            for target in targets {
-                appendEvent(.targetUpdated, operationID: operationID, pid: target.pid, targetState: .ready, message: "Queued \(target.name).", report: &report, eventSink: eventSink)
-            }
-            if gracefulSignal == KillSignalPhase.quitRequest {
-                // A quitting app saves its state and closes its own helpers;
-                // signalling them now would race that. Anything left after
-                // the grace period is handled by the next step.
-                var asked = false
-                if let quitPID = preflight.preview.riskAssessment.appQuitPID,
-                   let app = targets.first(where: { $0.pid == quitPID }) {
-                    asked = await requestQuit(app, operationID: operationID, report: &report, eventSink: eventSink)
-                }
-                if !asked {
-                    for target in targets {
-                        send(SIGTERM, to: target, stage: "graceful", operationID: operationID, report: &report, eventSink: eventSink)
-                    }
-                }
-            } else {
-                for target in targets {
-                    send(gracefulSignal, to: target, stage: "graceful", operationID: operationID, report: &report, eventSink: eventSink)
-                }
-            }
-            await reactor.recordWave(
-                signalWave(
-                    stage: "graceful",
-                    signal: gracefulSignal,
-                    targets: targets,
-                    startedAt: gracefulWaveStarted,
-                    attempts: Array(report.attempts.dropFirst(attemptsBeforeGrace))
-                )
+            let launchdStoppedPID = await bootOutLaunchdJob(plan: plan, targets: targets, operationID: operationID,
+                                                            report: &report, eventSink: eventSink)
+            let context = KillPhaseContext(
+                plan: plan,
+                strategy: runProfile.strategy,
+                operationID: operationID,
+                operationStart: totalStart,
+                reactor: reactor,
+                operationState: operationState,
+                appQuitPID: preflight.preview.riskAssessment.appQuitPID,
+                stopWaitingCheck: stopWaitingCheck,
+                forceHeld: {
+                    if skipForce { return true }
+                    return await forceHeldCheck?() == true
+                },
+                eventSink: eventSink,
+                known: Set((preflight.targets + preflight.locked + preflight.stale + preflight.recycled + preflight.exited).map(\.identity)),
+                bornAfter: plan.approvedAt ?? preflightSnapshot.sampledAt,
+                // A quitting app may start an updater or crash reporter on
+                // purpose; what it starts is reported, never stopped.
+                adoptsLateMembers: plan.scope != .singleRoot && runProfile.strategy != .quitApp,
+                launchdStoppedPID: launchdStoppedPID
             )
-
-            appendEvent(.graceWaiting, operationID: operationID, message: "Waiting \(String(format: "%.1f", schedule.graceSeconds))s before force verification.", report: &report, eventSink: eventSink)
-            let graceResult = await graceCoordinator.wait(
-                seconds: schedule.graceSeconds,
-                sleeper: sleeper,
-                skipForceCheck: skipForceCheck
-            ) {
-                await allExited(targets)
-            }
-            if graceResult.endedEarly && !graceResult.skipForceRequested {
-                await reactor.recordEarlyExitSavings(max(0, schedule.graceSeconds - graceResult.waitedSeconds))
-            }
-            let preForceHints = await reactor.hintSnapshot()
-            let preForceMode = verificationPlanner.mode(
-                stage: "pre-force",
-                hints: preForceHints
-            )
-            let preForce = try await verify(stage: "pre-force", plan: plan, targets: targets, operationStart: totalStart, mode: preForceMode, reactor: reactor)
-            report.verificationPasses.append(preForce.pass)
-            appendUnique(survivors: preForce.recycled.map(\.pid), to: &report.recycledPIDs)
-            var latestLiveTargets = preForce.live
-            appendEvent(.verified, operationID: operationID, message: "Pre-force verification: \(preForce.pass.livePIDs.count) live, \(preForce.pass.recycledPIDs.count) recycled.", report: &report, eventSink: eventSink)
-
-            var shouldSkipForce = skipForce || graceResult.skipForceRequested
-            if !shouldSkipForce, let skipForceCheck {
-                shouldSkipForce = await skipForceCheck()
-            }
-            report.skipForceRequested = shouldSkipForce
-            if shouldSkipForce {
-                report.survivorPIDs = latestLiveTargets.map(\.pid).sorted()
-                appendEvent(.forceSkipped, operationID: operationID, message: "Force escalation skipped by user.", report: &report, eventSink: eventSink)
-            } else if !latestLiveTargets.isEmpty {
-                appendEvent(.forcePending, operationID: operationID, message: "\(latestLiveTargets.count) same-identity target\(latestLiveTargets.count == 1 ? "" : "s") still live.", report: &report, eventSink: eventSink)
-                let escalationWaveStarted = Date()
-                let attemptsBeforeEscalation = report.attempts.count
-                for target in latestLiveTargets {
-                    send(escalationSignal, to: target, stage: strategy.hasSecondaryStep ? "secondary" : "forced", operationID: operationID, report: &report, eventSink: eventSink)
-                }
-                await reactor.recordWave(
-                    signalWave(
-                        stage: strategy.hasSecondaryStep ? "secondary" : "forced",
-                        signal: escalationSignal,
-                        targets: latestLiveTargets,
-                        startedAt: escalationWaveStarted,
-                        attempts: Array(report.attempts.dropFirst(attemptsBeforeEscalation))
-                    )
-                )
-                let secondaryTargets = latestLiveTargets
-                let secondaryGrace = await graceCoordinator.wait(seconds: schedule.secondaryGraceSeconds, sleeper: sleeper) {
-                    await allExited(secondaryTargets)
-                }
-                if secondaryGrace.endedEarly {
-                    await reactor.recordEarlyExitSavings(max(0, schedule.secondaryGraceSeconds - secondaryGrace.waitedSeconds))
-                }
-                let postForceHints = await reactor.hintSnapshot()
-                let postForceMode = verificationPlanner.mode(
-                    stage: "post-force",
-                    hints: postForceHints
-                )
-                let postForce = try await verify(stage: "post-force", plan: plan, targets: targets, operationStart: totalStart, mode: postForceMode, reactor: reactor)
-                report.verificationPasses.append(postForce.pass)
-                appendUnique(survivors: postForce.recycled.map(\.pid), to: &report.recycledPIDs)
-                latestLiveTargets = postForce.live
-                appendEvent(.verified, operationID: operationID, message: "Post-force verification: \(postForce.pass.livePIDs.count) live.", report: &report, eventSink: eventSink)
-                if strategy.hasSecondaryStep && !latestLiveTargets.isEmpty {
-                    appendEvent(.forcePending, operationID: operationID, message: "Gentle stop left \(latestLiveTargets.count) target\(latestLiveTargets.count == 1 ? "" : "s"); preparing SIGKILL.", report: &report, eventSink: eventSink)
-                    let forceWaveStarted = Date()
-                    let attemptsBeforeForce = report.attempts.count
-                    for target in latestLiveTargets {
-                        send(profile.forcedSignal, to: target, stage: "forced", operationID: operationID, report: &report, eventSink: eventSink)
-                    }
-                    await reactor.recordWave(
-                        signalWave(
-                            stage: "forced",
-                            signal: profile.forcedSignal,
-                            targets: latestLiveTargets,
-                            startedAt: forceWaveStarted,
-                            attempts: Array(report.attempts.dropFirst(attemptsBeforeForce))
-                        )
-                    )
-                }
-                _ = await graceCoordinator.wait(seconds: schedule.settleSeconds, sleeper: sleeper) {
-                    await allExited(targets)
-                }
-            }
+            let walk = try await walk(runProfile.phases, targets: targets, context: context, report: &report)
 
             let signalMilliseconds = Date().timeIntervalSince(signalStart) * 1_000
             let verifyStart = Date()
-            let finalHints = await reactor.hintSnapshot()
-            let finalMode = verificationPlanner.mode(
-                stage: "final-settle",
-                hints: finalHints
-            )
-            let finalVerification = try await verify(stage: "final-settle", plan: plan, targets: targets, operationStart: totalStart, mode: finalMode, reactor: reactor)
-            report.verificationPasses.append(finalVerification.pass)
-            appendUnique(survivors: finalVerification.recycled.map(\.pid), to: &report.recycledPIDs)
-            let finalSurvivors = finalVerification.live
-            report.survivorPIDs = finalSurvivors.map(\.pid).sorted()
-            report.targetResults.append(contentsOf: finalResults(for: targets, report: report))
-            report.realizedMemoryReclaimBytes = reclaimEstimator.realizedEstimate(
-                from: preflight.preview.reclaimEstimate,
-                targets: report.targetResults
-            )
+            var exitedIdentities = Set<ProcessIdentity>()
+            if !walk.remaining.isEmpty {
+                let finalMode = KillVerificationPlanner().mode(stage: "final-settle", hints: await reactor.hintSnapshot())
+                let finalVerification = try await verify(stage: "final-settle", plan: plan, targets: walk.remaining, operationStart: totalStart, mode: finalMode, reactor: reactor)
+                report.verificationPasses.append(finalVerification.pass)
+                appendUnique(survivors: finalVerification.recycled.map(\.pid), to: &report.recycledPIDs)
+                report.survivorPIDs = finalVerification.live.map(\.pid).sorted()
+                report.stuckExitingPIDs = finalVerification.exiting.map(\.pid).sorted()
+                exitedIdentities = Set(finalVerification.exited.map(\.identity))
+            }
+            report.appStillOpen = walk.quitAcceptedPID.map(report.survivorPIDs.contains) ?? false
+            let finished = report
+            let results = (targets + walk.adopted).map {
+                outcomeClassifier.classify(target: $0, report: finished, exitedIdentities: exitedIdentities)
+            }
+            report.targetResults.append(contentsOf: results)
+            // Late processes keep saying where they came from.
+            report.lateTargets = zip(walk.adopted, results.suffix(walk.adopted.count)).map {
+                $0.updating(state: $1.state, reason: $0.reason)
+            } + walk.reportedLate
+            report.leftRunning = await orphanedByStop(preflight.locked + walk.reportedLate)
             report.timeline = KillExecutionTimeline(
                 preflightMilliseconds: preflightSnapshot.elapsedMilliseconds,
                 signalMilliseconds: signalMilliseconds,
@@ -346,9 +259,6 @@ public final class ProcessKiller: Sendable {
                 drift: report.targetDiff
             )
             report.verificationSnapshotCount = report.verificationPasses.count
-            report.calibratedReclaimBytes = report.realizedMemoryReclaimBytes > 0 ?
-                report.realizedMemoryReclaimBytes :
-                UInt64(Double(report.estimatedMemoryReclaimBytes) * (1 - preflight.preview.survivorRisk))
             watcherTask?.cancel()
             report.watcherEvents = await operationState.exitEventSnapshot()
             report.reactorReport = await reactor.report()
@@ -366,10 +276,21 @@ public final class ProcessKiller: Sendable {
                 completeVerificationCount: report.reactorReport.verificationModeCounts[KillVerificationMode.completeArena.rawValue, default: 0],
                 eventTriggeredVerificationCount: report.reactorReport.verificationModeCounts[KillVerificationMode.eventTriggeredComplete.rawValue, default: 0]
             )
+            var respawned: [KillProcessLite] = []
             if let supervisor = preflight.preview.riskAssessment.supervisor,
                report.survivorPIDs.isEmpty, report.partiallySucceeded {
-                await detectRespawn(of: targets, by: supervisor, since: totalStart, operationID: operationID, report: &report, eventSink: eventSink)
+                respawned = await detectRespawn(of: targets, by: supervisor, since: walk.lastSignalAt, operationID: operationID,
+                                                report: &report, eventSink: eventSink)
             }
+            report.realizedMemoryReclaimBytes = reclaimEstimator.realizedEstimate(
+                from: preflight.preview.reclaimEstimate,
+                targets: report.targetResults,
+                respawnedNames: respawned.map(\.name)
+            )
+            report.calibratedReclaimBytes = report.realizedMemoryReclaimBytes
+            await verifyFreedPorts(preflight.preview.riskAssessment.freedPorts, targets: targets + walk.adopted,
+                                   groupsFrom: preflightSnapshot.arena, since: totalStart, operationID: operationID,
+                                   report: &report, eventSink: eventSink)
             appendEvent(.completed, operationID: operationID, message: report.summary, report: &report, eventSink: eventSink)
             RadarLogger.kill.info("Kill operation \(operationID.rawValue, privacy: .public) \(plan.displayName, privacy: .public) finished in \(report.timeline.totalMilliseconds, privacy: .public)ms, forced \(report.forcedPIDs.count, privacy: .public), survivors \(report.survivorPIDs.count, privacy: .public)")
             return report
@@ -393,6 +314,29 @@ public final class ProcessKiller: Sendable {
                 scopeUsed: plan.scope
             )
         }
+    }
+
+    /// Processes the stop left alone whose parent it took away: they now
+    /// run on under launchd. Only asked when something was left alone.
+    private func orphanedByStop(_ untouched: [KillTarget]) async -> [KillTarget] {
+        let candidates = untouched.filter { $0.parentPID.map { $0 > 1 } == true && $0.identity.startTimeSeconds > 0 }
+        guard !candidates.isEmpty,
+              let snapshot = try? await snapshotProvider.snapshot(request: KillSnapshotRequest(
+                policy: .verify, targetIdentities: candidates.map(\.identity), includeHeavyMetricsForTargets: false,
+                requiresCompleteGraph: false, conversionBudget: .targetsOnly, verificationMode: .targetOnly
+              )) else { return [] }
+        let index = KillProcessIndex(snapshot: snapshot)
+        return candidates.filter { target in
+            guard let process = index.liteProcess(for: target.identity) else { return false }
+            return process.parentPID == 1 && !process.isZombie
+        }
+        .map { $0.updating(state: .locked, reason: "Left running (now orphaned)") }
+    }
+
+    private static func inspectOnlyFailure(_ preview: KillPreview, approved: Bool) -> String {
+        guard approved else { return "Inspect-only strategy recommended; no signal sent." }
+        let reason = preview.strategyRecommendation.reasons.first.map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }
+        return "This process changed since the preview\(reason.map { " (\($0))" } ?? ""). Review it again."
     }
 
     static func signalOrder(_ lhs: KillTarget, _ rhs: KillTarget) -> Bool {

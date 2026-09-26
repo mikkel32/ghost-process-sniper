@@ -25,9 +25,8 @@ struct RecentStopView: View {
         }
     }
 
+    /// The narrated outcome: what happened, what was freed, what to do next.
     private var description: String {
-        let freed = report.realizedMemoryReclaimBytes
-        guard freed > 0 else { return report.summary }
-        return "\(report.summary) Freed \(RadarFormat.bytes(freed))."
+        report.summary
     }
 }

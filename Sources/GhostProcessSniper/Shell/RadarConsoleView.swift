@@ -155,22 +155,9 @@ struct RadarConsoleView: View {
                 if let redirectedFrom = pending.redirectedFrom {
                     StopRedirectHeader(target: pending.family.displayName, redirectedFrom: redirectedFrom)
                 }
-                KillPreviewSheet(
-                    family: pending.family,
-                    preview: pending.preview,
-                    approvalExpiresAt: pending.expiresAt,
-                    confirm: { skipForce, control, eventSink in
-                        await session.confirmKill(
-                            pending,
-                            skipForce: skipForce,
-                            control: control,
-                            eventSink: eventSink
-                        )
-                    },
-                    close: {
-                        session.closeStopSheet()
-                    }
-                )
+                KillPreviewSheet(pending: pending, session: session) {
+                    session.closeStopSheet()
+                }
             }
         }
         .sheet(isPresented: $session.showQuickGuide) {

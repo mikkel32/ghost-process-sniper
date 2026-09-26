@@ -83,6 +83,8 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
     private var sentLog: [Sent] = []
     private var quitLog: [Sent] = []
     private var seenRequests: [KillSnapshotRequest] = []
+    private var snapshotSpawner: (@Sendable (Int) -> [KillProcessLite])?
+    private var failingFromSnapshot: Int?
 
     init(start: Date = Date(timeIntervalSince1970: 1_000_000)) {
         self.start = start
@@ -92,6 +94,17 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
         lock.withLock {
             entries[lite.identity] = Entry(lite: lite, behaviour: behaviour, stopped: lite.status == Self.stoppedStatus)
         }
+    }
+
+    /// Starts the processes `spawn` returns right before snapshot number
+    /// `index` (the first is 0) is taken, like a fork racing the listing.
+    func onSnapshot(_ spawn: @escaping @Sendable (_ index: Int) -> [KillProcessLite]) {
+        lock.withLock { snapshotSpawner = spawn }
+    }
+
+    /// Every snapshot from number `index` on throws.
+    func failSnapshots(from index: Int) {
+        lock.withLock { failingFromSnapshot = index }
     }
 
     // MARK: - Clock
@@ -118,7 +131,8 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
 
     // MARK: - Inspection
 
-    /// Every signal the engine sent, in order; quit requests are not signals.
+    /// Every signal the engine sent, in order; quit requests are not signals
+    /// and are logged apart, with signal 0.
     var log: [Sent] { lock.withLock { sentLog } }
     var quitRequests: [Sent] { lock.withLock { quitLog } }
     var requests: [KillSnapshotRequest] { lock.withLock { seenRequests } }
@@ -140,11 +154,27 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
         listed.first { $0.pid == pid }?.status
     }
 
+    /// A signal from someone other than the engine, such as launchd
+    /// stopping a job it booted out. It is not logged as sent.
+    func signalFromOutside(_ signal: Int32, to pid: Int32) {
+        lock.withLock {
+            guard let identity = listedIdentity(for: pid) else { return }
+            deliver(signal, to: identity)
+        }
+    }
+
     // MARK: - KillSnapshotProviding
 
     func snapshot(request: KillSnapshotRequest) async throws -> KillProcessSnapshot {
-        lock.withLock {
+        try lock.withLock {
+            let index = seenRequests.count
             seenRequests.append(request)
+            if let failing = failingFromSnapshot, index >= failing {
+                throw ProcessSamplerError.listFailed
+            }
+            for lite in snapshotSpawner?(index) ?? [] {
+                entries[lite.identity] = Entry(lite: lite, behaviour: Behaviour(), stopped: false)
+            }
             var processes = listedLocked()
             if request.policy == .verify,
                request.verificationMode == .targetOnly,
@@ -187,6 +217,10 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
         lock.withLock { listedIdentity(for: pid) != nil }
     }
 
+    func isZombieOrGone(pid: Int32) -> Bool {
+        lock.withLock { listedIdentity(for: pid).flatMap { entries[$0]?.zombie } ?? true }
+    }
+
     func requestQuit(pid: Int32) async -> Bool {
         lock.withLock {
             guard let identity = listedIdentity(for: pid),
@@ -194,7 +228,7 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
                   let ticks = entry.behaviour.quitsOnRequest else {
                 return false
             }
-            quitLog.append(Sent(tick: currentTick, pid: pid, signal: KillSignalPhase.quitRequest))
+            quitLog.append(Sent(tick: currentTick, pid: pid, signal: 0))
             schedule(.exit(identity), afterTicks: ticks)
             return true
         }
@@ -355,6 +389,8 @@ extension KillProcessLite {
         userID: UInt32 = 501,
         start: UInt64 = 1_000,
         status: UInt32 = 2,
+        flags: UInt32 = 0,
+        group: Int32? = nil,
         memory: UInt64 = 64 * 1_048_576
     ) -> KillProcessLite {
         KillProcessLite(
@@ -364,8 +400,8 @@ extension KillProcessLite {
             ownerName: userID == 501 ? "me" : "root",
             name: name,
             status: status,
-            flags: 0,
-            processGroupID: pid,
+            flags: flags,
+            processGroupID: group ?? pid,
             openFileCount: 4,
             residentMemoryBytes: memory,
             physicalFootprintBytes: memory,

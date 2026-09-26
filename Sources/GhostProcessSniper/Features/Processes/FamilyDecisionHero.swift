@@ -5,10 +5,12 @@ import SwiftUI
 /// stopping it would cost and give back, and the one action that fits.
 struct FamilyDecisionHero: View {
     let brief: FamilyDecisionBrief
-    let risk: KillRiskAssessment
+    let stop: FamilyStopState
     let stopTitle: String
     let hasOwnedTargets: Bool
     let actions: FamilyPageActions
+
+    private var risk: KillRiskAssessment { stop.risk }
 
     var body: some View {
         let accent = RadarTheme.accent(for: brief.level)
@@ -58,6 +60,13 @@ struct FamilyDecisionHero: View {
                 KillRiskCard(risk: hazard)
             }
 
+            if let blockedReason = stop.blockedReason {
+                Label(blockedReason, systemImage: "lock.shield")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if hasOwnedTargets, brief.mute == .none {
                 VStack(alignment: .leading, spacing: 3) {
                     Label(brief.reclaimText, systemImage: "arrow.uturn.backward.circle")
@@ -101,18 +110,16 @@ struct FamilyDecisionHero: View {
             Button("Stop Ignoring", systemImage: "eye", action: actions.unmute)
                 .buttonStyle(.borderedProminent)
         case .none:
-            if hasOwnedTargets, let supervisor = risk.supervisor, supervisor.pid != nil {
+            if hasOwnedTargets, let supervisor = stop.restartingSupervisor {
                 // Stopping the child alone would only make the supervisor restart it.
-                Button("Stop \(supervisor.name) Instead\u{2026}", systemImage: "stop.circle") {
-                    actions.stopSupervisor(supervisor)
-                }
-                .buttonStyle(.borderedProminent)
-                .help("\(supervisor.name) restarts what it watches; stopping it stops both")
-                Button(stopTitle, role: .destructive, action: actions.stop)
-            } else if brief.recommendation == .stop {
-                Button(stopTitle, systemImage: "stop.circle", role: .destructive, action: actions.stop)
+                Button("Stop \(supervisor.name) Instead\u{2026}", systemImage: "arrow.uturn.up", action: stop.stopSupervisor)
                     .buttonStyle(.borderedProminent)
-                    .help("Preview exactly what will be stopped, then confirm")
+                    .disabled(stop.isPreparing || stop.blockedReason != nil)
+                    .help("\(supervisor.name) starts it again as soon as it exits; stopping \(supervisor.name) keeps it stopped.")
+                FamilyStopButton(title: stopTitle, stop: stop, hasOwnedTargets: hasOwnedTargets, action: actions.stop)
+            } else if brief.recommendation == .stop {
+                FamilyStopButton(title: stopTitle, stop: stop, hasOwnedTargets: hasOwnedTargets, action: actions.stop)
+                    .buttonStyle(.borderedProminent)
             }
         }
     }

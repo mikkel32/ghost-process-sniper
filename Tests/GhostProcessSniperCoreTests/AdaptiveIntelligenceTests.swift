@@ -552,7 +552,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
         XCTAssertEqual(compact.intelligenceBrief.confidenceText, "Building history")
         XCTAssertTrue(compact.intelligenceBrief.title.contains("node"))
         XCTAssertFalse(compact.intelligenceBrief.confidenceText.contains("Heat"))
-        XCTAssertTrue(compact.intelligenceBrief.recommendation.contains("Kill Preview"))
+        XCTAssertTrue(compact.intelligenceBrief.recommendation.contains("use Stop…"))
     }
 
     private func makeNodeProcess(

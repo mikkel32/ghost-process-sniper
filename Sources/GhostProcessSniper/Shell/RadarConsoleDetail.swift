@@ -18,9 +18,12 @@ struct RadarConsoleDetail: View {
                     FamilyDetailConsoleView(
                         panel: panel,
                         // Panels carry the assessment, built off the main actor;
-                        // assessing here only covers a first frame without one.
-                        stopRisk: panel.stopRisk ?? KillRiskAssessor().assess(
-                            KillWorkloadProfile(family: family, sample: session.monitor.sampledProcesses)
+                        // the monitor's memo covers a first frame without one.
+                        stop: FamilyStopState(
+                            risk: panel.stopRisk ?? session.monitor.stopRisk(for: family),
+                            blockedReason: session.monitor.stopBlockedReason(for: family),
+                            isPreparing: session.isPreparingIntervention,
+                            stopSupervisor: { session.prepareKillSupervisor(of: family) }
                         ),
                         actions: FamilyPageActions(session: session, family: family),
                         lastScoredAt: family.lastScoredAt,

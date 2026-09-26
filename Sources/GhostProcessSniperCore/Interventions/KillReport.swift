@@ -33,6 +33,38 @@ public struct KillReport: Equatable, Sendable {
     /// New processes that replaced the stopped ones: a supervisor restarted them.
     public var respawnedPIDs: [Int32] = []
     public var respawnedBy: String?
+    /// Plain follow-ups worth knowing, such as a file watcher that will
+    /// start the app again on the next save.
+    public var notes: [String] = []
+    /// PIDs macOS refused to signal (EPERM), tried once each.
+    public var signalDeniedPIDs: [Int32] = []
+    /// The app accepted the quit request but was still open at the end,
+    /// usually because it is showing a save prompt.
+    public var appStillOpen = false
+    /// Forced the survivors of an earlier held stop; not a new outcome to learn from.
+    public var isForceFollowUp = false
+    /// The parent an already-exited (zombie) target waits on to collect it.
+    public var zombieParentName: String?
+    /// Survivors already exiting in the kernel, held up by disk or network I/O.
+    public var stuckExitingPIDs: [Int32] = []
+    /// Processes that started after the stop was approved. Stopped with the
+    /// rest, or, with force held, only reported (state `.locked`).
+    public var lateTargets: [KillTarget] = []
+    /// Processes the stop left alone that lost their parent to it and now
+    /// run on under launchd.
+    public var leftRunning: [KillTarget] = []
+    /// Processes frozen with SIGSTOP right before SIGKILL.
+    public var frozenCount = 0
+    /// New processes kept appearing faster than the force stage could look.
+    public var forkStorm = false
+    /// How long the graceful wait lasted, and whether it ended because every
+    /// target exited (rather than running out): the family's exit time.
+    public var graceWaitedSeconds: TimeInterval = 0
+    public var graceEndedEarly = false
+    /// The launchd job booted out instead of signalling the root.
+    public var launchdBootout: LaunchdBootout?
+    /// Whether the ports the workload listened on are really free now.
+    public var portOutcomes: [KillPortOutcome] = []
 
     public var partiallySucceeded: Bool {
         !gracefulPIDs.isEmpty || !forcedPIDs.isEmpty
@@ -42,47 +74,26 @@ public struct KillReport: Equatable, Sendable {
         partiallySucceeded && deniedPIDs.isEmpty && survivorPIDs.isEmpty && failures.isEmpty
     }
 
+    /// The outcome in plain words; see `narrative` for its parts.
     public var summary: String {
-        if !failures.isEmpty && !partiallySucceeded {
-            return failures.joined(separator: "\n")
-        }
-        if !respawnedPIDs.isEmpty {
-            let pids = respawnedPIDs.sorted().map(String.init).joined(separator: ", ")
-            return "Stopped, but \(respawnedBy ?? "a supervisor") started it again (PID \(pids)). Stop \(respawnedBy ?? "the supervisor") instead."
-        }
-        if !survivorPIDs.isEmpty {
-            let pids = survivorPIDs.sorted().map(String.init).joined(separator: ", ")
-            return skipForceRequested
-                ? "Still running: PID \(pids). It may be waiting on you, such as a save prompt; force-stop only if you are sure."
-                : "Survivors: \(pids)."
-        }
-        if !forcedPIDs.isEmpty {
-            return "Force-killed \(forcedPIDs.count) stubborn process\(forcedPIDs.count == 1 ? "" : "es")."
-        }
-        if !gracefulPIDs.isEmpty {
-            let locked = Set(deniedPIDs).count
-            let suffix = locked > 0 ? " \(locked) locked skipped." : ""
-            return "Terminated \(gracefulPIDs.count) process\(gracefulPIDs.count == 1 ? "" : "es").\(suffix)"
-        }
-        if !deniedPIDs.isEmpty {
-            return "Locked: \(deniedPIDs.count) protected process\(deniedPIDs.count == 1 ? "" : "es")."
-        }
-        if stalePIDs.contains(rootPID) {
-            return "Already gone."
-        }
-        if !stalePIDs.isEmpty || !recycledPIDs.isEmpty {
-            return "No safe live targets. Stale or recycled PIDs skipped."
-        }
-        return "No owned live processes matched this kill plan."
+        narrative.text
     }
 
     public var diagnosticText: String {
-        var lines = [
-            "Ghost Process Sniper Kill Report",
+        let story = narrative
+        var lines = ["Ghost Process Sniper Kill Report", story.headline]
+        lines += story.nextStep.map { ["Next: \($0)"] } ?? []
+        lines += story.details
+        let outcomes = KillOutcomeRows.make(report: self)
+        if !outcomes.isEmpty {
+            lines.append("Processes:")
+            lines += outcomes.map { "- \($0.name) (PID \($0.pid)) \u{2192} \($0.state.label), \($0.reason)" }
+        }
+        lines += [
+            "Diagnostics:",
             "Family: \(displayName)",
             "Root PID: \(rootPID)",
             "Operation: \(operationID.rawValue)",
-            "Summary: \(summary)",
             "Duration: \(Int(timeline.totalMilliseconds.rounded())) ms",
             "Estimated reclaim: \(RadarFormat.bytes(estimatedMemoryReclaimBytes)), \(Int(estimatedCPUReclaimPercent.rounded()))% CPU",
             "Realized reclaim: \(RadarFormat.bytes(realizedMemoryReclaimBytes))",
@@ -97,7 +108,12 @@ public struct KillReport: Equatable, Sendable {
             "Verification modes: \(reactorReport.verificationModeCounts.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ").ifEmpty("none"))",
             "Signal waves: \(reactorReport.signalWaves.count), arena reuse \(reactorReport.arenaReuseCount)",
             "Calibrated reclaim: \(RadarFormat.bytes(calibratedReclaimBytes))",
-            "Force skipped: \(skipForceRequested ? "yes" : "no")",
+            "Left running: \(leftRunning.map { String($0.pid) }.joined(separator: ", ").ifEmpty("none"))",
+            "Late: \(lateTargets.map { "\($0.pid) \($0.state.rawValue)" }.joined(separator: ", ").ifEmpty("none")), frozen \(frozenCount)\(forkStorm ? ", fork storm" : "")",
+            "Force skipped: \(skipForceRequested ? "yes" : "no")\(appStillOpen ? ", app still open" : "")\(isForceFollowUp ? " (force follow-up)" : "")",
+            "Refused by macOS: \(signalDeniedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
+            "launchd: \(launchdBootout.map { "\($0.accepted ? "booted out" : "bootout failed (\($0.status))") \($0.job.domainTarget)\($0.disabled ? ", disabled" : "")" } ?? "not used")",
+            "Ports: \(portOutcomes.map(\.text).joined(separator: " ").ifEmpty("not checked"))",
             "Respawned: \(respawnedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))\(respawnedBy.map { " by \($0)" } ?? "")",
             "Graceful: \(gracefulPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Forced: \(forcedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",

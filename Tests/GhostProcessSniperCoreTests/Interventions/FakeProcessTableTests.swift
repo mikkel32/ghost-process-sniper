@@ -40,6 +40,8 @@ final class FakeProcessTableTests: XCTestCase {
         try table.send(signal: SIGKILL, to: 31)
         XCTAssertEqual(table.status(of: 31), FakeProcessTable.zombieStatus)
         XCTAssertTrue(table.exists(pid: 31), "kill(pid, 0) succeeds on a zombie")
+        XCTAssertTrue(table.isZombieOrGone(pid: 31), "but its BSD status says it has exited")
+        XCTAssertFalse(table.isZombieOrGone(pid: 30))
         try table.send(signal: SIGKILL, to: 30)
         XCTAssertFalse(table.isListed(31), "launchd reaps the zombie once its parent is gone")
     }

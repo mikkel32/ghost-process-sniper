@@ -6,7 +6,6 @@ import SwiftUI
 struct FamilyPageActions {
     let stop: () -> Void
     let stopProcess: (ProcessIdentity) -> Void
-    let stopSupervisor: (KillSupervisor) -> Void
     let snooze: (TimeInterval) -> Void
     let ignore: () -> Void
     let unmute: () -> Void
@@ -18,7 +17,6 @@ struct FamilyPageActions {
     init(session: RadarConsoleSession, family: ProcessFamily) {
         stop = { session.prepareKill(family) }
         stopProcess = { session.prepareKill(family, member: $0) }
-        stopSupervisor = { session.prepareKill(supervisor: $0) }
         snooze = { session.snoozeSelected(minutes: $0) }
         ignore = { session.ignoreSelected() }
         unmute = { session.unmute(signatureID: family.signature.id, name: family.displayName) }
@@ -30,8 +28,9 @@ struct FamilyPageActions {
 
 struct FamilyDetailConsoleView: View {
     let panel: FamilyDetailPanelModel
-    /// What stopping this family would do, shown before any preview opens.
-    let stopRisk: KillRiskAssessment
+    /// What stopping this family would do, shown before any preview opens,
+    /// whether it may be stopped, and whether a preview is on its way.
+    let stop: FamilyStopState
     let actions: FamilyPageActions
     /// Live dates from the family: a reused panel's own strings freeze at
     /// the time it was built.
@@ -41,12 +40,12 @@ struct FamilyDetailConsoleView: View {
     @State private var selectedTab: FamilyDetailTab = .overview
 
     private var stopTitle: String {
-        StopActionLabel.title(risk: stopRisk, memberCount: panel.members.count, appName: panel.title)
+        StopActionLabel.title(risk: stop.risk, memberCount: panel.members.count, appName: panel.title)
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            FamilyDetailHeader(panel: panel, stopTitle: stopTitle, actions: actions)
+            FamilyDetailHeader(panel: panel, stopTitle: stopTitle, stop: stop, actions: actions)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
 
@@ -108,7 +107,7 @@ struct FamilyDetailConsoleView: View {
         case .overview:
             FamilyDecisionHero(
                 brief: panel.brief,
-                risk: stopRisk,
+                stop: stop,
                 stopTitle: stopTitle,
                 hasOwnedTargets: panel.hasOwnedTargets,
                 actions: actions
@@ -181,6 +180,7 @@ private enum FamilyDetailTab: String, CaseIterable, Identifiable {
 private struct FamilyDetailHeader: View {
     let panel: FamilyDetailPanelModel
     let stopTitle: String
+    let stop: FamilyStopState
     let actions: FamilyPageActions
 
     var body: some View {
@@ -241,10 +241,8 @@ private struct FamilyDetailHeader: View {
                 .fixedSize()
                 .help("Copy or reveal what this family runs")
 
-                Button(stopTitle, systemImage: "stop.circle", role: .destructive, action: actions.stop)
+                FamilyStopButton(title: stopTitle, stop: stop, hasOwnedTargets: panel.hasOwnedTargets, action: actions.stop)
                     .controlSize(.small)
-                    .disabled(!panel.hasOwnedTargets)
-                    .help(panel.hasOwnedTargets ? "Preview exactly what will be stopped, then confirm" : "No live processes owned by you to target")
             }
         }
         .padding(.vertical, 2)

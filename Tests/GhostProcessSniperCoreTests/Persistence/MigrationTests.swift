@@ -93,6 +93,80 @@ final class MigrationTests: XCTestCase {
         XCTAssertEqual(try backup.string("SELECT COUNT(*) FROM forecasts"), "1")
     }
 
+    func testVersionThreeStoreRebuildsKillLearningAndKeepsTheAudit() async throws {
+        let url = folder.appendingPathComponent("Radar.sqlite")
+        let v3 = SQLiteDatabase(url: url)
+        try v3.open()
+        try v3.migrate(RadarStoreSchema.migrations.filter { $0.version <= RadarStoreSchema.slimVersion })
+        let seed = [
+            "INSERT INTO kill_operations VALUES('k1', 'sig', 'node', 42, 'Stopped', 1, 1, 1, 0, 0, 0, 0, 0, 12, 1800000000)",
+            """
+            INSERT INTO kill_outcome_history VALUES('o1', 'k1', 'sig', 'standard', 'ownedFamily', 0, 0, 1, 2, 0, 2, 1800000000)
+            """,
+            """
+            INSERT INTO kill_strategy_history VALUES('s1', 'k1', 'sig', 'nodeServer', 'standard', 'ownedFamily',
+                                                     0, 0, 1, 2, 0, 2, 1800000000)
+            """,
+            """
+            INSERT INTO kill_calibration_aggregates VALUES('sig|*|standard', 'sig', NULL, 'standard', 3, 0.2, 0.5, 0.6, 2, 1, 0.8, 1800000000)
+            """
+        ]
+        for sql in seed {
+            try v3.exec(sql)
+        }
+        XCTAssertEqual(try v3.userVersion(), RadarStoreSchema.slimVersion)
+        v3.close()
+
+        let store = RadarStore(url: url)
+        let history = try await store.killStrategyHistory(signatureID: "sig", now: Date(timeIntervalSince1970: 1800000100))
+        XCTAssertEqual(history.operationCount, 0, "rows from before held force was recorded are dropped")
+        let outcomes = try await store.killOutcomeHistory(signatureID: "sig", devKind: "nodeServer")
+        XCTAssertEqual(outcomes, .empty, "the old calibration rates are not posteriors")
+        let audit = try await store.recentKillOperations()
+        XCTAssertEqual(audit.map(\.displayName), ["node"], "the audit trail survives the rebuild")
+        await store.close()
+
+        let migrated = SQLiteDatabase(url: url)
+        try migrated.open()
+        defer { migrated.close() }
+        XCTAssertEqual(try migrated.userVersion(), latest)
+        XCTAssertTrue(try migrated.hasColumn("held_force", in: "kill_outcome_history"))
+        XCTAssertTrue(try migrated.hasColumn("held_force", in: "kill_strategy_history"))
+        XCTAssertTrue(try migrated.hasColumn("clean_weight", in: "kill_calibration_aggregates"))
+        XCTAssertFalse(try migrated.hasColumn("graceful_success_rate", in: "kill_calibration_aggregates"))
+    }
+
+    func testUpgradedAndFreshStoresEndInTheSameSchema() async throws {
+        let upgradedURL = folder.appendingPathComponent("Upgraded.sqlite")
+        let v3 = SQLiteDatabase(url: upgradedURL)
+        try v3.open()
+        try v3.migrate(RadarStoreSchema.migrations.filter { $0.version <= RadarStoreSchema.slimVersion })
+        try v3.exec("INSERT INTO kill_operations VALUES('k1', 'sig', 'node', 42, 'Stopped', 1, 1, 1, 0, 0, 0, 0, 0, 12, 1800000000)")
+        v3.close()
+        let freshURL = folder.appendingPathComponent("Fresh.sqlite")
+        for url in [upgradedURL, freshURL] {
+            let store = RadarStore(url: url)
+            _ = try await store.loadRules(includeBuiltIns: false)
+            await store.close()
+        }
+        XCTAssertEqual(try schema(at: upgradedURL), try schema(at: freshURL))
+        XCTAssertFalse(try schema(at: freshURL).isEmpty)
+    }
+
+    /// Every table and index with its definition, whitespace-normalized.
+    private func schema(at url: URL) throws -> [String] {
+        let database = SQLiteDatabase(url: url)
+        try database.open()
+        defer { database.close() }
+        var rows: [String] = []
+        try database.query("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name") { row in
+            let sql = (row.string(2) ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            rows.append("\(row.string(0) ?? "") \(row.string(1) ?? ""): \(sql)")
+        }
+        rows.append("user_version \(try database.userVersion())")
+        return rows
+    }
+
     func testFreshStoreStartsCompactable() async throws {
         let url = folder.appendingPathComponent("Radar.sqlite")
         let store = RadarStore(url: url)

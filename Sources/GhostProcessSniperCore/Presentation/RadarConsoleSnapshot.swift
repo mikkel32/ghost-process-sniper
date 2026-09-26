@@ -159,7 +159,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
         }
         // The PID index is built at most once, and only when a tree changed
         // since the previous snapshot assessed it.
-        var processesByPID: [Int32: ProcessMetrics]?
+        var sampleIndex: KillSampleIndex?
         func stopRisk(for family: ProcessFamily) -> KillRiskAssessment? {
             guard !processes.isEmpty else {
                 return nil
@@ -168,9 +168,9 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
                previous.workloadKey == FamilyDetailPanelModel.workloadKey(for: family) {
                 return risk
             }
-            let index = processesByPID ?? Dictionary(processes.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
-            processesByPID = index
-            return FamilyDetailPanelModel.stopRisk(for: family, processesByPID: index)
+            let index = sampleIndex ?? KillSampleIndex(processes)
+            sampleIndex = index
+            return FamilyDetailPanelModel.stopRisk(for: family, index: index)
         }
         var detailPanels: [String: FamilyDetailPanelModel] = [:]
         detailPanels.reserveCapacity((wantedKeys?.count ?? families.count) * 2)

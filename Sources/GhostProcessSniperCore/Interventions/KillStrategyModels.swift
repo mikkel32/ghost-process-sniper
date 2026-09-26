@@ -44,30 +44,21 @@ public enum KillStrategy: String, Codable, CaseIterable, Sendable {
         case .inspectOnly: "Inspect only"
         }
     }
-
-    public func signals(gracefulSignal: Int32 = SIGTERM) -> [Int32] {
-        switch self {
-        case .standard:
-            return [gracefulSignal, SIGKILL]
-        case .gentleDevServer:
-            return [SIGINT, SIGTERM, SIGKILL]
-        case .quitApp:
-            return [KillSignalPhase.quitRequest, SIGTERM, SIGKILL]
-        case .stubbornRunaway, .carefulShutdown:
-            return [SIGTERM, SIGKILL]
-        case .inspectOnly:
-            return []
-        }
-    }
-
-    /// Strategies that try a second, still-polite step before any force.
-    var hasSecondaryStep: Bool { self == .gentleDevServer || self == .quitApp }
 }
 
 public enum KillDecisionFactorKind: String, Codable, Sendable {
     case whyKill
     case whyWait
     case blocking
+}
+
+/// Where a reason comes from, so a view can skip what it already shows:
+/// the stop sheet lists the risk assessment's cards separately.
+public enum KillFactorSource: String, Codable, Sendable {
+    case risk
+    case radar
+    case history
+    case tree
 }
 
 public struct KillDecisionFactor: Identifiable, Codable, Equatable, Sendable {
@@ -77,12 +68,14 @@ public struct KillDecisionFactor: Identifiable, Codable, Equatable, Sendable {
     public let title: String
     public let detail: String
     public let weight: Double
+    public let source: KillFactorSource
 
-    public init(kind: KillDecisionFactorKind, title: String, detail: String, weight: Double) {
+    public init(kind: KillDecisionFactorKind, title: String, detail: String, weight: Double, source: KillFactorSource = .tree) {
         self.kind = kind
         self.title = title
         self.detail = detail
         self.weight = weight
+        self.source = source
     }
 }
 
@@ -106,94 +99,137 @@ public struct KillDecisionScore: Codable, Equatable, Sendable {
     public var whyWait: [KillDecisionFactor] {
         factors.filter { $0.kind == .whyWait || $0.kind == .blocking }
     }
+
+    /// The same score with more reasons, their weights applied.
+    func adding(_ extra: [KillDecisionFactor]) -> KillDecisionScore {
+        guard !extra.isEmpty else { return self }
+        return KillDecisionScore(value: value + extra.reduce(0) { $0 + $1.weight }, confidence: confidence, factors: factors + extra)
+    }
+
+    /// The same score without some reasons, their weights taken back.
+    func removing(where isRemoved: (KillDecisionFactor) -> Bool) -> KillDecisionScore {
+        let removed = factors.filter(isRemoved)
+        guard !removed.isEmpty else { return self }
+        return KillDecisionScore(value: value - removed.reduce(0) { $0 + $1.weight }, confidence: confidence,
+                                 factors: factors.filter { !isRemoved($0) })
+    }
+
+    /// Locked only by a blocking reason or nothing to stop; a real reason to
+    /// wait asks for caution, a minor note does not.
+    public func readiness(hasTargets: Bool) -> KillReadiness {
+        if !hasTargets || factors.contains(where: { $0.kind == .blocking }) {
+            return .locked
+        }
+        return factors.contains(where: { $0.kind == .whyWait && $0.weight <= -6 }) ? .caution : .ready
+    }
+}
+
+/// What a phase does to its targets.
+public enum KillPhaseAction: Codable, Equatable, Sendable {
+    /// Not a signal: a polite quit request, like choosing Quit from the app's menu.
+    case quitRequest
+    case signal(Int32)
+
+    public var name: String {
+        switch self {
+        case .quitRequest: "QUIT"
+        case .signal(SIGINT): "SIGINT"
+        case .signal(SIGTERM): "SIGTERM"
+        case .signal(SIGKILL): "SIGKILL"
+        case .signal(SIGSTOP): "SIGSTOP"
+        case .signal(SIGCONT): "SIGCONT"
+        case .signal(let signal): "SIG\(signal)"
+        }
+    }
+}
+
+/// Who a phase's signal goes to.
+public enum KillSignalReach: String, Codable, Sendable {
+    /// Every target still running, deepest first.
+    case tree
+    /// Only the root, which stops its own workers in order; targets outside
+    /// its tree still get the signal.
+    case rootOnly
 }
 
 public struct KillSignalPhase: Identifiable, Codable, Equatable, Sendable {
-    /// Not a signal: a polite quit request, like choosing Quit from the app's menu.
-    public static let quitRequest: Int32 = 0
-
     public var id: String { "\(order)-\(signalName)-\(label)" }
 
     public let order: Int
     public let label: String
-    public let signal: Int32?
+    public let action: KillPhaseAction
+    /// The longest wait for the targets to exit before the next phase.
     public let waitAfterSeconds: TimeInterval
-    public let isForce: Bool
+    public let reach: KillSignalReach
 
-    public var signalName: String {
-        guard let signal else {
-            return "VERIFY"
-        }
-        return switch signal {
-        case Self.quitRequest: "QUIT"
-        case SIGINT: "SIGINT"
-        case SIGTERM: "SIGTERM"
-        case SIGKILL: "SIGKILL"
-        default: "SIG\(signal)"
-        }
-    }
+    public var signalName: String { action.name }
+    /// Force cannot be caught or answered; it is the step a hold stops before.
+    public var isForce: Bool { action == .signal(SIGKILL) }
 
-    public init(order: Int, label: String, signal: Int32?, waitAfterSeconds: TimeInterval, isForce: Bool) {
+    public init(order: Int, label: String, action: KillPhaseAction, waitAfterSeconds: TimeInterval, reach: KillSignalReach = .tree) {
         self.order = order
         self.label = label
-        self.signal = signal
+        self.action = action
         self.waitAfterSeconds = max(0, waitAfterSeconds)
-        self.isForce = isForce
+        self.reach = reach
+    }
+
+    /// The same step with a different wait.
+    func waiting(_ seconds: TimeInterval) -> KillSignalPhase {
+        KillSignalPhase(order: order, label: label, action: action, waitAfterSeconds: seconds, reach: reach)
     }
 }
 
-public struct KillVerificationSchedule: Codable, Equatable, Sendable {
-    public let graceSeconds: TimeInterval
-    public let secondaryGraceSeconds: TimeInterval
-    public let settleSeconds: TimeInterval
-
-    public static let standard = KillVerificationSchedule(
-        graceSeconds: 2,
-        secondaryGraceSeconds: 0.15,
-        settleSeconds: 0.35
-    )
-
-    public init(
-        graceSeconds: TimeInterval,
-        secondaryGraceSeconds: TimeInterval,
-        settleSeconds: TimeInterval
-    ) {
-        self.graceSeconds = max(0, graceSeconds)
-        self.secondaryGraceSeconds = max(0, secondaryGraceSeconds)
-        self.settleSeconds = max(0, settleSeconds)
-    }
-}
-
+/// The phases a stop runs, in order. Approved in the preview, then run as-is.
 public struct KillStrategyProfile: Codable, Equatable, Sendable {
     public let strategy: KillStrategy
     public let confidence: Double
     public let phases: [KillSignalPhase]
-    public let verificationSchedule: KillVerificationSchedule
     public let summary: String
 
     public static let standard = KillStrategyProfile(
         strategy: .standard,
         confidence: 0.65,
         phases: [
-            KillSignalPhase(order: 0, label: "Ask target to terminate", signal: SIGTERM, waitAfterSeconds: 2, isForce: false),
-            KillSignalPhase(order: 1, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.35, isForce: true)
+            KillSignalPhase(order: 0, label: "Ask target to terminate", action: .signal(SIGTERM), waitAfterSeconds: 2),
+            KillSignalPhase(order: 1, label: "Force same-identity survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.35)
         ],
-        verificationSchedule: .standard,
         summary: "SIGTERM, verify, then SIGKILL same-identity survivors."
     )
 
-    public init(
-        strategy: KillStrategy,
-        confidence: Double,
-        phases: [KillSignalPhase],
-        verificationSchedule: KillVerificationSchedule,
-        summary: String
-    ) {
+    /// For survivors the user chose to force after a held stop: nothing
+    /// polite is repeated.
+    public static let forceNow = KillStrategyProfile(
+        strategy: .stubbornRunaway,
+        confidence: 1,
+        phases: [
+            KillSignalPhase(order: 0, label: "Force the processes still running", action: .signal(SIGKILL), waitAfterSeconds: 0.35)
+        ],
+        summary: "SIGKILL the verified survivors now."
+    )
+
+    public init(strategy: KillStrategy, confidence: Double, phases: [KillSignalPhase], summary: String) {
         self.strategy = strategy
         self.confidence = min(1, max(0, confidence))
         self.phases = phases
-        self.verificationSchedule = verificationSchedule
         self.summary = summary
+    }
+
+    /// How long the first, graceful step waits for a clean exit.
+    public var graceSeconds: TimeInterval { phases.first?.waitAfterSeconds ?? 0 }
+
+    /// The wait after a polite follow-up such as SIGTERM after SIGINT.
+    public var secondaryGraceSeconds: TimeInterval {
+        phases.dropFirst().first { !$0.isForce }?.waitAfterSeconds ?? 0
+    }
+
+    /// The settle time after force.
+    public var settleSeconds: TimeInterval { phases.last { $0.isForce }?.waitAfterSeconds ?? 0 }
+
+    /// The same phases with the first wait raised to at least `seconds`.
+    func extendingGrace(to seconds: TimeInterval) -> KillStrategyProfile {
+        guard let first = phases.first, !first.isForce, seconds > first.waitAfterSeconds else { return self }
+        return KillStrategyProfile(strategy: strategy, confidence: confidence, phases: [first.waiting(seconds)] + phases.dropFirst(), summary: summary)
     }
 }
 
@@ -241,131 +277,5 @@ public enum KillReadiness: String, Codable, Comparable, Sendable {
         case .caution: 1
         case .ready: 2
         }
-    }
-}
-
-public enum KillDecisionEvidenceKind: String, Codable, Sendable {
-    case positive
-    case caution
-    case blocking
-    case info
-}
-
-public struct KillDecisionEvidence: Identifiable, Codable, Equatable, Sendable {
-    public var id: String { "\(kind.rawValue)-\(title)-\(detail)" }
-
-    public let kind: KillDecisionEvidenceKind
-    public let title: String
-    public let detail: String
-
-    public init(kind: KillDecisionEvidenceKind, title: String, detail: String) {
-        self.kind = kind
-        self.title = title
-        self.detail = detail
-    }
-}
-
-public struct KillConfidenceModel: Sendable {
-    public init() {}
-
-    public func evidence(
-        plan: KillPlan,
-        targets: [KillTarget],
-        locked: [KillTarget],
-        stale: [KillTarget],
-        recycled: [KillTarget],
-        reclaim: KillReclaimEstimate
-    ) -> [KillDecisionEvidence] {
-        var output: [KillDecisionEvidence] = []
-        if targets.isEmpty {
-            output.append(
-                KillDecisionEvidence(
-                    kind: .blocking,
-                    title: "No owned live targets",
-                    detail: "The selected identity tree has no same-user process to signal."
-                )
-            )
-        } else {
-            output.append(
-                KillDecisionEvidence(
-                    kind: .positive,
-                    title: "Identity verified",
-                    detail: "\(targets.count) owned target\(targets.count == 1 ? "" : "s") matched by PID plus start time."
-                )
-            )
-            output.append(
-                KillDecisionEvidence(
-                    kind: .positive,
-                    title: "Estimated reclaim",
-                    detail: "\(RadarFormat.bytes(reclaim.memoryBytes)) and \(Int(reclaim.cpuPercent.rounded()))% CPU from \(reclaim.sourceText.lowercased())."
-                )
-            )
-        }
-
-        if !locked.isEmpty {
-            output.append(
-                KillDecisionEvidence(
-                    kind: .caution,
-                    title: "Locked descendants",
-                    detail: "\(locked.count) protected or foreign process\(locked.count == 1 ? "" : "es") will stay untouched."
-                )
-            )
-        }
-        if !stale.isEmpty || !recycled.isEmpty {
-            output.append(
-                KillDecisionEvidence(
-                    kind: .caution,
-                    title: "Tree changed",
-                    detail: "\(stale.count) stale and \(recycled.count) recycled PID\(stale.count + recycled.count == 1 ? "" : "s") were excluded."
-                )
-            )
-        }
-        if let metadata = plan.familyMetadata {
-            if metadata.scoreLevel >= .hot || metadata.forecastState >= .leaking {
-                output.append(
-                    KillDecisionEvidence(
-                        kind: .positive,
-                        title: "High-risk family",
-                        detail: "\(metadata.devKindLabel) is \(metadata.scoreLevel.label.lowercased()) with forecast \(metadata.forecastState.label.lowercased())."
-                    )
-                )
-            }
-            if metadata.isBackgroundOrOrphan {
-                output.append(
-                    KillDecisionEvidence(
-                        kind: .positive,
-                        title: "Background candidate",
-                        detail: "The root appears orphaned or backgrounded, which raises kill confidence."
-                    )
-                )
-            }
-            if metadata.devKindLabel.localizedCaseInsensitiveContains("build") && metadata.scoreLevel < .critical {
-                output.append(
-                    KillDecisionEvidence(
-                        kind: .caution,
-                        title: "Active build caution",
-                        detail: "This looks like a build tool; inspect before interrupting unless it is stale."
-                    )
-                )
-            }
-        }
-        return output
-    }
-}
-
-public struct KillSafetyGate: Sendable {
-    public init() {}
-
-    public func readiness(hasTargets: Bool, evidence: [KillDecisionEvidence]) -> KillReadiness {
-        guard hasTargets else {
-            return .locked
-        }
-        if evidence.contains(where: { $0.kind == .blocking }) {
-            return .locked
-        }
-        if evidence.contains(where: { $0.kind == .caution }) {
-            return .caution
-        }
-        return .ready
     }
 }

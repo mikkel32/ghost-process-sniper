@@ -1,6 +1,17 @@
 import Darwin
 import Foundation
 
+/// How one signal went, so the caller knows whether to try that target again.
+enum KillSendOutcome {
+    case sent
+    case exited
+    /// EPERM: retrying will not change macOS's answer.
+    case refused
+    /// The PID belongs to another process now; the target is gone.
+    case recycled
+    case failed
+}
+
 extension ProcessKiller {
     func appendEvent(
         _ kind: KillOperationEventKind,
@@ -9,6 +20,8 @@ extension ProcessKiller {
         signalName: String? = nil,
         targetState: KillTargetState? = nil,
         message: String,
+        waitSeconds: TimeInterval? = nil,
+        deadline: Date? = nil,
         report: inout KillReport,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
     ) {
@@ -18,7 +31,9 @@ extension ProcessKiller {
             pid: pid,
             signalName: signalName,
             targetState: targetState,
-            message: message
+            message: message,
+            waitSeconds: waitSeconds,
+            deadline: deadline
         )
         report.eventHistory.append(event)
         eventSink?(event)
@@ -30,10 +45,10 @@ extension ProcessKiller {
         report: inout KillReport,
         eventSink: (@Sendable (KillOperationEvent) -> Void)?
     ) async -> Bool {
-        let accepted = await signaler.requestQuit(pid: target.pid)
+        let accepted = await signaler.requestQuit(identity: target.identity)
         let attempt = KillAttempt(
             pid: target.pid,
-            signal: KillSignalPhase.quitRequest,
+            action: .quitRequest,
             stage: "graceful",
             succeeded: accepted,
             message: accepted ? "" : "Not a running app; falling back to SIGTERM."
@@ -41,55 +56,49 @@ extension ProcessKiller {
         report.attempts.append(attempt)
         guard accepted else { return false }
         if !report.gracefulPIDs.contains(target.pid) { report.gracefulPIDs.append(target.pid) }
-        appendEvent(.signaled, operationID: operationID, pid: target.pid, signalName: attempt.signalName, targetState: .terminated,
+        appendEvent(.signaled, operationID: operationID, pid: target.pid, signalName: attempt.signalName, targetState: .stopping,
                     message: "Asked \(target.name) to quit, like \u{2318}Q.", report: &report, eventSink: eventSink)
         return true
     }
 
-    /// A supervisor restarts what it watches within a moment of its exit.
-    /// Looks for a fresh process with a stopped target's name that started
-    /// after this operation began.
-    func detectRespawn(
-        of targets: [KillTarget],
-        by supervisor: KillSupervisor,
-        since start: Date,
+    /// A job stopped with Ctrl-Z keeps a polite signal pending until it runs
+    /// again, so it would otherwise wait out the whole grace and be forced.
+    /// Never counted as a stop of its own.
+    func resume(
+        _ target: KillTarget,
         operationID: KillOperationID,
         report: inout KillReport,
         eventSink: (@Sendable (KillOperationEvent) -> Void)?
-    ) async {
-        await sleeper(1_500_000_000)
-        guard let snapshot = try? await snapshotProvider.snapshot(policy: .verify) else { return }
-        let lites = snapshot.arena?.processes ?? snapshot.processes.map { KillProcessLite(process: $0) }
-        let stoppedNames = Set(targets.map(\.name))
-        let stopped = Set(targets.map(\.identity))
-        let started = UInt64(max(0, start.timeIntervalSince1970.rounded(.down)))
-        let respawned = lites.filter { process in
-            !stopped.contains(process.identity) &&
-                stoppedNames.contains(process.name) &&
-                process.identity.startTimeSeconds >= started &&
-                process.userID == currentUserID
-        }
-        guard !respawned.isEmpty else { return }
-        report.respawnedPIDs = respawned.map(\.pid).sorted()
-        report.respawnedBy = supervisor.name
-        appendEvent(.verified, operationID: operationID,
-                    message: "\(supervisor.name) restarted it as PID \(report.respawnedPIDs.map(String.init).joined(separator: ", ")).",
-                    report: &report, eventSink: eventSink)
+    ) {
+        guard !report.attempts.contains(where: { $0.pid == target.pid && $0.stage == "resume" }) else { return }
+        let resumed = (try? signaler.send(signal: SIGCONT, to: target.identity)) != nil
+        report.attempts.append(KillAttempt(pid: target.pid, signal: SIGCONT, stage: "resume", succeeded: resumed))
+        guard resumed else { return }
+        appendEvent(.signaled, operationID: operationID, pid: target.pid, signalName: "SIGCONT", targetState: .stopping,
+                    message: "Resumed \(target.name) so it can exit.", report: &report, eventSink: eventSink)
     }
 
+    /// Rows show "Stopping" until an exit is seen; only the exit watcher
+    /// and the final classification say a process terminated.
+    @discardableResult
     func send(
         _ signal: Int32,
         to target: KillTarget,
         stage: String,
         operationID: KillOperationID,
+        message: String? = nil,
         report: inout KillReport,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
-    ) {
+    ) -> KillSendOutcome {
+        let failed = { (message: String) in KillAttempt(pid: target.pid, signal: signal, stage: stage, succeeded: false, message: message) }
         do {
-            try signaler.send(signal: signal, to: target.pid)
+            try signaler.send(signal: signal, to: target.identity)
             let attempt = KillAttempt(pid: target.pid, signal: signal, stage: stage, succeeded: true)
             report.attempts.append(attempt)
-            appendEvent(.signaled, operationID: operationID, pid: target.pid, signalName: attempt.signalName, targetState: stage == "forced" ? .forceKilled : .terminated, message: "\(attempt.signalName) sent to \(target.name).", report: &report, eventSink: eventSink)
+            // A freeze only holds the process for force; the force stage
+            // announces it once for all of them.
+            guard stage != "freeze" else { return .sent }
+            appendEvent(.signaled, operationID: operationID, pid: target.pid, signalName: attempt.signalName, targetState: stage == "forced" ? .forceKilled : .stopping, message: message ?? "\(attempt.signalName) sent to \(target.name).", report: &report, eventSink: eventSink)
             if stage == "forced" {
                 if !report.forcedPIDs.contains(target.pid) {
                     report.forcedPIDs.append(target.pid)
@@ -97,8 +106,14 @@ extension ProcessKiller {
             } else if !report.gracefulPIDs.contains(target.pid) {
                 report.gracefulPIDs.append(target.pid)
             }
+            return .sent
+        } catch let failure as SignalFailure where failure.isRecycled {
+            report.attempts.append(failed(failure.message))
+            appendUnique(survivors: [target.pid], to: &report.recycledPIDs)
+            appendEvent(.targetUpdated, operationID: operationID, pid: target.pid, targetState: .recycled, message: "PID \(target.pid) now belongs to another process; nothing was sent.", report: &report, eventSink: eventSink)
+            return .recycled
         } catch let failure as SignalFailure where failure.errnoCode == ESRCH {
-            report.attempts.append(KillAttempt(pid: target.pid, signal: signal, stage: stage, succeeded: false, message: failure.message))
+            report.attempts.append(failed(failure.message))
             if !report.stalePIDs.contains(target.pid) {
                 report.stalePIDs.append(target.pid)
             }
@@ -106,32 +121,30 @@ extension ProcessKiller {
                 report.exitedBeforeSignalPIDs.append(target.pid)
             }
             appendEvent(.targetUpdated, operationID: operationID, pid: target.pid, targetState: .exitedBeforeSignal, message: "PID exited before signal.", report: &report, eventSink: eventSink)
+            return .exited
         } catch let failure as SignalFailure where failure.errnoCode == EPERM {
-            report.attempts.append(KillAttempt(pid: target.pid, signal: signal, stage: stage, succeeded: false, message: failure.message))
-            if !report.deniedPIDs.contains(target.pid) {
-                report.deniedPIDs.append(target.pid)
-            }
-            appendEvent(.targetUpdated, operationID: operationID, pid: target.pid, targetState: .locked, message: "Signal denied: \(failure.message)", report: &report, eventSink: eventSink)
+            report.attempts.append(failed(failure.message))
+            appendUnique(survivors: [target.pid], to: &report.deniedPIDs)
+            appendUnique(survivors: [target.pid], to: &report.signalDeniedPIDs)
+            appendEvent(.targetUpdated, operationID: operationID, pid: target.pid, targetState: .locked, message: "macOS refused to signal \(target.name).", report: &report, eventSink: eventSink)
+            return .refused
         } catch {
-            report.attempts.append(KillAttempt(pid: target.pid, signal: signal, stage: stage, succeeded: false, message: error.localizedDescription))
-            report.failures.append("PID \(target.pid) (\(KillAttempt(pid: target.pid, signal: signal, stage: stage, succeeded: false).signalName)): \(error.localizedDescription)")
+            let attempt = failed(error.localizedDescription)
+            report.attempts.append(attempt)
+            report.failures.append("PID \(target.pid) (\(attempt.signalName)): \(error.localizedDescription)")
             appendEvent(.failed, operationID: operationID, pid: target.pid, targetState: .failed, message: error.localizedDescription, report: &report, eventSink: eventSink)
+            return .failed
         }
-    }
-
-    func finalResults(for targets: [KillTarget], report: KillReport) -> [KillTarget] {
-        targets.map { outcomeClassifier.classify(target: $0, report: report) }
     }
 
     func signalWave(
         stage: String,
-        signal: Int32,
+        signalName: String,
         targets: [KillTarget],
         startedAt: Date,
         attempts: [KillAttempt]
     ) -> KillSignalWave {
-        let signalName = KillAttempt(pid: 0, signal: signal, stage: stage, succeeded: true).signalName
-        return KillSignalWave(
+        KillSignalWave(
             stage: stage,
             signalName: signalName,
             targetPIDs: targets.map(\.pid),
@@ -147,6 +160,10 @@ extension ProcessKiller {
         let live: [KillTarget]
         let recycled: [KillTarget]
         let exited: [KillTarget]
+        /// Live targets already exiting in the kernel, held up by I/O.
+        let exiting: [KillTarget]
+        /// The whole process table, when this pass listed it.
+        let arena: KillGraphArena?
     }
 
     func verify(
@@ -180,12 +197,16 @@ extension ProcessKiller {
         var live: [KillTarget] = []
         var recycled: [KillTarget] = []
         var exited: [KillTarget] = []
+        var exiting: [KillTarget] = []
 
         for target in targets {
             if index.hasRecycledPID(for: target.identity) {
                 recycled.append(target)
-            } else if index.process(for: target.identity) != nil && signaler.exists(pid: target.pid) {
+            } else if let process = index.liteProcess(for: target.identity), !process.isZombie, signaler.exists(pid: target.pid) {
+                // A zombie has exited; it only waits for its parent to
+                // collect it, and no signal can do more.
                 live.append(target)
+                if process.flags & KillProcessLite.exitingFlag != 0 { exiting.append(target) }
             } else {
                 exited.append(target)
             }
@@ -203,7 +224,9 @@ extension ProcessKiller {
             ),
             live: live,
             recycled: recycled,
-            exited: exited
+            exited: exited,
+            exiting: exiting,
+            arena: mode == .targetOnly ? nil : snapshot.liteArena
         )
     }
 

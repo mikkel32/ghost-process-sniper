@@ -93,8 +93,7 @@ public actor ConsoleProjectionWorker: ConsoleProjecting {
            previous.workloadKey == FamilyDetailPanelModel.workloadKey(for: family) {
             return FamilyDetailPanelModel(family: family, stopRisk: risk)
         }
-        let processesByPID = Dictionary(request.processes.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
-        return FamilyDetailPanelModel(family: family, processesByPID: processesByPID)
+        return FamilyDetailPanelModel(family: family, sampleIndex: KillSampleIndex(request.processes))
     }
 }
 

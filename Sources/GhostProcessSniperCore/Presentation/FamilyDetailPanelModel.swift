@@ -144,14 +144,14 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
     /// by any later one with the same content.
     public init(
         family: ProcessFamily,
-        processesByPID: [Int32: ProcessMetrics]? = nil,
+        sampleIndex: KillSampleIndex? = nil,
         classifier: DevProcessClassifier = DevProcessClassifier(),
         classification: DevClassification? = nil,
         culprit: CulpritAnalysis? = nil
     ) {
         self.init(
             family: family,
-            stopRisk: processesByPID.map { Self.stopRisk(for: family, processesByPID: $0) },
+            stopRisk: sampleIndex.map { Self.stopRisk(for: family, index: $0) },
             classifier: classifier,
             classification: classification,
             culprit: culprit
@@ -243,8 +243,8 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         date?.formatted(date: .omitted, time: .standard) ?? "warming"
     }
 
-    static func stopRisk(for family: ProcessFamily, processesByPID: [Int32: ProcessMetrics]) -> KillRiskAssessment {
-        KillRiskAssessor().assess(KillWorkloadProfile(family: family, processesByPID: processesByPID))
+    static func stopRisk(for family: ProcessFamily, index: KillSampleIndex) -> KillRiskAssessment {
+        KillRiskAssessor().assess(KillWorkloadProfile(root: family.root, index: index, family: family))
     }
 
     /// Everything the stop assessment reads from the family itself; names
