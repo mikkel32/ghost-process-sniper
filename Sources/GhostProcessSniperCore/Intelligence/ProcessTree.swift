@@ -126,7 +126,7 @@ struct ProcessTree {
     private func shouldClimb(from child: ProcessMetrics, to parent: ProcessMetrics) -> Bool {
         let childFacts = facts[child.pid]
         let parentFacts = facts[parent.pid]
-        if Self.isOwnWorkload(childFacts), Self.isWorkloadHost(parentFacts) {
+        if Self.isOwnWorkload(childFacts), Self.isWorkloadHost(parentFacts), !Self.isSameApp(childFacts, parentFacts) {
             return false
         }
         if confidence(parent.pid) >= 0.35 {
@@ -156,6 +156,13 @@ struct ProcessTree {
         default:
             return facts.isAppMainBinary
         }
+    }
+
+    /// A helper of the app itself: same bundle and, because the catalog can
+    /// name a whole bundle one kind, the same kind. A server the app runs
+    /// from inside its bundle (an editor's bundled tsserver) differs in kind.
+    private static func isSameApp(_ child: ProcessStaticFacts?, _ parent: ProcessStaticFacts?) -> Bool {
+        sameAppBundle(child, parent) && child?.classification.kind == parent?.classification.kind
     }
 
     private static func sameAppBundle(_ lhs: ProcessStaticFacts?, _ rhs: ProcessStaticFacts?) -> Bool {

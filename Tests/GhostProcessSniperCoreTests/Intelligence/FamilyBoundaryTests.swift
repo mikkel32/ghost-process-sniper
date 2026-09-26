@@ -55,6 +55,39 @@ final class FamilyBoundaryTests: XCTestCase {
         XCTAssertEqual(families.first?.members.count, 3)
     }
 
+    /// The catalog calls everything inside LM Studio.app a model runner; its
+    /// own renderer and GPU helpers are still the app, not servers it launched.
+    func testAppBundleHelpersOfAServiceKindAppStayGrouped() throws {
+        let bundle = "/Applications/LM Studio.app/Contents"
+        func helper(_ pid: Int32, _ role: String) -> ProcessMetrics {
+            let name = "LM Studio Helper (\(role))"
+            return Fixture.process(pid: pid, parent: 800, name: name, path: "\(bundle)/Frameworks/\(name).app/Contents/MacOS/\(name)",
+                                   command: "\(name) --type=\(role.lowercased())", megabytes: 200)
+        }
+        let main = Fixture.process(pid: 800, name: "LM Studio", path: "\(bundle)/MacOS/LM Studio",
+                                   command: "\(bundle)/MacOS/LM Studio", megabytes: 500)
+        var window = TrendWindow()
+        let families = Fixture.scored([main, helper(801, "Renderer"), helper(802, "GPU")], window: &window)
+        XCTAssertEqual(families.count, 1)
+        let family = try XCTUnwrap(families.first)
+        XCTAssertEqual(family.members.map(\.pid).sorted(), [800, 801, 802])
+        XCTAssertEqual(family.classification?.kind, .localModelRunner)
+        XCTAssertNil(family.parentFamilyKey)
+    }
+
+    /// A server shipped inside the app's own bundle is still a server: the
+    /// same-bundle exception covers only helpers of the app's own kind.
+    func testBundledServerOfAnEditorStillLeavesIt() {
+        let xcode = "/Applications/Xcode.app/Contents"
+        let editor = Fixture.process(pid: 520, name: "Xcode", path: "\(xcode)/MacOS/Xcode", command: "\(xcode)/MacOS/Xcode", megabytes: 900)
+        let lsp = "\(xcode)/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/sourcekit-lsp"
+        let server = Fixture.process(pid: 521, parent: 520, name: "sourcekit-lsp", path: lsp, command: lsp, megabytes: 700)
+        var window = TrendWindow()
+        let families = Fixture.scored([editor, server], window: &window)
+        XCTAssertEqual(Set(families.map(\.root.pid)), [520, 521])
+        XCTAssertEqual(families.first { $0.root.pid == 521 }?.classification?.kind, .languageServer)
+    }
+
     func testDevServerWorkersStayWithTheirServer() {
         let vite = Fixture.process(pid: 600, parent: 1, name: "node", path: "/usr/local/bin/node",
                                    command: "node /Users/dev/web/node_modules/.bin/vite --port 5173", megabytes: 300)
