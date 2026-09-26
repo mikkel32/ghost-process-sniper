@@ -136,28 +136,6 @@ public struct TriageRecommendation: Codable, Equatable, Sendable {
     }
 }
 
-public struct PredictiveAlert: Identifiable, Codable, Equatable, Sendable {
-    public let id: UUID
-    public let signatureID: String
-    public let state: ForecastState
-    public let message: String
-    public let createdAt: Date
-
-    public init(
-        id: UUID = UUID(),
-        signatureID: String,
-        state: ForecastState,
-        message: String,
-        createdAt: Date
-    ) {
-        self.id = id
-        self.signatureID = signatureID
-        self.state = state
-        self.message = message
-        self.createdAt = createdAt
-    }
-}
-
 public struct RiskForecast: Codable, Equatable, Sendable {
     public let state: ForecastState
     public let horizon: ForecastHorizon
@@ -243,40 +221,6 @@ public struct RiskForecast: Codable, Equatable, Sendable {
 
     public var isCredibleEscalation: Bool {
         state >= .leaking && confidence >= 0.55
-    }
-}
-
-public struct ForecastStoreSnapshot: Codable, Equatable, Sendable {
-    public let signatureID: String
-    public let state: ForecastState
-    public let confidence: Double
-    public let etaSeconds: TimeInterval?
-    public let whyNow: String
-    public let generatedAt: Date
-
-    public init(
-        signatureID: String,
-        state: ForecastState,
-        confidence: Double,
-        etaSeconds: TimeInterval?,
-        whyNow: String,
-        generatedAt: Date
-    ) {
-        self.signatureID = signatureID
-        self.state = state
-        self.confidence = min(1, max(0, confidence))
-        self.etaSeconds = etaSeconds
-        self.whyNow = whyNow
-        self.generatedAt = generatedAt
-    }
-
-    public init(family: ProcessFamily) {
-        signatureID = family.signature.id
-        state = family.forecast.state
-        confidence = family.forecast.confidence
-        etaSeconds = family.forecast.etaSeconds
-        whyNow = family.forecast.whyNow
-        generatedAt = family.forecast.generatedAt
     }
 }
 
