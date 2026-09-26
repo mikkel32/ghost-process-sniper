@@ -1,5 +1,6 @@
 import AppKit
 import GhostProcessSniperCore
+import ServiceManagement
 import SwiftUI
 
 struct SystemSettingsTab: View {
