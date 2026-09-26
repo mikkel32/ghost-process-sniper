@@ -36,6 +36,10 @@ public struct KillReport: Equatable, Sendable {
     /// Targets whose signal the kernel refused (EPERM). Unlike deniedPIDs,
     /// this leaves out processes the preflight locked and never signalled.
     public var signalDeniedPIDs: [Int32] = []
+    /// How long the graceful wait lasted, and whether it ended because every
+    /// target exited (rather than running out): the family's exit time.
+    public var graceWaitedSeconds: TimeInterval = 0
+    public var graceEndedEarly = false
 
     public var partiallySucceeded: Bool {
         !gracefulPIDs.isEmpty || !forcedPIDs.isEmpty

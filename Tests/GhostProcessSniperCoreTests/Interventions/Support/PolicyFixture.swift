@@ -11,6 +11,7 @@ enum PolicyFixture {
         memory: UInt64 = 200_000_000,
         cpu: Double = 5,
         history: KillHistorySummary? = nil,
+        outcomes: KillOutcomeHistory = .empty,
         level: GhostLevel = .watch,
         forecast: ForecastState = .quiet,
         label: String = "Process family",
@@ -32,7 +33,7 @@ enum PolicyFixture {
             ancestors: [], parentIsLaunchd: parent == 1
         )
         let plan = KillPlan(rootIdentity: identity, targetIdentities: [identity], protectedPIDs: [], displayName: name,
-                            familyMetadata: metadata, killHistory: history, workload: workload)
+                            familyMetadata: metadata, killHistory: history, workload: workload, strategyCalibrations: outcomes)
         return InterventionPolicyEngine().evaluate(
             plan: plan, targets: [target], locked: locked, stale: [], recycled: [],
             reclaim: KillReclaimEstimate(memoryBytes: memory, cpuPercent: cpu, confidence: 0.8, sourceText: "test"),

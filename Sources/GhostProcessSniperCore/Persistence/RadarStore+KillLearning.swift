@@ -44,7 +44,7 @@ extension RadarStore {
             try insertKillOutcomeHistory(report: report, signatureID: record.signatureID, createdAt: date)
             try insertKillStrategyHistory(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
             try insertKillReclaimCalibration(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
-            try upsertKillCalibrationAggregate(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
+            try upsertKillOutcomePosteriors(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
         }
         lastKillOperationSummary = "\(record.displayName): \(record.summary)"
     }
@@ -106,34 +106,22 @@ extension RadarStore {
         )
     }
 
-    public func killCalibrationSnapshot(
-        signatureID: String,
-        devKind: String?,
-        strategy: KillStrategy
-    ) throws -> KillCalibrationSnapshot {
-        let statement = try prepare(RadarStoreQueries.killCalibration)
+    /// Outcome posteriors of a family and of its kind, per strategy.
+    public func killOutcomeHistory(signatureID: String, devKind: String?) throws -> KillOutcomeHistory {
+        let statement = try prepare(RadarStoreQueries.killOutcomeHistory)
         defer { sqlite3_finalize(statement) }
-        bind(
-            .text(calibrationAggregateID(signatureID: signatureID, devKind: devKind, strategy: strategy)),
-            to: statement,
-            index: 1
-        )
-        guard sqlite3_step(statement) == SQLITE_ROW else {
-            return .empty
+        bind(.text(signatureID), to: statement, index: 1)
+        bind(devKind.map { .text($0) } ?? .null, to: statement, index: 2)
+        var history = KillOutcomeHistory.empty
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let strategy = columnString(statement, 2).flatMap(KillStrategy.init(rawValue:)) else { continue }
+            if columnString(statement, 0) != nil {
+                history.signature[strategy] = outcomePosterior(from: statement)
+            } else {
+                history.kind[strategy] = outcomePosterior(from: statement)
+            }
         }
-        return KillCalibrationSnapshot(
-            signatureID: columnString(statement, 0),
-            devKind: columnString(statement, 1),
-            strategy: columnString(statement, 2).flatMap(KillStrategy.init(rawValue:)),
-            operationCount: Int(sqlite3_column_int64(statement, 3)),
-            gracefulSuccessRate: sqlite3_column_double(statement, 4),
-            forceRate: sqlite3_column_double(statement, 5),
-            survivorRate: sqlite3_column_double(statement, 6),
-            averageGraceSeconds: sqlite3_column_double(statement, 7),
-            reclaimAccuracy: sqlite3_column_double(statement, 8),
-            denialPenalty: sqlite3_column_double(statement, 9),
-            updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 10))
-        )
+        return history
     }
 
     /// Rows from the kill tables older than the retention window.
@@ -357,117 +345,62 @@ extension RadarStore {
         }
     }
 
-    private func upsertKillCalibrationAggregate(
-        report: KillReport,
-        signatureID: String?,
-        devKind: String?,
-        createdAt: Date
-    ) throws {
-        guard signatureID != nil || devKind != nil else {
-            return
-        }
-        let id = calibrationAggregateID(
-            signatureID: signatureID,
-            devKind: devKind,
-            strategy: report.strategyUsed
-        )
-        let existing = try calibrationAggregate(id: id)
-        let gracefulSuccess = report.survivorPIDs.isEmpty && report.forcedPIDs.isEmpty && report.failures.isEmpty ? 1.0 : 0.0
-        let forceRate = report.forcedPIDs.isEmpty ? 0.0 : 1.0
-        let survivorRate = report.survivorPIDs.isEmpty ? 0.0 : 1.0
-        let graceSeconds = max(0, report.timeline.signalMilliseconds / 1_000)
-        let reclaimAccuracy: Double
-        if report.estimatedMemoryReclaimBytes > 0 {
-            reclaimAccuracy = min(1.5, Double(report.realizedMemoryReclaimBytes) / Double(report.estimatedMemoryReclaimBytes))
-        } else {
-            reclaimAccuracy = 1
-        }
-        let denominator = max(1, report.targetResults.count + report.deniedPIDs.count + report.failures.count)
-        let denialPenalty = min(1, Double(report.deniedPIDs.count + report.failures.count) / Double(denominator))
-
-        let next: KillCalibrationSnapshot
-        if let existing {
-            let alpha = existing.operationCount < 8 ? 1 / Double(existing.operationCount + 1) : 0.18
-            next = KillCalibrationSnapshot(
-                signatureID: signatureID,
-                devKind: devKind,
-                strategy: report.strategyUsed,
-                operationCount: existing.operationCount + 1,
-                gracefulSuccessRate: blend(existing.gracefulSuccessRate, gracefulSuccess, alpha: alpha),
-                forceRate: blend(existing.forceRate, forceRate, alpha: alpha),
-                survivorRate: blend(existing.survivorRate, survivorRate, alpha: alpha),
-                averageGraceSeconds: blend(existing.averageGraceSeconds, graceSeconds, alpha: alpha),
-                reclaimAccuracy: blend(existing.reclaimAccuracy, reclaimAccuracy, alpha: alpha),
-                denialPenalty: blend(existing.denialPenalty, denialPenalty, alpha: alpha),
-                updatedAt: createdAt
-            )
-        } else {
-            next = KillCalibrationSnapshot(
-                signatureID: signatureID,
-                devKind: devKind,
-                strategy: report.strategyUsed,
-                operationCount: 1,
-                gracefulSuccessRate: gracefulSuccess,
-                forceRate: forceRate,
-                survivorRate: survivorRate,
-                averageGraceSeconds: graceSeconds,
-                reclaimAccuracy: reclaimAccuracy,
-                denialPenalty: denialPenalty,
-                updatedAt: createdAt
+    /// Folds the stop into the family's and its kind's posterior for the
+    /// strategy that ran.
+    private func upsertKillOutcomePosteriors(report: KillReport, signatureID: String?, devKind: String?, createdAt: Date) throws {
+        let observation = KillOutcomeObservation(report: report)
+        guard observation.outcome != .excluded else { return }
+        let rows: [(signatureID: String?, devKind: String?)] = [(signatureID, nil), (nil, devKind)]
+        for row in rows where row.signatureID != nil || row.devKind != nil {
+            let id = calibrationAggregateID(signatureID: row.signatureID, devKind: row.devKind, strategy: observation.strategy)
+            let next = try outcomePosterior(id: id).updating(with: observation, at: createdAt)
+            try execute(
+                """
+                INSERT INTO kill_calibration_aggregates(id, \(RadarStoreQueries.killOutcomePosteriorColumns))
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    operation_count = excluded.operation_count,
+                    clean_weight = excluded.clean_weight,
+                    total_weight = excluded.total_weight,
+                    latency_buckets = excluded.latency_buckets,
+                    respawn_weight = excluded.respawn_weight,
+                    censored_run = excluded.censored_run,
+                    updated_at = excluded.updated_at
+                """,
+                .text(id),
+                row.signatureID.map { .text($0) } ?? .null,
+                row.devKind.map { .text($0) } ?? .null,
+                .text(observation.strategy.rawValue),
+                .int64(Int64(next.observationCount)),
+                .double(next.cleanWeight),
+                .double(next.totalWeight),
+                .text(next.latencyBuckets.map { String($0) }.joined(separator: ",")),
+                .double(Double(next.respawnRun)),
+                .int64(Int64(next.censoredRun)),
+                .double(createdAt.timeIntervalSince1970)
             )
         }
-
-        try execute(
-            """
-            INSERT INTO kill_calibration_aggregates(id, signature_id, dev_kind, strategy,
-                                                    operation_count, graceful_success_rate,
-                                                    force_rate, survivor_rate, average_grace_seconds,
-                                                    reclaim_accuracy, denial_penalty, updated_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                operation_count = excluded.operation_count,
-                graceful_success_rate = excluded.graceful_success_rate,
-                force_rate = excluded.force_rate,
-                survivor_rate = excluded.survivor_rate,
-                average_grace_seconds = excluded.average_grace_seconds,
-                reclaim_accuracy = excluded.reclaim_accuracy,
-                denial_penalty = excluded.denial_penalty,
-                updated_at = excluded.updated_at
-            """,
-            .text(id),
-            signatureID.map { .text($0) } ?? .null,
-            devKind.map { .text($0) } ?? .null,
-            .text(report.strategyUsed.rawValue),
-            .int64(Int64(next.operationCount)),
-            .double(next.gracefulSuccessRate),
-            .double(next.forceRate),
-            .double(next.survivorRate),
-            .double(next.averageGraceSeconds),
-            .double(next.reclaimAccuracy),
-            .double(next.denialPenalty),
-            .double(createdAt.timeIntervalSince1970)
-        )
     }
 
-    private func calibrationAggregate(id: String) throws -> KillCalibrationSnapshot? {
-        let statement = try prepare(RadarStoreQueries.killCalibration)
+    private func outcomePosterior(id: String) throws -> KillOutcomePosterior {
+        let statement = try prepare(RadarStoreQueries.killOutcomePosterior)
         defer { sqlite3_finalize(statement) }
         bind(.text(id), to: statement, index: 1)
         guard sqlite3_step(statement) == SQLITE_ROW else {
-            return nil
+            return .empty
         }
-        return KillCalibrationSnapshot(
-            signatureID: columnString(statement, 0),
-            devKind: columnString(statement, 1),
-            strategy: columnString(statement, 2).flatMap(KillStrategy.init(rawValue:)),
-            operationCount: Int(sqlite3_column_int64(statement, 3)),
-            gracefulSuccessRate: sqlite3_column_double(statement, 4),
-            forceRate: sqlite3_column_double(statement, 5),
-            survivorRate: sqlite3_column_double(statement, 6),
-            averageGraceSeconds: sqlite3_column_double(statement, 7),
-            reclaimAccuracy: sqlite3_column_double(statement, 8),
-            denialPenalty: sqlite3_column_double(statement, 9),
-            updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 10))
+        return outcomePosterior(from: statement)
+    }
+
+    private func outcomePosterior(from statement: OpaquePointer?) -> KillOutcomePosterior {
+        KillOutcomePosterior(
+            observationCount: Int(sqlite3_column_int64(statement, 3)),
+            cleanWeight: sqlite3_column_double(statement, 4),
+            totalWeight: sqlite3_column_double(statement, 5),
+            latencyBuckets: (columnString(statement, 6) ?? "").split(separator: ",").compactMap { Double($0) },
+            respawnRun: Int(sqlite3_column_double(statement, 7)),
+            censoredRun: Int(sqlite3_column_int64(statement, 8)),
+            updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 9))
         )
     }
 
@@ -475,10 +408,6 @@ extension RadarStore {
 
     private func calibrationAggregateID(signatureID: String?, devKind: String?, strategy: KillStrategy) -> String {
         "\(signatureID ?? "*")|\(devKind ?? "*")|\(strategy.rawValue)"
-    }
-
-    private func blend(_ old: Double, _ new: Double, alpha: Double) -> Double {
-        old * (1 - alpha) + new * alpha
     }
 
     private func killOperation(from statement: OpaquePointer?) -> KillOperationRecord {

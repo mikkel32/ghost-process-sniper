@@ -391,18 +391,10 @@ public final class ProcessMonitor {
         let workload = stopWorkload(for: family)
         guard let store else { return family.killPlan(workload: workload) }
         do {
-            let devKind = family.classification?.kind.rawValue
             let history = try await store.killStrategyHistory(signatureID: family.signature.id)
-            var calibrations: [KillStrategy: KillCalibrationSnapshot] = [:]
-            for strategy in KillStrategy.allCases where strategy != .inspectOnly {
-                let snapshot = try await store.killCalibrationSnapshot(
-                    signatureID: family.signature.id,
-                    devKind: devKind,
-                    strategy: strategy
-                )
-                if snapshot.operationCount > 0 { calibrations[strategy] = snapshot }
-            }
-            return family.killPlan(killHistory: history, workload: workload, strategyCalibrations: calibrations)
+            let outcomes = try await store.killOutcomeHistory(signatureID: family.signature.id,
+                                                              devKind: family.classification?.kind.rawValue)
+            return family.killPlan(killHistory: history, workload: workload, strategyCalibrations: outcomes)
         } catch {
             storeError = error.localizedDescription
             return family.killPlan(workload: workload)

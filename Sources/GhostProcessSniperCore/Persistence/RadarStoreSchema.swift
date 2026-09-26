@@ -219,7 +219,7 @@ enum RadarStoreSchema {
 
     /// PRAGMA user_version. Opening a store written at a lower version
     /// rebuilds the kill learning tables: their rows meant something else.
-    static let version: Int32 = 1
+    static let version: Int32 = 2
 
     static let killLearningTables = ["kill_outcome_history", "kill_strategy_history", "kill_calibration_aggregates"]
 
@@ -270,12 +270,11 @@ enum RadarStoreSchema {
             dev_kind TEXT,
             strategy TEXT NOT NULL,
             operation_count INTEGER NOT NULL,
-            graceful_success_rate REAL NOT NULL,
-            force_rate REAL NOT NULL,
-            survivor_rate REAL NOT NULL,
-            average_grace_seconds REAL NOT NULL,
-            reclaim_accuracy REAL NOT NULL,
-            denial_penalty REAL NOT NULL,
+            clean_weight REAL NOT NULL,
+            total_weight REAL NOT NULL,
+            latency_buckets TEXT NOT NULL,
+            respawn_weight REAL NOT NULL,
+            censored_run INTEGER NOT NULL,
             updated_at REAL NOT NULL
         )
         """,
@@ -344,12 +343,23 @@ enum RadarStoreQueries {
         """
     }
 
-    static let killCalibration = """
-        SELECT signature_id, dev_kind, strategy, operation_count, graceful_success_rate,
-               force_rate, survivor_rate, average_grace_seconds, reclaim_accuracy,
-               denial_penalty, updated_at
+    /// Outcome posteriors: one row per family and strategy (no dev kind),
+    /// one per kind and strategy (no signature) as the family's prior.
+    static let killOutcomePosteriorColumns = """
+        signature_id, dev_kind, strategy, operation_count, clean_weight, total_weight,
+        latency_buckets, respawn_weight, censored_run, updated_at
+        """
+
+    static let killOutcomePosterior = """
+        SELECT \(killOutcomePosteriorColumns)
         FROM kill_calibration_aggregates
         WHERE id = ?
         LIMIT 1
+        """
+
+    static let killOutcomeHistory = """
+        SELECT \(killOutcomePosteriorColumns)
+        FROM kill_calibration_aggregates
+        WHERE (signature_id = ? AND dev_kind IS NULL) OR (signature_id IS NULL AND dev_kind = ?)
         """
 }

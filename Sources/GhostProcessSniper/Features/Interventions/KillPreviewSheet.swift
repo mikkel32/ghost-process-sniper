@@ -184,16 +184,16 @@ struct KillPreviewSheet: View {
                     icon: "dial.low",
                     accent: strategyColor,
                     primary: preview.strategyRecommendation.strategy.label,
-                    secondary: preview.strategySimulation.summary,
+                    secondary: preview.strategyForecast.evidenceText,
                     tags: [
                         "\(Int((preview.strategyRecommendation.confidence * 100).rounded()))%",
-                        "\(Int((preview.expectedGracefulSuccess * 100).rounded()))% graceful",
-                        "\(Int((preview.forceProbability * 100).rounded()))% force",
+                        "\(Int((preview.strategyForecast.pClean * 100).rounded()))% clean exit",
+                        "\(preview.strategyForecast.observationCount) past stop\(preview.strategyForecast.observationCount == 1 ? "" : "s")",
                         "\(String(format: "%.2f", preview.recommendedGraceSeconds))s grace"
                     ],
                     tip: RadarTip(
                         title: "Strategy",
-                        message: "How the kill escalates, tuned per process type: graceful signals first (dev servers get gentler treatment), then verification, and force only for verified survivors. The percentages are the simulated odds of each path."
+                        message: "How the stop escalates, chosen per process type: graceful signals first (dev servers get gentler treatment), then verification, and force only for verified survivors. The clean-exit odds come from this process's past stops, starting from similar processes when it has little history."
                     )
                 )
             }
@@ -207,7 +207,7 @@ struct KillPreviewSheet: View {
                     tags: [
                         "score \(Int(preview.decisionScore.value.rounded()))",
                         preview.watcherAvailable ? "watcher ready" : "watcher off",
-                        "\(Int((preview.survivorRisk * 100).rounded()))% survivor"
+                        "\(preview.targets.count) target\(preview.targets.count == 1 ? "" : "s")"
                     ],
                     tip: RadarTip(
                         title: "Confidence",

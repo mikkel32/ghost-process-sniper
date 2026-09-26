@@ -16,8 +16,9 @@ public struct KillPlan: Equatable, Sendable {
     public let approvedStrategy: KillStrategy?
     /// Names, paths, command lines, ports and supervisors, for risk-aware stops.
     public let workload: KillWorkloadProfile?
-    /// Local outcomes per strategy, so a strategy is only tuned by its own history.
-    public let strategyCalibrations: [KillStrategy: KillCalibrationSnapshot]
+    /// Outcome posteriors per strategy, for this family and its kind, so a
+    /// strategy is only tuned by its own history.
+    public let strategyCalibrations: KillOutcomeHistory
 
     public init(
         rootIdentity: ProcessIdentity,
@@ -33,7 +34,7 @@ public struct KillPlan: Equatable, Sendable {
         approvalExpiresAt: Date? = nil,
         approvedStrategy: KillStrategy? = nil,
         workload: KillWorkloadProfile? = nil,
-        strategyCalibrations: [KillStrategy: KillCalibrationSnapshot] = [:]
+        strategyCalibrations: KillOutcomeHistory = .empty
     ) {
         self.rootIdentity = rootIdentity
         self.targetIdentities = targetIdentities
@@ -49,11 +50,6 @@ public struct KillPlan: Equatable, Sendable {
         self.approvedStrategy = approvedStrategy
         self.workload = workload
         self.strategyCalibrations = strategyCalibrations
-    }
-
-    /// History for the strategy about to run; never another strategy's.
-    public func calibration(for strategy: KillStrategy) -> KillCalibrationSnapshot {
-        strategyCalibrations[strategy] ?? .empty
     }
 
     public func binding(to identities: [ProcessIdentity], expiresAt: Date, strategy: KillStrategy? = nil) -> KillPlan {

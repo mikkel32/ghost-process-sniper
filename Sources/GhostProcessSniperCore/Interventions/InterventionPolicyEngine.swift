@@ -5,30 +5,26 @@ public struct InterventionPolicyEvaluation: Equatable, Sendable {
     public let decisionScore: KillDecisionScore
     public let recommendation: KillStrategyRecommendation
     public let profile: KillStrategyProfile
-    public let simulation: KillStrategySimulation
-    public let calibration: KillCalibrationSnapshot
+    /// What this family's past stops predict for the chosen strategy.
+    public let forecast: KillStrategyForecast
     public let risk: KillRiskAssessment
 
     public init(
         decisionScore: KillDecisionScore,
         recommendation: KillStrategyRecommendation,
         profile: KillStrategyProfile,
-        simulation: KillStrategySimulation,
-        calibration: KillCalibrationSnapshot = .empty,
+        forecast: KillStrategyForecast,
         risk: KillRiskAssessment = .none
     ) {
         self.decisionScore = decisionScore
         self.recommendation = recommendation
         self.profile = profile
-        self.simulation = simulation
-        self.calibration = calibration
+        self.forecast = forecast
         self.risk = risk
     }
 }
 
 public struct InterventionPolicyEngine: Sendable {
-    private let simulator = KillStrategySimulator()
-    private let calibrator = KillStrategyCalibrator()
     private let riskAssessor = KillRiskAssessor()
 
     public init() {}
@@ -54,42 +50,19 @@ public struct InterventionPolicyEngine: Sendable {
             diff: diff,
             risk: risk
         )
-        let recommendation = strategyRecommendation(
-            plan: plan,
+        let (recommendation, forecast) = strategyRecommendation(
             targets: targets,
             locked: locked,
             decisionScore: decisionScore,
-            risk: risk
-        )
-        let baseProfile = strategyProfile(
-            recommendation: recommendation,
-            forceKillDelay: forceKillDelay,
-            risk: risk
-        )
-        let baseSimulation = simulator.simulate(
-            recommendation: recommendation,
-            profile: baseProfile,
-            plan: plan,
-            targets: targets,
-            locked: locked,
-            decisionScore: decisionScore
-        )
-        let calibration = plan.calibration(for: recommendation.strategy)
-        let profile = calibrator.tunedProfile(
-            base: baseProfile,
-            calibration: calibration,
+            risk: risk,
+            model: KillOutcomeModel(history: plan.strategyCalibrations),
             forceKillDelay: forceKillDelay
-        )
-        let simulation = calibrator.calibratedSimulation(
-            base: baseSimulation,
-            calibration: calibration
         )
         return InterventionPolicyEvaluation(
             decisionScore: decisionScore,
             recommendation: recommendation,
-            profile: profile,
-            simulation: simulation,
-            calibration: calibration,
+            profile: strategyProfile(recommendation: recommendation, grace: forecast.graceSeconds),
+            forecast: forecast,
             risk: risk
         )
     }
@@ -197,58 +170,76 @@ public struct InterventionPolicyEngine: Sendable {
     }
 
     private func strategyRecommendation(
-        plan: KillPlan,
         targets: [KillTarget],
         locked: [KillTarget],
         decisionScore: KillDecisionScore,
-        risk: KillRiskAssessment
-    ) -> KillStrategyRecommendation {
+        risk: KillRiskAssessment,
+        model: KillOutcomeModel,
+        forceKillDelay: TimeInterval
+    ) -> (KillStrategyRecommendation, KillStrategyForecast) {
+        func forecast(_ strategy: KillStrategy, base: KillStrategy? = nil) -> KillStrategyForecast {
+            model.forecast(strategy: strategy, base: base, workloadKind: risk.kind,
+                           floorSeconds: Self.defaultGrace(strategy, forceKillDelay: forceKillDelay, risk: risk),
+                           forceKillDelay: forceKillDelay)
+        }
         if targets.isEmpty || decisionScore.factors.contains(where: { $0.kind == .blocking }) || locked.count >= max(3, targets.count) {
-            return KillStrategyRecommendation(
+            return (KillStrategyRecommendation(
                 strategy: .inspectOnly,
                 confidence: max(0.72, decisionScore.confidence),
                 reasons: decisionScore.whyWait.prefix(2).map(\.detail).ifEmpty(["Low confidence or too many protected descendants."]),
                 previewText: "Inspect only; no signal should be sent until ownership is clearer."
-            )
+            ), .none)
         }
         if let quitPID = risk.appQuitPID, targets.contains(where: { $0.pid == quitPID }) {
-            return KillStrategyRecommendation(
+            return (KillStrategyRecommendation(
                 strategy: .quitApp,
                 confidence: max(0.82, decisionScore.confidence),
                 reasons: ["\(risk.kind.label): quitting lets it save state and close its own helpers."],
                 previewText: "Quit like \u{2318}Q, then SIGTERM anything left; SIGKILL only for same-identity survivors."
-            )
+            ), forecast(.quitApp))
         }
         if risk.kind == .dataStore || risk.kind == .containerRuntime {
-            return KillStrategyRecommendation(
+            return (KillStrategyRecommendation(
                 strategy: .carefulShutdown,
                 confidence: max(0.8, decisionScore.confidence),
                 reasons: ["\(risk.kind.label): needs time to flush data before it exits."],
                 previewText: "SIGTERM with a long grace period; SIGKILL only if you allow it."
-            )
+            ), forecast(.carefulShutdown))
         }
-        if Self.mayForceQuickly(risk), let history = plan.killHistory, history.operationCount >= 4, history.forceRate >= 0.75 {
-            return KillStrategyRecommendation(
+        var base: KillStrategy = risk.kind == .devServer ? .gentleDevServer : .standard
+        var baseForecast = forecast(base)
+        // The family's own record may favour the other polite strategy, but
+        // never over an app's quit or a database's careful shutdown.
+        if [.general, .devServer, .build].contains(risk.kind) {
+            let other: KillStrategy = base == .standard ? .gentleDevServer : .standard
+            let otherForecast = forecast(other)
+            if otherForecast.observationCount >= 3, otherForecast.pClean > baseForecast.pCleanUpper80 {
+                base = other
+                baseForecast = otherForecast
+            }
+        }
+        if Self.mayForceQuickly(risk), baseForecast.pCleanUpper80 < KillOutcomeModel.stubbornUpperBound {
+            return (KillStrategyRecommendation(
                 strategy: .stubbornRunaway,
                 confidence: max(0.74, decisionScore.confidence),
-                reasons: ["This family often survives graceful shutdown; expect force verification."],
-                previewText: "SIGTERM, verify, then SIGKILL same-identity survivors if needed."
-            )
+                reasons: ["It rarely exits on SIGTERM: \(baseForecast.evidenceText)"],
+                previewText: "SIGTERM, a short wait, then SIGKILL same-identity survivors."
+            ), forecast(.stubbornRunaway, base: base))
         }
-        if risk.kind == .devServer {
-            return KillStrategyRecommendation(
+        if base == .gentleDevServer {
+            return (KillStrategyRecommendation(
                 strategy: .gentleDevServer,
                 confidence: max(0.76, decisionScore.confidence),
                 reasons: ["Looks like a dev server; try SIGINT before SIGTERM."],
                 previewText: "SIGINT, verify, then SIGTERM; SIGKILL only for same-identity survivors."
-            )
+            ), baseForecast)
         }
-        return KillStrategyRecommendation(
+        return (KillStrategyRecommendation(
             strategy: .standard,
             confidence: max(0.65, decisionScore.confidence),
             reasons: ["Balanced default based on current evidence."],
             previewText: "SIGTERM, verify, then SIGKILL surviving same-identity targets."
-        )
+        ), baseForecast)
     }
 
     /// A quick SIGKILL is only for work that loses nothing when forced;
@@ -270,12 +261,8 @@ public struct InterventionPolicyEngine: Sendable {
         return strategy == .inspectOnly ? 0 : max(base, risk.graceSeconds ?? 0)
     }
 
-    private func strategyProfile(
-        recommendation: KillStrategyRecommendation,
-        forceKillDelay: TimeInterval,
-        risk: KillRiskAssessment
-    ) -> KillStrategyProfile {
-        let grace = Self.defaultGrace(recommendation.strategy, forceKillDelay: forceKillDelay, risk: risk)
+    /// - Parameter grace: the first wait, from the outcome forecast.
+    private func strategyProfile(recommendation: KillStrategyRecommendation, grace: TimeInterval) -> KillStrategyProfile {
         let schedule: KillVerificationSchedule
         let phases: [KillSignalPhase]
         switch recommendation.strategy {

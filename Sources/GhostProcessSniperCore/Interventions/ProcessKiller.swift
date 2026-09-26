@@ -110,7 +110,6 @@ public final class ProcessKiller: Sendable {
             await reactor.endPhase("confirm-preflight")
             let preflight = preflightBuilder.build(plan: plan, snapshot: preflightSnapshot, profile: profile)
             await reactor.recordArenaStats(preflight.preview.arenaStats)
-            await reactor.recordCalibration(preflight.preview.strategySimulation)
             let freshStrategy = preflight.preview.strategyRecommendation.strategy
             let strategy = freshStrategy == .inspectOnly ? freshStrategy : plan.approvedStrategy ?? freshStrategy
             let strategySignals = strategy.signals(gracefulSignal: profile.gracefulSignal)
@@ -228,6 +227,8 @@ public final class ProcessKiller: Sendable {
             ) {
                 await allExited(targets)
             }
+            report.graceWaitedSeconds = graceResult.waitedSeconds
+            report.graceEndedEarly = graceResult.endedEarly && !graceResult.skipForceRequested
             if graceResult.endedEarly && !graceResult.skipForceRequested {
                 await reactor.recordEarlyExitSavings(max(0, schedule.graceSeconds - graceResult.waitedSeconds))
             }
@@ -342,9 +343,7 @@ public final class ProcessKiller: Sendable {
                 drift: report.targetDiff
             )
             report.verificationSnapshotCount = report.verificationPasses.count
-            report.calibratedReclaimBytes = report.realizedMemoryReclaimBytes > 0 ?
-                report.realizedMemoryReclaimBytes :
-                UInt64(Double(report.estimatedMemoryReclaimBytes) * (1 - preflight.preview.survivorRisk))
+            report.calibratedReclaimBytes = report.realizedMemoryReclaimBytes
             watcherTask?.cancel()
             report.watcherEvents = await operationState.exitEventSnapshot()
             report.reactorReport = await reactor.report()

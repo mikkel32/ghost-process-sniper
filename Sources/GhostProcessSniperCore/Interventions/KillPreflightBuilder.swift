@@ -132,7 +132,7 @@ struct KillPreflightBuilder: Sendable {
             decisionScore: decisionScore,
             strategyProfile: strategyProfile,
             performanceReport: performanceReport,
-            strategySimulation: policy.simulation,
+            strategyForecast: policy.forecast,
             watcherAvailable: !targets.isEmpty && usesDarwinProcessNamespace,
             arenaStats: arena.stats,
             riskAssessment: policy.risk

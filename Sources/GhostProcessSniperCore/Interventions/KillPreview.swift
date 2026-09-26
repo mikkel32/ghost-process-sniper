@@ -20,7 +20,8 @@ public struct KillPreview: Equatable, Sendable {
     public let decisionScore: KillDecisionScore
     public let strategyProfile: KillStrategyProfile
     public let performanceReport: KillPerformanceReport
-    public let strategySimulation: KillStrategySimulation
+    /// What this family's past stops predict for the recommended strategy.
+    public let strategyForecast: KillStrategyForecast
     public let watcherAvailable: Bool
     public let arenaStats: KillGraphArenaStats
     /// What the stop interrupts and what could go wrong.
@@ -39,9 +40,6 @@ public struct KillPreview: Equatable, Sendable {
     public var whyKillEvidence: [KillDecisionFactor] { decisionScore.whyKill }
     public var whyWaitEvidence: [KillDecisionFactor] { decisionScore.whyWait }
     public var recommendedGraceSeconds: TimeInterval { strategyProfile.verificationSchedule.graceSeconds }
-    public var expectedGracefulSuccess: Double { strategySimulation.expectedGracefulSuccess }
-    public var forceProbability: Double { strategySimulation.forceProbability }
-    public var survivorRisk: Double { strategySimulation.survivorRisk }
     public var verificationPlanText: String { Self.verificationPlanText }
 
     public var canKill: Bool {
@@ -77,7 +75,7 @@ public struct KillPreview: Equatable, Sendable {
         decisionScore: KillDecisionScore = .empty,
         strategyProfile: KillStrategyProfile = .standard,
         performanceReport: KillPerformanceReport = .empty,
-        strategySimulation: KillStrategySimulation = .standard,
+        strategyForecast: KillStrategyForecast = .none,
         watcherAvailable: Bool = false,
         arenaStats: KillGraphArenaStats = .empty,
         riskAssessment: KillRiskAssessment = .none
@@ -99,7 +97,7 @@ public struct KillPreview: Equatable, Sendable {
         self.decisionScore = decisionScore
         self.strategyProfile = strategyProfile
         self.performanceReport = performanceReport
-        self.strategySimulation = strategySimulation
+        self.strategyForecast = strategyForecast
         self.watcherAvailable = watcherAvailable
         self.arenaStats = arenaStats
         self.riskAssessment = riskAssessment

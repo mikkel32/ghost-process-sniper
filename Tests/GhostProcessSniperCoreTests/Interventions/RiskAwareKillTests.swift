@@ -38,27 +38,20 @@ final class RiskAwareKillTests: XCTestCase {
     }
 
     func testDatabasesKeepTheirLongGraceDespiteCalibration() async {
-        let learned = KillCalibrationSnapshot(
-            signatureID: "postgres", devKind: nil, strategy: .carefulShutdown, operationCount: 8,
-            gracefulSuccessRate: 0.95, forceRate: 0, survivorRate: 0, averageGraceSeconds: 0.5,
-            reclaimAccuracy: 0.9, denialPenalty: 0, updatedAt: Date(timeIntervalSince1970: 1)
-        )
+        let learned = KillOutcomeModelTests.history(Array(repeating: KillOutcomeModelTests.clean(0.5, strategy: .carefulShutdown), count: 8))
         let preview = await killer(snapshots: [[postgres]])
-            .preview(plan: plan(postgres, calibrations: [.carefulShutdown: learned]), forceKillDelay: 2)
+            .preview(plan: plan(postgres, calibrations: learned), forceKillDelay: 2)
         XCTAssertEqual(preview.strategyRecommendation.strategy, .carefulShutdown)
         XCTAssertGreaterThanOrEqual(preview.recommendedGraceSeconds, 12, "learning never cuts a database's shutdown time")
     }
 
     func testCalibrationOnlyTunesTheStrategyItWasLearnedFrom() async {
-        let standardOnly = KillCalibrationSnapshot(
-            signatureID: "postgres", devKind: nil, strategy: .standard, operationCount: 5,
-            gracefulSuccessRate: 0.2, forceRate: 0.8, survivorRate: 0.1, averageGraceSeconds: 0.5,
-            reclaimAccuracy: 0.9, denialPenalty: 0, updatedAt: Date(timeIntervalSince1970: 1)
-        )
+        let standardOnly = KillOutcomeModelTests.history(Array(repeating: KillOutcomeModelTests.forced(), count: 5))
         let preview = await killer(snapshots: [[postgres]])
-            .preview(plan: plan(postgres, calibrations: [.standard: standardOnly]), forceKillDelay: 2)
+            .preview(plan: plan(postgres, calibrations: standardOnly), forceKillDelay: 2)
         XCTAssertEqual(preview.strategyRecommendation.strategy, .carefulShutdown)
-        XCTAssertFalse(preview.strategySimulation.summary.contains("Calibrated"), preview.strategySimulation.summary)
+        XCTAssertEqual(preview.strategyForecast.observationCount, 0, preview.strategyForecast.evidenceText)
+        XCTAssertEqual(preview.recommendedGraceSeconds, 12)
     }
 
     func testSupervisorRestartIsDetectedAndExplained() async {
@@ -93,7 +86,7 @@ final class RiskAwareKillTests: XCTestCase {
         _ root: ProcessMetrics,
         members: [ProcessMetrics]? = nil,
         workload: KillWorkloadProfile? = nil,
-        calibrations: [KillStrategy: KillCalibrationSnapshot] = [:]
+        calibrations: KillOutcomeHistory = .empty
     ) -> KillPlan {
         let members = members ?? [root]
         let profile = workload ?? KillWorkloadProfile(
