@@ -251,39 +251,39 @@ public struct InterventionPolicyEngine: Sendable {
         let phases: [KillSignalPhase]
         switch recommendation.strategy {
         case .standard:
-            schedule = KillVerificationSchedule(graceSeconds: forceKillDelay, secondaryGraceSeconds: 0.15, settleSeconds: 0.35, allowsSkipForce: true)
+            schedule = KillVerificationSchedule(graceSeconds: forceKillDelay, secondaryGraceSeconds: 0.15, settleSeconds: 0.35)
             phases = [
                 KillSignalPhase(order: 0, label: "Ask target to terminate", signal: SIGTERM, waitAfterSeconds: forceKillDelay, isForce: false),
                 KillSignalPhase(order: 1, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.35, isForce: true)
             ]
         case .gentleDevServer:
-            schedule = KillVerificationSchedule(graceSeconds: min(forceKillDelay, 1.2), secondaryGraceSeconds: 0.45, settleSeconds: 0.35, allowsSkipForce: true)
+            schedule = KillVerificationSchedule(graceSeconds: min(forceKillDelay, 1.2), secondaryGraceSeconds: 0.45, settleSeconds: 0.35)
             phases = [
                 KillSignalPhase(order: 0, label: "Interrupt dev server cleanly", signal: SIGINT, waitAfterSeconds: min(forceKillDelay, 1.2), isForce: false),
                 KillSignalPhase(order: 1, label: "Terminate survivors", signal: SIGTERM, waitAfterSeconds: 0.45, isForce: false),
                 KillSignalPhase(order: 2, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.35, isForce: true)
             ]
         case .stubbornRunaway:
-            schedule = KillVerificationSchedule(graceSeconds: min(forceKillDelay, 0.8), secondaryGraceSeconds: 0.1, settleSeconds: 0.25, allowsSkipForce: true)
+            schedule = KillVerificationSchedule(graceSeconds: min(forceKillDelay, 0.8), secondaryGraceSeconds: 0.1, settleSeconds: 0.25)
             phases = [
                 KillSignalPhase(order: 0, label: "Terminate runaway", signal: SIGTERM, waitAfterSeconds: min(forceKillDelay, 0.8), isForce: false),
                 KillSignalPhase(order: 1, label: "Force verified survivors", signal: SIGKILL, waitAfterSeconds: 0.25, isForce: true)
             ]
         case .quitApp:
-            schedule = KillVerificationSchedule(graceSeconds: cleanShutdownGrace, secondaryGraceSeconds: 1.5, settleSeconds: 0.35, allowsSkipForce: true)
+            schedule = KillVerificationSchedule(graceSeconds: cleanShutdownGrace, secondaryGraceSeconds: 1.5, settleSeconds: 0.35)
             phases = [
                 KillSignalPhase(order: 0, label: "Ask the app to quit, like \u{2318}Q", signal: KillSignalPhase.quitRequest, waitAfterSeconds: cleanShutdownGrace, isForce: false),
                 KillSignalPhase(order: 1, label: "Terminate what is left", signal: SIGTERM, waitAfterSeconds: 1.5, isForce: false),
                 KillSignalPhase(order: 2, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.35, isForce: true)
             ]
         case .carefulShutdown:
-            schedule = KillVerificationSchedule(graceSeconds: cleanShutdownGrace, secondaryGraceSeconds: 0.2, settleSeconds: 0.5, allowsSkipForce: true)
+            schedule = KillVerificationSchedule(graceSeconds: cleanShutdownGrace, secondaryGraceSeconds: 0.2, settleSeconds: 0.5)
             phases = [
                 KillSignalPhase(order: 0, label: "Request a clean shutdown", signal: SIGTERM, waitAfterSeconds: cleanShutdownGrace, isForce: false),
                 KillSignalPhase(order: 1, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.5, isForce: true)
             ]
         case .inspectOnly:
-            schedule = KillVerificationSchedule(graceSeconds: 0, secondaryGraceSeconds: 0, settleSeconds: 0, allowsSkipForce: false)
+            schedule = KillVerificationSchedule(graceSeconds: 0, secondaryGraceSeconds: 0, settleSeconds: 0)
             phases = []
         }
         return KillStrategyProfile(

@@ -89,9 +89,6 @@ struct KillPreflightBuilder: Sendable {
         stale.sort { $0.pid < $1.pid }
         recycled.sort { $0.pid < $1.pid }
 
-        let denied = Array(Set(locked.map(\.pid))).sorted()
-        let stalePIDs = Array(Set(stale.map(\.pid))).sorted()
-        let recycledPIDs = Array(Set(recycled.map(\.pid))).sorted()
         let reclaim = reclaimEstimator.estimate(plan: plan, targets: targets)
         let nearby = slice.nearbyCandidates
         let diff = deltaEngine.diff(plan: plan, targets: targets, stale: stale, recycled: recycled, locked: locked, treeIdentities: treeIdentities)
@@ -131,43 +128,25 @@ struct KillPreflightBuilder: Sendable {
         let preview = KillPreview(
             displayName: plan.displayName,
             rootPID: plan.rootIdentity.pid,
-            targetIdentities: targets.map(\.identity),
             protectedPIDs: plan.protectedPIDs.sorted(),
-            deniedPIDs: denied,
-            stalePIDs: stalePIDs,
-            recycledPIDs: recycledPIDs,
             forceKillDelay: profile.forceKillDelay,
             targets: targets,
             lockedTargets: locked,
             staleTargets: stale,
             recycledTargets: recycled,
             readiness: readiness,
-            readinessReasons: evidence.map { "\($0.title): \($0.detail)" },
-            estimatedMemoryReclaimBytes: reclaim.memoryBytes,
-            estimatedCPUReclaimPercent: reclaim.cpuPercent,
-            preflightMilliseconds: snapshot.elapsedMilliseconds,
             usedCheapSnapshot: snapshot.usedCheapPath,
             reclaimEstimate: reclaim,
             decisionEvidence: evidence,
-            forcePolicyText: strategy.previewText,
             scopePreview: scopePreview,
             strategyRecommendation: strategy,
             targetDiff: diff,
             decisionScore: decisionScore,
-            whyKillEvidence: decisionScore.whyKill,
-            whyWaitEvidence: decisionScore.whyWait,
-            targetConversionCount: snapshot.targetConversionCount,
-            cacheStatus: snapshot.cacheStatus,
             strategyProfile: strategyProfile,
             performanceReport: performanceReport,
             strategySimulation: policy.simulation,
             watcherAvailable: !targets.isEmpty && usesDarwinProcessNamespace,
             arenaStats: arena.stats,
-            calibratedGracefulSuccess: policy.simulation.expectedGracefulSuccess,
-            calibratedForceProbability: policy.simulation.forceProbability,
-            calibratedSurvivorRisk: policy.simulation.survivorRisk,
-            recommendedGraceSeconds: policy.profile.verificationSchedule.graceSeconds,
-            verificationPlanText: "Confirm uses a fresh complete arena; pre-force and final settle use target-only verification unless watcher drift triggers a full arena.",
             riskAssessment: policy.risk
         )
         return KillPreflight(preview: preview, targets: targets, locked: locked, stale: stale, recycled: recycled)
@@ -186,7 +165,7 @@ struct KillPreflightBuilder: Sendable {
     ) {
         for identity in plan.targetIdentities where !seen.contains(identity) {
             guard let process = index.liteProcess(for: identity) else {
-                let target = placeholder(identity: identity, state: index.hasRecycledPID(for: identity) ? .recycled : .stale, reason: index.hasRecycledPID(for: identity) ? "PID was reused by another process" : "Identity is no longer live")
+                let target = KillTarget(unresolved: identity, state: index.hasRecycledPID(for: identity) ? .recycled : .stale, reason: index.hasRecycledPID(for: identity) ? "PID was reused by another process" : "Identity is no longer live")
                 if target.state == .recycled {
                     recycled.append(target)
                 } else {
@@ -205,46 +184,6 @@ struct KillPreflightBuilder: Sendable {
                 locked.append(KillTarget(process: process, depth: 0, state: .locked, reason: "Owned by \(process.ownerName)", rootIdentity: plan.rootIdentity))
             }
         }
-    }
-
-    private func placeholder(identity: ProcessIdentity, state: KillTargetState, reason: String) -> KillTarget {
-        KillTarget(
-            identity: identity,
-            parentPID: nil,
-            name: "PID \(identity.pid)",
-            ownerName: "unknown",
-            depth: 0,
-            memoryBytes: 0,
-            cpuPercent: 0,
-            state: state,
-            reason: reason,
-            isRoot: false
-        )
-    }
-
-    private func targetDiff(
-        plan: KillPlan,
-        targets: [KillTarget],
-        stale: [KillTarget],
-        recycled: [KillTarget],
-        locked: [KillTarget],
-        treeIdentities: Set<ProcessIdentity>
-    ) -> KillTargetDiff {
-        let planned = Set(plan.targetIdentities)
-        let current = Set(targets.map(\.identity))
-        let added = current.subtracting(planned).map(\.pid)
-        let reparented = locked
-            .filter { target in
-                plan.targetIdentities.contains(target.identity) && !treeIdentities.isEmpty && !treeIdentities.contains(target.identity)
-            }
-            .map(\.pid)
-        return KillTargetDiff(
-            addedPIDs: added,
-            exitedPIDs: stale.map(\.pid),
-            recycledPIDs: recycled.map(\.pid),
-            reparentedPIDs: reparented,
-            survivorPIDs: []
-        )
     }
 
     private static func evidence(from factor: KillDecisionFactor) -> KillDecisionEvidence {

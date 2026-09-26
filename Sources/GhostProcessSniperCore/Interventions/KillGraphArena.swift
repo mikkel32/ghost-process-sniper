@@ -9,7 +9,6 @@ public struct KillGraphArenaStats: Codable, Equatable, Sendable {
     public let processGroupBucketCount: Int
     public let arenaReuseCount: Int
     public let patchedHeavyMetricCount: Int
-    public let sliceCacheHitCount: Int
     public let presortedNeighborBucketCount: Int
 
     public static let empty = KillGraphArenaStats(
@@ -21,7 +20,6 @@ public struct KillGraphArenaStats: Codable, Equatable, Sendable {
         processGroupBucketCount: 0,
         arenaReuseCount: 0,
         patchedHeavyMetricCount: 0,
-        sliceCacheHitCount: 0,
         presortedNeighborBucketCount: 0
     )
 
@@ -34,7 +32,6 @@ public struct KillGraphArenaStats: Codable, Equatable, Sendable {
         processGroupBucketCount: Int,
         arenaReuseCount: Int = 0,
         patchedHeavyMetricCount: Int = 0,
-        sliceCacheHitCount: Int = 0,
         presortedNeighborBucketCount: Int = 0
     ) {
         self.processCount = processCount
@@ -45,7 +42,6 @@ public struct KillGraphArenaStats: Codable, Equatable, Sendable {
         self.processGroupBucketCount = processGroupBucketCount
         self.arenaReuseCount = arenaReuseCount
         self.patchedHeavyMetricCount = patchedHeavyMetricCount
-        self.sliceCacheHitCount = sliceCacheHitCount
         self.presortedNeighborBucketCount = presortedNeighborBucketCount
     }
 
@@ -59,22 +55,6 @@ public struct KillGraphArenaStats: Codable, Equatable, Sendable {
             processGroupBucketCount: processGroupBucketCount,
             arenaReuseCount: arenaReuseCount + 1,
             patchedHeavyMetricCount: self.patchedHeavyMetricCount + max(0, patchedHeavyMetricCount),
-            sliceCacheHitCount: sliceCacheHitCount,
-            presortedNeighborBucketCount: presortedNeighborBucketCount
-        )
-    }
-
-    public func recordingSliceCacheHit() -> KillGraphArenaStats {
-        KillGraphArenaStats(
-            processCount: processCount,
-            pidReadCount: pidReadCount,
-            arenaBuildMilliseconds: arenaBuildMilliseconds,
-            adjacencyBuildMilliseconds: adjacencyBuildMilliseconds,
-            identityIndexCount: identityIndexCount,
-            processGroupBucketCount: processGroupBucketCount,
-            arenaReuseCount: arenaReuseCount,
-            patchedHeavyMetricCount: patchedHeavyMetricCount,
-            sliceCacheHitCount: sliceCacheHitCount + 1,
             presortedNeighborBucketCount: presortedNeighborBucketCount
         )
     }
@@ -133,18 +113,6 @@ public struct KillGraphSlice: Equatable, Sendable {
 
     public var summary: String {
         "\(targetMembers.count) target\(targetMembers.count == 1 ? "" : "s"), \(lockedMembers.count) locked, \(nearbyCandidates.count) nearby."
-    }
-
-    public func withArenaStats(_ stats: KillGraphArenaStats) -> KillGraphSlice {
-        KillGraphSlice(
-            rootIdentity: rootIdentity,
-            scope: scope,
-            targetMembers: targetMembers,
-            lockedMembers: lockedMembers,
-            nearbyCandidates: nearbyCandidates,
-            treeIdentities: treeIdentities,
-            arenaStats: stats
-        )
     }
 }
 
@@ -385,82 +353,6 @@ public struct KillGraphArena: Equatable, Sendable {
         identities.formUnion(slice.lockedMembers.map(\.process.identity))
         identities.formUnion(slice.nearbyCandidates.map(\.identity))
         return identities
-    }
-}
-
-public struct KillArenaBuilder: Sendable {
-    public init() {}
-
-    public func build(
-        processes: [KillProcessLite],
-        sampledAt: Date,
-        pidReadCount: Int
-    ) -> KillGraphArena {
-        KillGraphArena(
-            processes: processes,
-            sampledAt: sampledAt,
-            pidReadCount: pidReadCount
-        )
-    }
-
-    public func patchHeavyMetrics(
-        arena: KillGraphArena,
-        updatedProcesses: [KillProcessLite],
-        patchedHeavyMetricCount: Int
-    ) -> KillGraphArena {
-        arena.replacingProcesses(
-            updatedProcesses,
-            patchedHeavyMetricCount: patchedHeavyMetricCount
-        )
-    }
-}
-
-public struct KillGraphSliceCacheKey: Hashable, Sendable {
-    public let rootIdentity: ProcessIdentity
-    public let scope: KillScope
-    public let sampledAt: Date
-    public let processCount: Int
-
-    public init(rootIdentity: ProcessIdentity, scope: KillScope, sampledAt: Date, processCount: Int) {
-        self.rootIdentity = rootIdentity
-        self.scope = scope
-        self.sampledAt = sampledAt
-        self.processCount = processCount
-    }
-
-    public init(plan: KillPlan, arena: KillGraphArena) {
-        self.init(
-            rootIdentity: plan.rootIdentity,
-            scope: plan.scope,
-            sampledAt: arena.sampledAt,
-            processCount: arena.processes.count
-        )
-    }
-}
-
-public struct KillGraphSliceCache: Sendable {
-    private var slices: [KillGraphSliceCacheKey: KillGraphSlice] = [:]
-    public private(set) var hitCount: Int = 0
-
-    public init() {}
-
-    public mutating func slice(
-        plan: KillPlan,
-        arena: KillGraphArena,
-        currentUserID: UInt32,
-        nearbyLimit: Int = 12
-    ) -> (slice: KillGraphSlice, hit: Bool) {
-        let key = KillGraphSliceCacheKey(plan: plan, arena: arena)
-        if let cached = slices[key] {
-            hitCount += 1
-            return (cached.withArenaStats(cached.arenaStats.recordingSliceCacheHit()), true)
-        }
-        let slice = arena.slice(plan: plan, currentUserID: currentUserID, nearbyLimit: nearbyLimit)
-        slices[key] = slice
-        if slices.count > 32 {
-            slices.remove(at: slices.startIndex)
-        }
-        return (slice, false)
     }
 }
 

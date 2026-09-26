@@ -112,27 +112,9 @@ private final class KillExitWatcherToken: @unchecked Sendable {
     }
 }
 
-public actor KillExitWatcher {
-    public init() {}
-
-    public func watch(
-        operationID: KillOperationID,
-        targets: [KillTarget],
-        maxTargets: Int = 128
-    ) -> AsyncStream<KillExitEvent> {
-        let hintStream = watchHints(operationID: operationID, targets: targets, maxTargets: maxTargets)
-        return AsyncStream { continuation in
-            let task = Task {
-                for await hint in hintStream where hint.kind == .exit || hint.kind == .unavailable {
-                    continuation.yield(hint.exitEvent)
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    public func watchHints(
+/// Streams kernel exit, fork, exec and signal hints for the targets of one stop.
+public struct KillExitWatcher: Sendable {
+    public static func watchHints(
         operationID: KillOperationID,
         targets: [KillTarget],
         maxTargets: Int = 128
@@ -172,7 +154,7 @@ public actor KillExitWatcher {
         }
     }
 
-    private nonisolated static func hints(
+    private static func hints(
         from event: DispatchSource.ProcessEvent,
         operationID: KillOperationID,
         target: KillTarget
@@ -344,7 +326,6 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
     public let earlyExitSavingsSeconds: TimeInterval
     public let verificationModeCounts: [String: Int]
     public let arenaReuseCount: Int
-    public let sliceCacheHitCount: Int
     public let calibratedGracefulOdds: Double
     public let calibratedForceOdds: Double
     public let calibratedSurvivorOdds: Double
@@ -356,7 +337,6 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
         earlyExitSavingsSeconds: 0,
         verificationModeCounts: [:],
         arenaReuseCount: 0,
-        sliceCacheHitCount: 0,
         calibratedGracefulOdds: 0,
         calibratedForceOdds: 0,
         calibratedSurvivorOdds: 0
@@ -369,7 +349,6 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
         earlyExitSavingsSeconds: TimeInterval,
         verificationModeCounts: [String: Int],
         arenaReuseCount: Int,
-        sliceCacheHitCount: Int,
         calibratedGracefulOdds: Double,
         calibratedForceOdds: Double,
         calibratedSurvivorOdds: Double
@@ -380,7 +359,6 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
         self.earlyExitSavingsSeconds = max(0, earlyExitSavingsSeconds)
         self.verificationModeCounts = verificationModeCounts
         self.arenaReuseCount = max(0, arenaReuseCount)
-        self.sliceCacheHitCount = max(0, sliceCacheHitCount)
         self.calibratedGracefulOdds = min(1, max(0, calibratedGracefulOdds))
         self.calibratedForceOdds = min(1, max(0, calibratedForceOdds))
         self.calibratedSurvivorOdds = min(1, max(0, calibratedSurvivorOdds))
@@ -396,7 +374,6 @@ public actor KillInterventionReactor {
     private var verificationModeCounts: [String: Int] = [:]
     private var earlyExitSavingsSeconds: TimeInterval = 0
     private var arenaReuseCount = 0
-    private var sliceCacheHitCount = 0
     private var calibratedGracefulOdds = 0.0
     private var calibratedForceOdds = 0.0
     private var calibratedSurvivorOdds = 0.0
@@ -437,7 +414,6 @@ public actor KillInterventionReactor {
 
     public func recordArenaStats(_ stats: KillGraphArenaStats) {
         arenaReuseCount += stats.arenaReuseCount
-        sliceCacheHitCount += stats.sliceCacheHitCount
     }
 
     public func recordCalibration(_ simulation: KillStrategySimulation) {
@@ -458,7 +434,6 @@ public actor KillInterventionReactor {
             earlyExitSavingsSeconds: earlyExitSavingsSeconds,
             verificationModeCounts: verificationModeCounts,
             arenaReuseCount: arenaReuseCount,
-            sliceCacheHitCount: sliceCacheHitCount,
             calibratedGracefulOdds: calibratedGracefulOdds,
             calibratedForceOdds: calibratedForceOdds,
             calibratedSurvivorOdds: calibratedSurvivorOdds
@@ -486,44 +461,19 @@ public struct KillTargetStateStore: Equatable, Sendable {
     }
 }
 
-public struct KillProgressReducer: Sendable {
-    public init() {}
-
-    public func reduce(
-        progress: KillOperationProgress,
-        coalescingWindow: Int = 6
-    ) -> KillOperationProgressViewModel {
-        KillOperationProgressViewModel(
-            progress: progress,
-            coalescingWindow: coalescingWindow,
-            eventCoalescingCount: max(0, progress.events.count - max(1, coalescingWindow))
-        )
-    }
-}
-
 public actor KillOperationStateMachine {
     private let operationID: KillOperationID
-    private var progress: KillOperationProgress
     private var stateStore = KillTargetStateStore()
     private var exitEvents: [KillExitEvent] = []
-    private let reducer = KillProgressReducer()
 
     public init(operationID: KillOperationID) {
         self.operationID = operationID
-        self.progress = KillOperationProgress(operationID: operationID)
-    }
-
-    public func record(_ event: KillOperationEvent) {
-        progress.append(event)
-        if let pid = event.pid, let state = event.targetState {
-            stateStore.update(pid: pid, state: state)
-        }
     }
 
     public func recordExit(_ event: KillExitEvent) -> KillOperationEvent {
         exitEvents.append(event)
         stateStore.update(pid: event.pid, state: .terminated)
-        let operationEvent = KillOperationEvent(
+        return KillOperationEvent(
             operationID: operationID,
             kind: .targetUpdated,
             pid: event.pid,
@@ -531,16 +481,10 @@ public actor KillOperationStateMachine {
             message: event.message,
             createdAt: event.observedAt
         )
-        progress.append(operationEvent)
-        return operationEvent
     }
 
     public func exitEventSnapshot() -> [KillExitEvent] {
         exitEvents
-    }
-
-    public func progressViewModel(coalescingWindow: Int = 6) -> KillOperationProgressViewModel {
-        reducer.reduce(progress: progress, coalescingWindow: coalescingWindow)
     }
 
     public func targetStates() -> [Int32: KillTargetState] {

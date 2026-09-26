@@ -15,41 +15,6 @@ public enum KillSnapshotPolicy: String, Sendable {
     }
 }
 
-public struct KillSnapshotCachePolicy: Equatable, Sendable {
-    public let allowsRead: Bool
-    public let allowsWrite: Bool
-    public let ttlSeconds: TimeInterval
-
-    public static let disabled = KillSnapshotCachePolicy(allowsRead: false, allowsWrite: false, ttlSeconds: 0)
-    public static let preview = KillSnapshotCachePolicy(allowsRead: true, allowsWrite: true, ttlSeconds: 0.85)
-
-    public init(allowsRead: Bool, allowsWrite: Bool, ttlSeconds: TimeInterval) {
-        self.allowsRead = allowsRead
-        self.allowsWrite = allowsWrite
-        self.ttlSeconds = max(0, ttlSeconds)
-    }
-}
-
-public enum KillSnapshotCacheStatus: String, Codable, Sendable {
-    case none
-    case hit
-    case miss
-    case bypassed
-    case stored
-    case expired
-
-    public var label: String {
-        switch self {
-        case .none: "No cache"
-        case .hit: "Cache hit"
-        case .miss: "Cache miss"
-        case .bypassed: "Cache bypassed"
-        case .stored: "Cache stored"
-        case .expired: "Cache expired"
-        }
-    }
-}
-
 public struct KillSnapshotConversionBudget: Equatable, Sendable {
     public let maxConvertedProcesses: Int
 
@@ -97,7 +62,6 @@ public struct KillSnapshotRequest: Equatable, Sendable {
     public let scope: KillScope
     public let budget: KillSnapshotBudget
     public let includeHeavyMetricsForTargets: Bool
-    public let cachePolicy: KillSnapshotCachePolicy
     public let requiresCompleteGraph: Bool
     public let conversionBudget: KillSnapshotConversionBudget
     public let verificationMode: KillVerificationMode
@@ -110,7 +74,6 @@ public struct KillSnapshotRequest: Equatable, Sendable {
         scope: KillScope = .ownedFamily,
         budget: KillSnapshotBudget? = nil,
         includeHeavyMetricsForTargets: Bool = true,
-        cachePolicy: KillSnapshotCachePolicy? = nil,
         requiresCompleteGraph: Bool = true,
         conversionBudget: KillSnapshotConversionBudget? = nil,
         verificationMode: KillVerificationMode = .completeArena
@@ -122,7 +85,6 @@ public struct KillSnapshotRequest: Equatable, Sendable {
         self.scope = scope
         self.budget = budget ?? Self.defaultBudget(for: policy)
         self.includeHeavyMetricsForTargets = includeHeavyMetricsForTargets
-        self.cachePolicy = cachePolicy ?? (policy == .preflight ? .preview : .disabled)
         self.requiresCompleteGraph = requiresCompleteGraph
         self.conversionBudget = conversionBudget ?? (rootIdentity == nil ? .compatibility : .targetsOnly)
         self.verificationMode = verificationMode
@@ -132,7 +94,6 @@ public struct KillSnapshotRequest: Equatable, Sendable {
         self.init(
             policy: policy,
             includeHeavyMetricsForTargets: false,
-            cachePolicy: .disabled,
             requiresCompleteGraph: true,
             conversionBudget: .compatibility,
             verificationMode: .completeArena
@@ -151,7 +112,6 @@ public struct KillSnapshotRequest: Equatable, Sendable {
             protectedPIDs: plan.protectedPIDs,
             scope: plan.scope,
             includeHeavyMetricsForTargets: true,
-            cachePolicy: policy == .preflight ? .preview : .disabled,
             requiresCompleteGraph: verificationMode != .targetOnly,
             conversionBudget: .targetsOnly,
             verificationMode: verificationMode
@@ -181,7 +141,6 @@ public struct KillProcessSnapshot: Equatable, Sendable {
     public let heavyMetricReadCount: Int
     public let didHitBudget: Bool
     public let targetConversionCount: Int
-    public let cacheStatus: KillSnapshotCacheStatus
     public let skippedOptionalWorkCount: Int
 
     public init(
@@ -198,7 +157,6 @@ public struct KillProcessSnapshot: Equatable, Sendable {
         heavyMetricReadCount: Int = 0,
         didHitBudget: Bool = false,
         targetConversionCount: Int? = nil,
-        cacheStatus: KillSnapshotCacheStatus = .none,
         skippedOptionalWorkCount: Int = 0
     ) {
         self.processes = processes
@@ -214,28 +172,7 @@ public struct KillProcessSnapshot: Equatable, Sendable {
         self.heavyMetricReadCount = heavyMetricReadCount
         self.didHitBudget = didHitBudget
         self.targetConversionCount = targetConversionCount ?? processes.count
-        self.cacheStatus = cacheStatus
         self.skippedOptionalWorkCount = skippedOptionalWorkCount
-    }
-
-    public func updatingCacheStatus(_ status: KillSnapshotCacheStatus) -> KillProcessSnapshot {
-        KillProcessSnapshot(
-            processes: processes,
-            sampledAt: sampledAt,
-            policy: policy,
-            elapsedMilliseconds: elapsedMilliseconds,
-            usedCheapPath: usedCheapPath,
-            expensiveCallCount: expensiveCallCount,
-            request: request,
-            graph: graph,
-            arena: arena,
-            graphReadCount: graphReadCount,
-            heavyMetricReadCount: heavyMetricReadCount,
-            didHitBudget: didHitBudget,
-            targetConversionCount: targetConversionCount,
-            cacheStatus: status,
-            skippedOptionalWorkCount: skippedOptionalWorkCount
-        )
     }
 }
 
@@ -243,10 +180,8 @@ public struct KillProcessIndex: Sendable {
     public let snapshot: KillProcessSnapshot
     private let byIdentity: [ProcessIdentity: ProcessMetrics]
     private let byPID: [Int32: [ProcessMetrics]]
-    private let childrenByPID: [Int32: [ProcessMetrics]]
     private let byIdentityLite: [ProcessIdentity: KillProcessLite]
     private let byPIDLite: [Int32: [KillProcessLite]]
-    private let childrenByPIDLite: [Int32: [KillProcessLite]]
     private let arena: KillGraphArena?
 
     public init(snapshot: KillProcessSnapshot) {
@@ -254,11 +189,9 @@ public struct KillProcessIndex: Sendable {
         self.arena = snapshot.arena
         self.byIdentity = Dictionary(snapshot.processes.map { ($0.identity, $0) }, uniquingKeysWith: { first, _ in first })
         self.byPID = Dictionary(grouping: snapshot.processes, by: \.pid)
-        self.childrenByPID = Dictionary(grouping: snapshot.processes, by: \.parentPID)
         let liteProcesses = snapshot.graph?.processes ?? []
         self.byIdentityLite = Dictionary(liteProcesses.map { ($0.identity, $0) }, uniquingKeysWith: { first, _ in first })
         self.byPIDLite = Dictionary(grouping: liteProcesses, by: \.pid)
-        self.childrenByPIDLite = Dictionary(grouping: liteProcesses, by: \.parentPID)
     }
 
     public func process(for identity: ProcessIdentity) -> ProcessMetrics? {
@@ -286,58 +219,6 @@ public struct KillProcessIndex: Sendable {
             return true
         }
         return byPID[identity.pid]?.contains { $0.identity != identity } == true
-    }
-
-    public func descendants(of rootIdentity: ProcessIdentity) -> [(process: ProcessMetrics, depth: Int)] {
-        if let arena {
-            return arena.descendants(of: rootIdentity).map { ($0.process.asProcessMetrics(), $0.depth) }
-        }
-        if !byIdentityLite.isEmpty {
-            return descendantsLite(of: rootIdentity).map { ($0.process.asProcessMetrics(), $0.depth) }
-        }
-        guard let root = byIdentity[rootIdentity] else {
-            return []
-        }
-        var output: [(ProcessMetrics, Int)] = []
-        var stack: [(ProcessMetrics, Int)] = [(root, 0)]
-        var seen = Set<ProcessIdentity>()
-        while let item = stack.popLast() {
-            guard seen.insert(item.0.identity).inserted else {
-                continue
-            }
-            output.append(item)
-            for child in childrenByPID[item.0.pid, default: []] {
-                stack.append((child, item.1 + 1))
-            }
-        }
-        return output
-    }
-
-    public func descendantsLite(of rootIdentity: ProcessIdentity) -> [(process: KillProcessLite, depth: Int)] {
-        if let arena {
-            return arena.descendants(of: rootIdentity).map { ($0.process, $0.depth) }
-        }
-        guard let root = liteProcess(for: rootIdentity) else {
-            return []
-        }
-        var output: [(KillProcessLite, Int)] = []
-        var stack: [(KillProcessLite, Int)] = [(root, 0)]
-        var seen = Set<ProcessIdentity>()
-        while let item = stack.popLast() {
-            guard seen.insert(item.0.identity).inserted else {
-                continue
-            }
-            output.append(item)
-            for child in childrenByPIDLite[item.0.pid, default: []] {
-                stack.append((child, item.1 + 1))
-            }
-            if childrenByPIDLite.isEmpty {
-                for child in childrenByPID[item.0.pid, default: []] {
-                    stack.append((KillProcessLite(process: child), item.1 + 1))
-                }
-            }
-        }
-        return output
     }
 }
 
@@ -515,42 +396,5 @@ public struct KillProcessGraph: Equatable, Sendable {
         self.heavyMetricReadCount = heavyMetricReadCount
         self.didHitBudget = didHitBudget
         self.usedBSDInfoPath = usedBSDInfoPath
-    }
-
-    public var metrics: [ProcessMetrics] {
-        processes.map { $0.asProcessMetrics() }
-    }
-
-    public func process(for identity: ProcessIdentity) -> KillProcessLite? {
-        processes.first { $0.identity == identity }
-    }
-
-    public func descendants(of rootIdentity: ProcessIdentity) -> [(process: KillProcessLite, depth: Int)] {
-        guard let root = process(for: rootIdentity) else {
-            return []
-        }
-        let childrenByPID = Dictionary(grouping: processes, by: \.parentPID)
-        var output: [(KillProcessLite, Int)] = []
-        var stack: [(KillProcessLite, Int)] = [(root, 0)]
-        var seen = Set<ProcessIdentity>()
-        while let item = stack.popLast() {
-            guard seen.insert(item.0.identity).inserted else {
-                continue
-            }
-            output.append(item)
-            for child in childrenByPID[item.0.pid, default: []] {
-                stack.append((child, item.1 + 1))
-            }
-        }
-        return output
-    }
-
-    public func processGroupNeighbors(rootIdentity: ProcessIdentity, currentUserID: UInt32, excluding identities: Set<ProcessIdentity>) -> [KillProcessLite] {
-        guard let root = process(for: rootIdentity), root.processGroupID > 0 else {
-            return []
-        }
-        return processes
-            .filter { $0.processGroupID == root.processGroupID && $0.userID == currentUserID && !identities.contains($0.identity) }
-            .sorted { $0.pid < $1.pid }
     }
 }

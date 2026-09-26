@@ -113,6 +113,22 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
         )
     }
 
+    /// A target known only by its identity, because no live process matched it.
+    public init(unresolved identity: ProcessIdentity, state: KillTargetState, reason: String) {
+        self.init(
+            identity: identity,
+            parentPID: nil,
+            name: "PID \(identity.pid)",
+            ownerName: "unknown",
+            depth: 0,
+            memoryBytes: 0,
+            cpuPercent: 0,
+            state: state,
+            reason: reason,
+            isRoot: false
+        )
+    }
+
     public func updating(state: KillTargetState, reason: String) -> KillTarget {
         KillTarget(
             identity: identity,

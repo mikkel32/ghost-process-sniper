@@ -34,7 +34,6 @@ public struct ProcessLookupKillSnapshotProvider: KillSnapshotProviding {
             heavyMetricReadCount: snapshot.heavyMetricReadCount,
             didHitBudget: snapshot.didHitBudget,
             targetConversionCount: snapshot.targetConversionCount,
-            cacheStatus: snapshot.cacheStatus,
             skippedOptionalWorkCount: snapshot.skippedOptionalWorkCount
         )
     }
@@ -42,7 +41,6 @@ public struct ProcessLookupKillSnapshotProvider: KillSnapshotProviding {
 
 public actor NativeKillSnapshotProvider: KillSnapshotProviding {
     private var pidBuffer = [pid_t](repeating: 0, count: 4096)
-    private let arenaBuilder = KillArenaBuilder()
 
     public init() {}
 
@@ -103,7 +101,7 @@ public actor NativeKillSnapshotProvider: KillSnapshotProviding {
             )
         }
 
-        var arena = arenaBuilder.build(
+        var arena = KillGraphArena(
             processes: liteProcesses,
             sampledAt: sampledAt,
             pidReadCount: graphReadCount
@@ -134,9 +132,8 @@ public actor NativeKillSnapshotProvider: KillSnapshotProviding {
             }
         }
         if heavyReadCount > 0 {
-            arena = arenaBuilder.patchHeavyMetrics(
-                arena: arena,
-                updatedProcesses: liteProcesses,
+            arena = arena.replacingProcesses(
+                liteProcesses,
                 patchedHeavyMetricCount: heavyReadCount
             )
         }
@@ -171,7 +168,6 @@ public actor NativeKillSnapshotProvider: KillSnapshotProviding {
             heavyMetricReadCount: heavyReadCount,
             didHitBudget: graph.didHitBudget,
             targetConversionCount: convertedProcesses.count,
-            cacheStatus: .miss,
             skippedOptionalWorkCount: max(0, graphReadCount - convertedProcesses.count)
         )
     }
@@ -213,7 +209,7 @@ public actor NativeKillSnapshotProvider: KillSnapshotProviding {
             )
         }
 
-        let arena = KillArenaBuilder().build(
+        let arena = KillGraphArena(
             processes: liteProcesses,
             sampledAt: sampledAt,
             pidReadCount: graphReadCount
@@ -246,7 +242,6 @@ public actor NativeKillSnapshotProvider: KillSnapshotProviding {
             heavyMetricReadCount: 0,
             didHitBudget: graph.didHitBudget,
             targetConversionCount: converted.count,
-            cacheStatus: .bypassed,
             skippedOptionalWorkCount: 0
         )
     }
@@ -352,10 +347,5 @@ public actor NativeKillSnapshotProvider: KillSnapshotProviding {
             threadCount: Int(taskInfo.ptinfo.pti_threadnum),
             isSystemProcess: (taskInfo.pbsd.pbi_flags & UInt32(PROC_FLAG_SYSTEM)) != 0
         )
-    }
-
-    private nonisolated func string(from buffer: UnsafeBufferPointer<CChar>) -> String {
-        let bytes = buffer.prefix { $0 != 0 }
-        return String(decoding: bytes.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 }

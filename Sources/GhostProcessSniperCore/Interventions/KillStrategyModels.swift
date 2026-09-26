@@ -146,25 +146,21 @@ public struct KillVerificationSchedule: Codable, Equatable, Sendable {
     public let graceSeconds: TimeInterval
     public let secondaryGraceSeconds: TimeInterval
     public let settleSeconds: TimeInterval
-    public let allowsSkipForce: Bool
 
     public static let standard = KillVerificationSchedule(
         graceSeconds: 2,
         secondaryGraceSeconds: 0.15,
-        settleSeconds: 0.35,
-        allowsSkipForce: true
+        settleSeconds: 0.35
     )
 
     public init(
         graceSeconds: TimeInterval,
         secondaryGraceSeconds: TimeInterval,
-        settleSeconds: TimeInterval,
-        allowsSkipForce: Bool
+        settleSeconds: TimeInterval
     ) {
         self.graceSeconds = max(0, graceSeconds)
         self.secondaryGraceSeconds = max(0, secondaryGraceSeconds)
         self.settleSeconds = max(0, settleSeconds)
-        self.allowsSkipForce = allowsSkipForce
     }
 }
 

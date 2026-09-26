@@ -106,9 +106,8 @@ struct CoreChecks {
         await run("nativeKillSnapshotProviderUsesBSDGraphAndTargetMetrics") { try await nativeKillSnapshotProviderUsesBSDGraphAndTargetMetrics() }
         await run("killGraphArenaIndexesAndSlicesOwnedFamily") { try killGraphArenaIndexesAndSlicesOwnedFamily() }
         await run("nativeKillSnapshotProviderReturnsArenaStats") { try await nativeKillSnapshotProviderReturnsArenaStats() }
-        await run("killGraphArenaReusesIndexesAndCachesSlices") { try killGraphArenaReusesIndexesAndCachesSlices() }
+        await run("killGraphArenaReusesIndexesAndSortsNeighbors") { try killGraphArenaReusesIndexesAndSortsNeighbors() }
         await run("nativeKillSnapshotProviderSupportsTargetOnlyVerification") { try await nativeKillSnapshotProviderSupportsTargetOnlyVerification() }
-        await run("killPreviewUsesFreshCacheAndConfirmBypassesIt") { try await killPreviewUsesFreshCacheAndConfirmBypassesIt() }
         await run("nativeKillSnapshotProviderLimitsProcessMetricConversion") { try await nativeKillSnapshotProviderLimitsProcessMetricConversion() }
         await run("processKillerSurfacesProcessGroupNeighbors") { try await processKillerSurfacesProcessGroupNeighbors() }
         await run("interventionPolicyEngineSimulatesStrategies") { try interventionPolicyEngineSimulatesStrategies() }
@@ -121,7 +120,6 @@ struct CoreChecks {
         await run("processKillerStreamsOperationEventsInOrder") { try await processKillerStreamsOperationEventsInOrder() }
         await run("processKillerHonorsLiveSkipForceControl") { try await processKillerHonorsLiveSkipForceControl() }
         await run("killOperationStateMachineRecordsExitEvents") { try await killOperationStateMachineRecordsExitEvents() }
-        await run("killOperationProgressViewModelCoalescesEvents") { try killOperationProgressViewModelCoalescesEvents() }
         await run("fakeKillPreviewBenchmarksStayBounded") { try await fakeKillPreviewBenchmarksStayBounded() }
         await run("radarStoreRecordsKillActions") { try await radarStoreRecordsKillActions() }
         await run("radarStoreRecordsStructuredKillOperations") { try await radarStoreRecordsStructuredKillOperations() }
@@ -2802,13 +2800,12 @@ private func nativeKillSnapshotProviderReturnsArenaStats() async throws {
     try check(snapshot.arena?.stats.pidReadCount == snapshot.graphReadCount, "arena stats should preserve PID read count")
 }
 
-private func killGraphArenaReusesIndexesAndCachesSlices() throws {
+private func killGraphArenaReusesIndexesAndSortsNeighbors() throws {
     let root = lite(pid: 175, parentPID: 1, userID: 501, processGroupID: 175)
     let child = lite(pid: 176, parentPID: 175, userID: 501, processGroupID: 175)
     let neighborA = lite(pid: 178, parentPID: 1, userID: 501, processGroupID: 175)
     let neighborB = lite(pid: 177, parentPID: 1, userID: 501, processGroupID: 175)
-    let builder = KillArenaBuilder()
-    let arena = builder.build(
+    let arena = KillGraphArena(
         processes: [neighborA, child, root, neighborB],
         sampledAt: Date(timeIntervalSince1970: 10),
         pidReadCount: 4
@@ -2821,21 +2818,15 @@ private func killGraphArenaReusesIndexesAndCachesSlices() throws {
         threadCount: 4,
         isSystemProcess: false
     )
-    let patched = builder.patchHeavyMetrics(
-        arena: arena,
-        updatedProcesses: [neighborA, patchedChild, root, neighborB],
+    let patched = arena.replacingProcesses(
+        [neighborA, patchedChild, root, neighborB],
         patchedHeavyMetricCount: 1
     )
-    let plan = KillPlan(rootIdentity: root.identity, targetIdentities: [root.identity], protectedPIDs: [], displayName: "node")
-    var cache = KillGraphSliceCache()
-    let first = cache.slice(plan: plan, arena: patched, currentUserID: 501)
-    let second = cache.slice(plan: plan, arena: patched, currentUserID: 501)
     let neighbors = patched.processGroupNeighbors(rootIdentity: root.identity, currentUserID: 501, excluding: Set([root.identity, child.identity]))
 
     try check(patched.stats.arenaReuseCount == 1, "heavy metric patching should reuse arena indexes instead of rebuilding")
     try check(patched.stats.patchedHeavyMetricCount == 1, "arena stats should count patched target-heavy metrics")
-    try check(first.hit == false && second.hit == true, "slice cache should hit for repeated root/scope/generation")
-    try check(second.slice.arenaStats.sliceCacheHitCount == 1, "slice cache hits should be visible in slice stats")
+    try check(patched.process(for: child.identity)?.didReadHeavyMetrics == true, "patched arena should serve the updated process rows")
     try check(neighbors.map(\.pid) == [177, 178], "process-group buckets should be pre-sorted by PID")
 }
 
@@ -2850,7 +2841,6 @@ private func nativeKillSnapshotProviderSupportsTargetOnlyVerification() async th
         rootIdentity: current.identity,
         targetIdentities: [current.identity],
         includeHeavyMetricsForTargets: false,
-        cachePolicy: .disabled,
         requiresCompleteGraph: false,
         conversionBudget: .targetsOnly,
         verificationMode: .targetOnly
@@ -2861,28 +2851,6 @@ private func nativeKillSnapshotProviderSupportsTargetOnlyVerification() async th
     try check(snapshot.graphReadCount <= 1, "target-only verification should avoid a full PID graph sweep")
     try check(snapshot.heavyMetricReadCount == 0, "target-only verification should avoid heavy task/rusage reads")
     try check(snapshot.targetConversionCount <= 1, "target-only verification should convert only requested target rows")
-}
-
-private func killPreviewUsesFreshCacheAndConfirmBypassesIt() async throws {
-    let target = process(pid: 180, parentPID: 1, userID: 501)
-    let provider = ScriptedKillSnapshotProvider(snapshots: [
-        KillProcessSnapshot(processes: [target], policy: .preflight, usedCheapPath: true),
-        KillProcessSnapshot(processes: [target], policy: .confirm, usedCheapPath: true),
-        KillProcessSnapshot(processes: [], policy: .verify, usedCheapPath: true),
-        KillProcessSnapshot(processes: [], policy: .verify, usedCheapPath: true)
-    ])
-    let killer = ProcessKiller(snapshotProvider: provider, signaler: FakeSignaler(), currentUserID: 501, sleeper: { _ in })
-    let plan = KillPlan(rootIdentity: target.identity, targetIdentities: [target.identity], protectedPIDs: [], displayName: "generic")
-
-    let first = await killer.preview(plan: plan, forceKillDelay: 0)
-    let second = await killer.preview(plan: plan, forceKillDelay: 0)
-    _ = await killer.kill(plan: plan, forceKillDelay: 0)
-    let requests = await provider.requests()
-
-    try check(first.cacheStatus == .miss || first.cacheStatus == .stored, "first preview should populate the preflight cache")
-    try check(second.cacheStatus == .hit, "second preview should use a fresh cached preflight")
-    try check(requests.map(\.policy) == [.preflight, .confirm, .verify, .verify], "confirm and verify must bypass the preview cache")
-    try check(requests.dropFirst().allSatisfy { !$0.cachePolicy.allowsRead }, "destructive stages should disable cache reads")
 }
 
 private func nativeKillSnapshotProviderLimitsProcessMetricConversion() async throws {
@@ -3021,7 +2989,7 @@ private func interventionPolicyEngineAppliesCalibration() throws {
         protectedPIDs: [],
         displayName: "node",
         familyMetadata: metadata,
-        killCalibration: calibration
+        strategyCalibrations: [.gentleDevServer: calibration]
     )
 
     let evaluation = engine.evaluate(
@@ -3185,7 +3153,6 @@ private func killInterventionReactorRecordsHintsWavesAndModes() async throws {
             processGroupBucketCount: 1,
             arenaReuseCount: 1,
             patchedHeavyMetricCount: 1,
-            sliceCacheHitCount: 2,
             presortedNeighborBucketCount: 1
         )
     )
@@ -3206,7 +3173,7 @@ private func killInterventionReactorRecordsHintsWavesAndModes() async throws {
     try check(report.signalWaves.first?.signalName == "SIGTERM", "reactor should retain signal waves")
     try check(report.verificationModeCounts[KillVerificationMode.eventTriggeredComplete.rawValue] == 1, "reactor should count event-triggered verification")
     try check(report.earlyExitSavingsSeconds == 0.4, "reactor should accumulate early grace savings")
-    try check(report.arenaReuseCount == 1 && report.sliceCacheHitCount == 2, "reactor should aggregate arena reuse and slice cache stats")
+    try check(report.arenaReuseCount == 1, "reactor should aggregate arena reuse stats")
     try check(report.calibratedGracefulOdds == 0.7, "reactor should retain calibrated odds for diagnostics")
 }
 
@@ -3280,34 +3247,11 @@ private func killOperationStateMachineRecordsExitEvents() async throws {
     )
     let update = await machine.recordExit(exit)
     let events = await machine.exitEventSnapshot()
-    let model = await machine.progressViewModel(coalescingWindow: 2)
+    let states = await machine.targetStates()
 
     try check(update.pid == 188 && update.targetState == .terminated, "state machine should convert exit watcher events into target updates")
     try check(events == [exit], "state machine should retain watcher events for the final report")
-    try check(model.targetStates[188] == .terminated, "progress reducer should expose the latest target row state")
-}
-
-private func killOperationProgressViewModelCoalescesEvents() throws {
-    let operationID = KillOperationID(rawValue: "progress")
-    var progress = KillOperationProgress(operationID: operationID)
-    for index in 0..<10 {
-        progress.append(
-            KillOperationEvent(
-                operationID: operationID,
-                kind: .targetUpdated,
-                pid: Int32(index),
-                targetState: .ready,
-                message: "event \(index)"
-            )
-        )
-    }
-
-    let brain = KillInterventionBrain()
-    let model = brain.progressViewModel(progress: progress, coalescingWindow: 4)
-
-    try check(model.latestEvents.count == 4, "progress view model should retain only the visible event window")
-    try check(model.eventCoalescingCount == 6, "progress view model should expose coalesced event count")
-    try check(model.targetStates[9] == .ready, "progress view model should preserve target row state updates")
+    try check(states[188] == .terminated, "state machine should expose the latest target row state")
 }
 
 private func fakeKillPreviewBenchmarksStayBounded() async throws {
@@ -3451,10 +3395,6 @@ private func radarStoreRecordsInterventionKernelTables() async throws {
                 observedAt: Date(timeIntervalSince1970: 23)
             )
         ],
-        graphSliceDeltas: [
-            KillGraphDelta(previewTargetPIDs: [99], confirmTargetPIDs: [99], finalSurvivorPIDs: [], drift: .empty)
-        ],
-        signalOutcomeCounts: ["SIGTERM": 1],
         calibratedReclaimBytes: 780_000_000
     )
 
@@ -3657,7 +3597,6 @@ private actor ScriptedKillSnapshotProvider: KillSnapshotProviding {
                 heavyMetricReadCount: snapshot.heavyMetricReadCount,
                 didHitBudget: snapshot.didHitBudget,
                 targetConversionCount: snapshot.targetConversionCount,
-                cacheStatus: snapshot.cacheStatus,
                 skippedOptionalWorkCount: snapshot.skippedOptionalWorkCount
             )
         }
@@ -3674,7 +3613,6 @@ private actor ScriptedKillSnapshotProvider: KillSnapshotProviding {
             heavyMetricReadCount: snapshot.heavyMetricReadCount,
             didHitBudget: snapshot.didHitBudget,
             targetConversionCount: snapshot.targetConversionCount,
-            cacheStatus: snapshot.cacheStatus,
             skippedOptionalWorkCount: snapshot.skippedOptionalWorkCount
         )
     }
@@ -3815,7 +3753,6 @@ private func graphSnapshot(_ processes: [KillProcessLite]) -> KillProcessSnapsho
         heavyMetricReadCount: graph.heavyMetricReadCount,
         didHitBudget: graph.didHitBudget,
         targetConversionCount: 0,
-        cacheStatus: .miss,
         skippedOptionalWorkCount: processes.count
     )
 }

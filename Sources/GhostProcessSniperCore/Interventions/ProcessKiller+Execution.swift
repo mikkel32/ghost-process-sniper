@@ -166,7 +166,6 @@ extension ProcessKiller {
             scope: plan.scope,
             budget: .verify,
             includeHeavyMetricsForTargets: false,
-            cachePolicy: .disabled,
             requiresCompleteGraph: mode != .targetOnly,
             conversionBudget: .targetsOnly,
             verificationMode: mode

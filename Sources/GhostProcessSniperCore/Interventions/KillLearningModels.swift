@@ -39,18 +39,6 @@ public struct KillHistorySummary: Codable, Equatable, Sendable {
     }
 }
 
-public struct KillOutcomeLearning: Codable, Equatable, Sendable {
-    public let history: KillHistorySummary
-    public let recommendationHint: String
-
-    public static let empty = KillOutcomeLearning(history: .empty, recommendationHint: "No kill history yet.")
-
-    public init(history: KillHistorySummary, recommendationHint: String) {
-        self.history = history
-        self.recommendationHint = recommendationHint
-    }
-}
-
 public struct KillCalibrationSnapshot: Codable, Equatable, Sendable {
     public let signatureID: String?
     public let devKind: String?
@@ -267,8 +255,7 @@ public struct KillStrategyCalibrator: Sendable {
         let schedule = KillVerificationSchedule(
             graceSeconds: tunedGrace,
             secondaryGraceSeconds: base.verificationSchedule.secondaryGraceSeconds,
-            settleSeconds: base.verificationSchedule.settleSeconds,
-            allowsSkipForce: base.verificationSchedule.allowsSkipForce
+            settleSeconds: base.verificationSchedule.settleSeconds
         )
         let phases = base.phases.map { phase in
             guard phase.order == 0, phase.signal != nil, !phase.isForce else {

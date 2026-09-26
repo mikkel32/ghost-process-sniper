@@ -67,53 +67,6 @@ public actor KillOperationControl {
     }
 }
 
-public struct KillOperationProgress: Equatable, Sendable {
-    public let operationID: KillOperationID
-    public var events: [KillOperationEvent]
-    public var targetStates: [Int32: KillTargetState]
-    public var report: KillReport?
-
-    public init(operationID: KillOperationID, events: [KillOperationEvent] = [], targetStates: [Int32: KillTargetState] = [:], report: KillReport? = nil) {
-        self.operationID = operationID
-        self.events = events
-        self.targetStates = targetStates
-        self.report = report
-    }
-
-    public var isComplete: Bool {
-        report != nil || events.contains { $0.kind == .completed || $0.kind == .failed }
-    }
-
-    public mutating func append(_ event: KillOperationEvent) {
-        events.append(event)
-        if let pid = event.pid, let state = event.targetState {
-            targetStates[pid] = state
-        }
-    }
-}
-
-public struct KillOperationProgressViewModel: Equatable, Sendable {
-    public let operationID: KillOperationID
-    public let stageText: String
-    public let targetStates: [Int32: KillTargetState]
-    public let latestEvents: [KillOperationEvent]
-    public let eventCoalescingCount: Int
-    public let isComplete: Bool
-
-    public init(
-        progress: KillOperationProgress,
-        coalescingWindow: Int = 6,
-        eventCoalescingCount: Int = 0
-    ) {
-        operationID = progress.operationID
-        targetStates = progress.targetStates
-        latestEvents = Array(progress.events.suffix(max(1, coalescingWindow)))
-        self.eventCoalescingCount = eventCoalescingCount
-        isComplete = progress.isComplete
-        stageText = progress.report?.summary ?? progress.events.last?.message ?? "Preparing intervention"
-    }
-}
-
 public actor KillOperationRunner {
     public init() {}
 
@@ -132,37 +85,6 @@ public actor KillOperationRunner {
             },
             eventSink: eventSink
         )
-    }
-
-    public func run(
-        plan: KillPlan,
-        killer: ProcessKiller,
-        forceKillDelay: TimeInterval = 2,
-        control: KillOperationControl = KillOperationControl()
-    ) -> AsyncStream<KillOperationEvent> {
-        AsyncStream { continuation in
-            Task {
-                let report = await self.runReport(
-                    plan: plan,
-                    killer: killer,
-                    forceKillDelay: forceKillDelay,
-                    control: control,
-                    eventSink: { event in
-                        continuation.yield(event)
-                    }
-                )
-                if report.eventHistory.last?.kind != .completed {
-                    continuation.yield(
-                        KillOperationEvent(
-                            operationID: report.operationID,
-                            kind: report.failures.isEmpty ? .completed : .failed,
-                            message: report.summary
-                        )
-                    )
-                }
-                continuation.finish()
-            }
-        }
     }
 }
 
@@ -197,10 +119,8 @@ public struct KillPerformanceReport: Codable, Equatable, Sendable {
     public let graphReadCount: Int
     public let heavyMetricReadCount: Int
     public let targetConversionCount: Int
-    public let cacheStatus: KillSnapshotCacheStatus
     public let didHitBudget: Bool
     public let skippedOptionalWorkCount: Int
-    public let eventCoalescingCount: Int
     public let arenaStats: KillGraphArenaStats
     public let watcherHintCount: Int
     public let earlyGraceExitCount: Int
@@ -213,10 +133,8 @@ public struct KillPerformanceReport: Codable, Equatable, Sendable {
         graphReadCount: 0,
         heavyMetricReadCount: 0,
         targetConversionCount: 0,
-        cacheStatus: .none,
         didHitBudget: false,
         skippedOptionalWorkCount: 0,
-        eventCoalescingCount: 0,
         arenaStats: .empty,
         watcherHintCount: 0,
         earlyGraceExitCount: 0,
@@ -230,10 +148,8 @@ public struct KillPerformanceReport: Codable, Equatable, Sendable {
         graphReadCount: Int,
         heavyMetricReadCount: Int,
         targetConversionCount: Int,
-        cacheStatus: KillSnapshotCacheStatus,
         didHitBudget: Bool,
         skippedOptionalWorkCount: Int = 0,
-        eventCoalescingCount: Int = 0,
         arenaStats: KillGraphArenaStats = .empty,
         watcherHintCount: Int = 0,
         earlyGraceExitCount: Int = 0,
@@ -245,10 +161,8 @@ public struct KillPerformanceReport: Codable, Equatable, Sendable {
         self.graphReadCount = graphReadCount
         self.heavyMetricReadCount = heavyMetricReadCount
         self.targetConversionCount = targetConversionCount
-        self.cacheStatus = cacheStatus
         self.didHitBudget = didHitBudget
         self.skippedOptionalWorkCount = skippedOptionalWorkCount
-        self.eventCoalescingCount = eventCoalescingCount
         self.arenaStats = arenaStats
         self.watcherHintCount = watcherHintCount
         self.earlyGraceExitCount = earlyGraceExitCount
@@ -257,16 +171,14 @@ public struct KillPerformanceReport: Codable, Equatable, Sendable {
         self.eventTriggeredVerificationCount = eventTriggeredVerificationCount
     }
 
-    public init(snapshot: KillProcessSnapshot, eventCoalescingCount: Int = 0) {
+    public init(snapshot: KillProcessSnapshot) {
         self.init(
             snapshotMilliseconds: snapshot.elapsedMilliseconds,
             graphReadCount: snapshot.graphReadCount,
             heavyMetricReadCount: snapshot.heavyMetricReadCount,
             targetConversionCount: snapshot.targetConversionCount,
-            cacheStatus: snapshot.cacheStatus,
             didHitBudget: snapshot.didHitBudget,
             skippedOptionalWorkCount: snapshot.skippedOptionalWorkCount,
-            eventCoalescingCount: eventCoalescingCount,
             arenaStats: snapshot.arena?.stats ?? .empty
         )
     }

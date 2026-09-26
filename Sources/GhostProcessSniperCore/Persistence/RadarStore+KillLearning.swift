@@ -299,23 +299,21 @@ extension RadarStore {
     }
 
     private func insertKillGraphDeltas(report: KillReport, createdAt: Date) throws {
-        let deltas = report.graphSliceDeltas.isEmpty ? [report.finalGraphDelta] : report.graphSliceDeltas
-        for delta in deltas where !delta.summary.isEmpty {
-            try execute(
-                """
-                INSERT INTO kill_graph_deltas(id, operation_id, summary, preview_count,
-                                              confirm_count, survivor_count, created_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?)
-                """,
-                .text(UUID().uuidString),
-                .text(report.operationID.rawValue),
-                .text(delta.summary),
-                .int64(Int64(delta.previewTargetPIDs.count)),
-                .int64(Int64(delta.confirmTargetPIDs.count)),
-                .int64(Int64(delta.finalSurvivorPIDs.count)),
-                .double(createdAt.timeIntervalSince1970)
-            )
-        }
+        let delta = report.finalGraphDelta
+        try execute(
+            """
+            INSERT INTO kill_graph_deltas(id, operation_id, summary, preview_count,
+                                          confirm_count, survivor_count, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
+            """,
+            .text(UUID().uuidString),
+            .text(report.operationID.rawValue),
+            .text(delta.summary),
+            .int64(Int64(delta.previewTargetPIDs.count)),
+            .int64(Int64(delta.confirmTargetPIDs.count)),
+            .int64(Int64(delta.finalSurvivorPIDs.count)),
+            .double(createdAt.timeIntervalSince1970)
+        )
     }
 
     private func insertKillReclaimCalibration(report: KillReport, signatureID: String?, devKind: String?, createdAt: Date) throws {

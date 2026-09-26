@@ -24,15 +24,10 @@ public struct KillReport: Equatable, Sendable {
     public var strategyUsed: KillStrategy
     public var scopeUsed: KillScope
     public var targetDiff: KillTargetDiff
-    public var learning: KillOutcomeLearning
     public var finalGraphDelta: KillGraphDelta
-    public var eventCoalescingCount: Int
-    public var strategyHistoryInput: KillHistorySummary
     public var performanceReport: KillPerformanceReport
     public var watcherEvents: [KillExitEvent]
     public var verificationSnapshotCount: Int
-    public var graphSliceDeltas: [KillGraphDelta]
-    public var signalOutcomeCounts: [String: Int]
     public var calibratedReclaimBytes: UInt64
     public var reactorReport: KillReactorReport
     /// New processes that replaced the stopped ones: a supervisor restarted them.
@@ -95,12 +90,12 @@ public struct KillReport: Equatable, Sendable {
             "Scope: \(scopeUsed.label)",
             "Target drift: \(targetDiff.summary)",
             "Graph delta: \(finalGraphDelta.summary)",
-            "Kill performance: \(Int(performanceReport.snapshotMilliseconds.rounded()))ms, graph \(performanceReport.graphReadCount), heavy \(performanceReport.heavyMetricReadCount), converted \(performanceReport.targetConversionCount), cache \(performanceReport.cacheStatus.label)",
+            "Kill performance: \(Int(performanceReport.snapshotMilliseconds.rounded()))ms, graph \(performanceReport.graphReadCount), heavy \(performanceReport.heavyMetricReadCount), converted \(performanceReport.targetConversionCount)",
             "Arena: \(performanceReport.arenaStats.processCount) processes, build \(Int(performanceReport.arenaStats.arenaBuildMilliseconds.rounded())) ms, adjacency \(Int(performanceReport.arenaStats.adjacencyBuildMilliseconds.rounded())) ms",
             "Watcher exits: \(watcherEvents.count), verification snapshots: \(verificationSnapshotCount)",
             "Watcher hints: \(reactorReport.watcherHints.count), early grace saved \(String(format: "%.2f", reactorReport.earlyExitSavingsSeconds))s",
             "Verification modes: \(reactorReport.verificationModeCounts.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ").ifEmpty("none"))",
-            "Signal waves: \(reactorReport.signalWaves.count), arena reuse \(reactorReport.arenaReuseCount), slice cache \(reactorReport.sliceCacheHitCount)",
+            "Signal waves: \(reactorReport.signalWaves.count), arena reuse \(reactorReport.arenaReuseCount)",
             "Calibrated reclaim: \(RadarFormat.bytes(calibratedReclaimBytes))",
             "Force skipped: \(skipForceRequested ? "yes" : "no")",
             "Respawned: \(respawnedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))\(respawnedBy.map { " by \($0)" } ?? "")",
@@ -162,15 +157,10 @@ public struct KillReport: Equatable, Sendable {
         strategyUsed: KillStrategy = .standard,
         scopeUsed: KillScope = .ownedFamily,
         targetDiff: KillTargetDiff = .empty,
-        learning: KillOutcomeLearning = .empty,
         finalGraphDelta: KillGraphDelta = .empty,
-        eventCoalescingCount: Int = 0,
-        strategyHistoryInput: KillHistorySummary = .empty,
         performanceReport: KillPerformanceReport = .empty,
         watcherEvents: [KillExitEvent] = [],
         verificationSnapshotCount: Int = 0,
-        graphSliceDeltas: [KillGraphDelta] = [],
-        signalOutcomeCounts: [String: Int] = [:],
         calibratedReclaimBytes: UInt64 = 0,
         reactorReport: KillReactorReport = .empty
     ) {
@@ -197,15 +187,10 @@ public struct KillReport: Equatable, Sendable {
         self.strategyUsed = strategyUsed
         self.scopeUsed = scopeUsed
         self.targetDiff = targetDiff
-        self.learning = learning
         self.finalGraphDelta = finalGraphDelta
-        self.eventCoalescingCount = eventCoalescingCount
-        self.strategyHistoryInput = strategyHistoryInput
         self.performanceReport = performanceReport
         self.watcherEvents = watcherEvents
         self.verificationSnapshotCount = verificationSnapshotCount
-        self.graphSliceDeltas = graphSliceDeltas
-        self.signalOutcomeCounts = signalOutcomeCounts
         self.calibratedReclaimBytes = calibratedReclaimBytes
         self.reactorReport = reactorReport
     }
