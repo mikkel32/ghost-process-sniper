@@ -10,10 +10,10 @@ struct RadarOverviewView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
-                OverviewHeaderSection(session: session).radarEntrance()
-                ConsoleThermalDashboard(session: session).radarEntrance(delay: 0.04)
-                OverviewGuidanceSection(session: session).radarEntrance(delay: 0.08)
-                OverviewMetricsView(session: session).radarEntrance(delay: 0.12)
+                OverviewHeaderSection(session: session)
+                ConsoleThermalDashboard(session: session)
+                OverviewGuidanceSection(session: session)
+                OverviewMetricsView(session: session)
                 OverviewQueuesSection(session: session)
                 OverviewAnalyticsSection(session: session)
                 OverviewEngineStatusStrip(monitor: session.monitor)
