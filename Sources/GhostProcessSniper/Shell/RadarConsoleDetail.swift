@@ -13,19 +13,21 @@ struct RadarConsoleDetail: View {
                 ProcessBrowserView(session: session)
             case .family(let familyKey):
                 if let family = session.monitor.family(signatureID: familyKey) {
+                    // Look up by the concrete key so an alias still finds the prebuilt panel.
+                    let panel = session.monitor.consoleSnapshot.detailPanel(for: family.familyKey)
+                        ?? FamilyDetailPanelModel(family: family, previous: nil)
                     FamilyDetailConsoleView(
-                        family: family,
-                        detail: session.monitor.detailViewModel(signatureID: familyKey),
-                        panel: session.monitor.consoleSnapshot.detailPanel(for: familyKey),
-                        compact: session.selectedCompactDetail,
-                        onSnooze: { minutes in session.snoozeSelected(minutes: minutes) },
-                        onIgnore: { session.ignoreSelected() },
-                        onKill: { session.prepareKill(family) },
-                        thermals: session.monitor.thermals,
-                        onPreviewProcess: { session.prepareKill(family, member: $0) },
+                        panel: panel,
                         stopRisk: KillRiskAssessor().assess(
                             KillWorkloadProfile(family: family, sample: session.monitor.sampledProcesses)
-                        )
+                        ),
+                        actions: FamilyPageActions(session: session, family: family)
+                    )
+                } else if let report = session.recentStops[familyKey] {
+                    RecentStopView(
+                        report: report,
+                        browse: { session.browseFamilies() },
+                        stopRespawner: { session.prepareKillRespawner(of: report) }
                     )
                 } else {
                     ContentUnavailableView {
@@ -44,12 +46,6 @@ struct RadarConsoleDetail: View {
                 IncidentsConsoleView(session: session)
             case .rules:
                 RulesConsoleView(session: session)
-            case .engine:
-                EngineConsoleView(
-                    monitor: session.monitor,
-                    refreshHistory: session.refreshCostHistory,
-                    onCopyDiagnostics: { session.copyDiagnostics() }
-                )
             }
         }
         .navigationTitle(session.state.focusedSelection.navigationTitle)
@@ -65,7 +61,6 @@ private extension RadarFocusedSelection {
         case .duplicates: "Duplicates"
         case .incidents: "Incidents"
         case .rules: "Rules"
-        case .engine: "Engine"
         }
     }
 }
@@ -75,13 +70,9 @@ struct RadarConsoleInspector: View {
 
     var body: some View {
         if let family = session.selectedFamily {
-            FamilyInspectorView(
-                family: family,
-                detail: session.selectedDetail,
-                panel: session.selectedPanel
-            )
+            FamilyInspectorView(panel: session.selectedPanel ?? FamilyDetailPanelModel(family: family, previous: nil))
         } else {
-            EngineInspectorView(monitor: session.monitor)
+            ContentUnavailableView("Nothing selected", systemImage: "sidebar.right")
         }
     }
 }
