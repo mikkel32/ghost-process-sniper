@@ -1,6 +1,6 @@
 # Performance measurements
 
-Ordinary test runs and the core checks make no timing claims: wall-clock budgets in debug builds on shared runners were noise, so every benchmark is opt-in, runs a release build on synthetic input, and never samples or signals a live process. None of them measures frame rate, energy use or real sensors.
+Debug test runs and the core checks make no timing claims: wall-clock budgets in debug builds on shared runners were noise, so every benchmark is opt-in, runs a release build on synthetic input, and never samples or signals a live process. The one exception is `testPipelineTickCostOnADeveloperMac`, which asserts a budget only in release builds. None of them measures frame rate, energy use or real sensors.
 
 ## Running the benchmarks
 
@@ -16,6 +16,7 @@ python3 Scripts/benchmark_incident_query.py --output .build/performance-audit/in
 | --- | --- | --- | --- |
 | `PerformanceAuditTests.testRefreshPipelineBenchmark` | `RADAR_BENCHMARK_REPORT` | The real `RadarRefreshWorker` ingestion (families, scoring, presentation) for 250 and 1,000 synthetic families, 7 samples after 2 warm-ups; persistence disabled | `pipeline.json` |
 | `PerformanceAuditTests.testLargeSampleScaleBenchmark` | `RADAR_BENCHMARK_REPORT` | `RadarPipeline` and a kill preview over a fake process table for 2k, 10k and 30k processes, with functional assertions | `pipeline-scale.json` beside the report |
+| `PerformanceAuditTests.testPipelineTickCostOnADeveloperMac` | always runs | `RadarPipeline` over 20 ticks of the 600-process `DevWorkstationFixture`; in release builds the steady-state median must stay at or under 25 ms | printed |
 | `DuplicateIndexPerformanceTests` | `RADAR_INDEX_BENCHMARK_REPORT` | Duplicate-to-family resolution, old algorithm against the indexed resolver in alternating order on the same input, results asserted equal | `duplicate-index.json` |
 | `Scripts/benchmark_incident_query.py` | always explicit | The recurrence-count query on a temporary 120,000-row SQLite database, before and after the `(signature_id, started_at)` covering index, results asserted equal | the `--output` path |
 
@@ -48,4 +49,4 @@ The whole refresh pipeline moved from 34.3 to 28.9 ms (250 families) and from 12
 
 ## Instrumented timings in the app
 
-The Engine view reports the app's own refresh cost. Main-actor publish timing includes the assignments and observer callbacks; the next refresh reports the preceding completed publish, so the measurement cannot trigger itself. It does not include deferred SwiftUI layout or rendering; use Instruments for those.
+**Settings › Diagnostics** reports the app's own refresh cost and CPU; Copy Diagnostics adds the scanner, store and smoothness figures, including the phases of recent slow refreshes. Main-actor publish timing includes the assignments and observer callbacks; the next refresh reports the preceding completed publish, so the measurement cannot trigger itself. It does not include deferred SwiftUI layout or rendering; use Instruments for those.

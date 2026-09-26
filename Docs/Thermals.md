@@ -6,7 +6,8 @@ The thermal feature answers two separate questions: how hot the chip is (measure
 
 ```text
 ThermalSampler (actor, ThermalTelemetry.swift)       read-only AppleSMC, snapshot cached for 3 s
-    └─ ProcessMonitor.refresh                         awaits it before each worker refresh
+    └─ ProcessMonitor.refresh                         awaits it before the worker refresh, only while
+                                                      the popover or console is on screen
         └─ ThermalSnapshotStore                       assigns only a changed snapshot; records a new
             ├─ monitor.thermals                       reading into monitor.thermalObservations
             └─ monitor.thermalObservations            (ThermalObservationWindow: 90 readings, 180 s)
@@ -21,7 +22,7 @@ ThermalInsightPanel (Overview)
     └─ ThermalAppInsight.evaluate                     the named workload and its next step
 ```
 
-The projection runs over the raw batch, so radar family filters never hide an app; families only supply the navigation target. The observation window lives in the monitor, so the trend and the traces are ready the moment a thermal view opens. Opening a thermal view never starts a scan or a second projection.
+The projection runs over the raw batch on every refresh, so radar family filters never hide an app; families only supply the navigation target. Temperatures are read only while a surface that shows them is visible (`ProcessMonitor.uiVisible`); a hidden radar does not touch the SMC. The observation window lives in the monitor, so the trend and the traces are ready the moment a thermal view opens, and a gap while everything was hidden simply ends the trend series. Opening a thermal view never starts a second projection.
 
 The console also hands the window to `OverviewThermalBandTracker`, which moves the thermal panel up to second on the Overview only while macOS reports serious throttling or very hot readings (two or more in a row at 90 °C or above) have lasted 30 s, and moves it back after a minute of calm.
 
