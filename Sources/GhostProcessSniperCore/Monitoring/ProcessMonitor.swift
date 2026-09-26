@@ -37,8 +37,14 @@ public final class ProcessMonitor {
     @ObservationIgnored private let notifier: RadarNotifying
     @ObservationIgnored private let store: RadarStore?
     @ObservationIgnored private let worker: RadarRefreshWorker
-    @ObservationIgnored private let refreshGate = RefreshGate()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    /// The only path into the worker: NativeProcessSampler.sample reuses
+    /// scratch buffers across awaits and must never run concurrently.
+    @ObservationIgnored private var inFlight: Task<Void, Never>?
+    /// One queued rerun shared by every caller that arrived mid-refresh.
+    @ObservationIgnored private var trailing: Task<Void, Never>?
+    @ObservationIgnored private(set) var coalescedCount = 0
+    @ObservationIgnored private(set) var rerunCount = 0
     @ObservationIgnored private var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
     @ObservationIgnored private var popoverVisible = false
@@ -86,7 +92,7 @@ public final class ProcessMonitor {
         refreshTask = Task { @MainActor [weak self] in
             await self?.loadPersistedSettingsIfNeeded()
             while !Task.isCancelled {
-                await self?.refresh()
+                await self?.refresh(reason: .loop)
                 var interval = max(0.25, self?.performanceMetrics.nextRefreshInterval ?? 1)
                 // Self-throttle: when the radar's own average CPU is above
                 // budget, stretch the cadence until it recovers.
@@ -109,27 +115,44 @@ public final class ProcessMonitor {
         }
     }
 
-    public func refresh(now: Date = Date()) async {
+    /// Samples and publishes. A call that arrives while a refresh is running
+    /// returns only after a sample that started after the call: callers
+    /// share one trailing rerun. Loop ticks just join the running refresh.
+    public func refresh(reason: RefreshReason = .user, now: Date? = nil) async {
+        guard let running = inFlight else {
+            let task = Task { await self.performRefresh(now: now ?? Date()) }
+            inFlight = task
+            await task.value
+            return
+        }
+        coalescedCount += 1
+        guard reason != .loop else {
+            await running.value
+            return
+        }
+        if trailing == nil {
+            trailing = Task {
+                await running.value
+                self.trailing = nil
+                self.rerunCount += 1
+                let rerun = Task { await self.performRefresh(now: Date()) }
+                self.inFlight = rerun
+                await rerun.value
+            }
+        }
+        await trailing?.value
+    }
+
+    private func performRefresh(now: Date) async {
+        defer { inFlight = nil }
         let refreshStart = Date()
         let signpost = RadarLogger.signposter
         let refreshState = signpost.beginInterval("RadarRefresh")
         defer { signpost.endInterval("RadarRefresh", refreshState) }
 
-        let gateDecision = await refreshGate.begin()
-        guard gateDecision.shouldRun else {
-            if case .coalesced(let count) = gateDecision {
-                var metrics = performanceMetrics
-                metrics.smoothness.coalescedRefreshCount = count
-                metrics.smoothness.refreshInFlight = true
-                performanceMetrics = metrics
-            }
-            return
-        }
-
         do {
             thermals = await thermalSampler.sample(now: now)
             let outcome = try await worker.refresh(refreshRequest(now: now, startedAt: refreshStart))
-            let coalesced = await refreshGate.finish()
             let usage = selfUsageMonitor.sample()
             if usage != selfUsage {
                 selfUsage = usage
@@ -137,12 +160,11 @@ public final class ProcessMonitor {
                     RadarLogger.sampler.info("Self-throttle active: radar averaging \(Int(usage.averageCPUPercent.rounded()), privacy: .public)% CPU")
                 }
             }
-            apply(outcome, coalescedRefreshCount: coalesced)
+            apply(outcome, coalescedRefreshCount: coalescedCount)
             await notifier.process(model: model)
         } catch {
-            let coalesced = await refreshGate.finish()
             var metrics = performanceMetrics
-            metrics.smoothness.coalescedRefreshCount = coalesced
+            metrics.smoothness.coalescedRefreshCount = coalescedCount
             metrics.smoothness.refreshInFlight = false
             performanceMetrics = metrics
             health = SamplerHealth(

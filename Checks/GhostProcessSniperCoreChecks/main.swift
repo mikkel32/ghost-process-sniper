@@ -65,7 +65,7 @@ struct CoreChecks {
         await run("radarPublishPayloadSkipsUnchangedContentRebuild") { try radarPublishPayloadSkipsUnchangedContentRebuild() }
         await run("menuBarStatusPresentationIsIconOnlyAndCompact") { try menuBarStatusPresentationIsIconOnlyAndCompact() }
         await run("menuBarPresentationKeepsDiagnosticsOutOfTitle") { try menuBarPresentationKeepsDiagnosticsOutOfTitle() }
-        await run("refreshGateCoalescesOverlappingRequests") { try await refreshGateCoalescesOverlappingRequests() }
+        await run("monitorRefreshQueuesOneTrailingRerun") { try await monitorRefreshQueuesOneTrailingRerun() }
         await run("radarRefreshWorkerPublishesStableOutcome") { try await radarRefreshWorkerPublishesStableOutcome() }
         await run("radarSchedulerAdaptsCadence") { try radarSchedulerAdaptsCadence() }
         await run("radarSchedulerFocusesSelectedFamilies") { try radarSchedulerFocusesSelectedFamilies() }
@@ -1594,18 +1594,22 @@ private func menuBarPresentationKeepsDiagnosticsOutOfTitle() throws {
     try check(first.renderKey == second.renderKey, "diagnostics-only publish cost changes should not invalidate status presentation")
 }
 
-private func refreshGateCoalescesOverlappingRequests() async throws {
-    let gate = RefreshGate()
-    let first = await gate.begin()
-    let second = await gate.begin()
-    let third = await gate.begin()
-    let finished = await gate.finish()
-    try check(first == .run, "first refresh should enter the gate")
-    try check(second == .coalesced(1), "second refresh should coalesce while one is running")
-    try check(third == .coalesced(2), "third refresh should increment coalesced count")
-    try check(finished == 2, "finish should report coalesced refreshes")
-    let inFlight = await gate.inFlight
-    try check(!inFlight, "gate should clear in-flight state after finish")
+@MainActor
+private func monitorRefreshQueuesOneTrailingRerun() async throws {
+    let monitor = ProcessMonitor(
+        sampler: FakeSampler(samples: [sample(pid: 540, name: "node", commandLine: "node server.js", memory: 40_000_000)]),
+        builder: ProcessFamilyBuilder(currentUserID: 501),
+        settings: .aggressive,
+        store: nil
+    )
+    let before = monitor.sampleRevision
+    async let first: Void = monitor.refresh()
+    async let second: Void = monitor.refresh()
+    async let third: Void = monitor.refresh()
+    _ = await (first, second, third)
+    try check(monitor.sampleRevision == before + 2, "overlapping refreshes should share one trailing rerun, not be dropped")
+    try check(monitor.performanceMetrics.coalescedRefreshCount == 2, "coalesced callers should be counted")
+    try check(!monitor.performanceMetrics.refreshInFlight, "publish should clear the in-flight flag")
 }
 
 private func radarRefreshWorkerPublishesStableOutcome() async throws {

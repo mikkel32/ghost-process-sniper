@@ -1,42 +1,10 @@
 import Foundation
 
-public enum RefreshGateDecision: Equatable, Sendable {
-    case run
-    case coalesced(Int)
-
-    public var shouldRun: Bool {
-        if case .run = self {
-            return true
-        }
-        return false
-    }
-}
-
-public actor RefreshGate {
-    private var isRunning = false
-    private var pendingCoalescedCount = 0
-
-    public init() {}
-
-    public func begin() -> RefreshGateDecision {
-        if isRunning {
-            pendingCoalescedCount += 1
-            return .coalesced(pendingCoalescedCount)
-        }
-        isRunning = true
-        return .run
-    }
-
-    public func finish() -> Int {
-        let coalesced = pendingCoalescedCount
-        pendingCoalescedCount = 0
-        isRunning = false
-        return coalesced
-    }
-
-    public var inFlight: Bool {
-        isRunning
-    }
+public enum RefreshReason: Sendable {
+    /// Someone waits on data sampled after the call: Scan now, a stop, a search.
+    case user
+    /// A background tick; it joins a running refresh instead of queueing one.
+    case loop
 }
 
 public struct RefreshRequest: Equatable, Sendable {
