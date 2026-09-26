@@ -54,7 +54,7 @@ public struct FamilyScoringCache: Sendable {
         hasher.combine(Int(family.totalCPUPercent.rounded()))
         hasher.combine(Int(family.totalGPUPercent.rounded()))
         hasher.combine(family.hardwareSignals.map(\.reason))
-        hasher.combine(Int(family.trend.memoryVelocityMegabytesPerMinute.rounded()))
+        hasher.combine(Int(family.trend.credibleMemoryVelocity.rounded()))
         hasher.combine(Int(family.root.sampledAt.timeIntervalSince1970 / 300))
         hasher.combine(family.score.value.rounded())
         if let baseline = context.baselines[family.signature.id] {

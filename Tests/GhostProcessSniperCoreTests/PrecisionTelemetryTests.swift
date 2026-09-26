@@ -141,7 +141,7 @@ final class PrecisionTelemetryTests: XCTestCase {
         let trend = TrendMetrics(memoryVelocityMegabytesPerMinute: 6_000, cpuSlopePerMinute: 0,
             memoryPoints: samples.map { Double($0.memoryBytes) }, memoryFitQuality: 1, samples: samples)
         XCTAssertFalse(trend.hasSustainedHistory)
-        let heat = GhostHeatModel.initial(memoryRatio: 0.4, cpuRatio: 0, gpuRatio: 0, leakRatio: 60, trend: trend, hardwareLevel: .quiet)
+        let heat = GhostHeatModel.initial(memoryRatio: 0.4, cpuRatio: 0, cpuThreshold: 90, gpuRatio: 0, leakRatio: 60, trend: trend, hardwareLevel: .quiet)
         XCTAssertEqual(heat.sustainedSignalCount, 0)
         XCTAssertNotEqual(heat.level, .critical)
     }

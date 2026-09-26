@@ -50,7 +50,7 @@ public struct ProcessAssessment: Equatable, Sendable {
             systemImage = "clock"
         } else if family.hasCredibleLeak, family.trend.hasSustainedHistory {
             cause = "Sustained memory growth"
-            evidence = "\(memory) in use; growing \(RadarFormat.leak(family.trend.memoryVelocityMegabytesPerMinute))."
+            evidence = "\(memory) in use; growing \(RadarFormat.leak(family.trend.credibleMemoryVelocity))."
             recommendation = "Inspect the growing member and its work before previewing a stop."
             systemImage = "chart.line.uptrend.xyaxis"
         } else if family.totalCPUPercent >= 80 {

@@ -129,6 +129,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
         let heat = GhostHeatModel.initial(
             memoryRatio: 1.7,
             cpuRatio: 0.15,
+            cpuThreshold: 90,
             gpuRatio: 0,
             leakRatio: 0,
             trend: TrendMetrics(
@@ -171,6 +172,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
         let heat = GhostHeatModel.initial(
             memoryRatio: 1.25,
             cpuRatio: 1.55,
+            cpuThreshold: 80,
             gpuRatio: 0.2,
             leakRatio: 1.8,
             trend: TrendMetrics(

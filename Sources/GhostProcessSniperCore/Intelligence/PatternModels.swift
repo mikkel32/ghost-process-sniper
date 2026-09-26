@@ -143,7 +143,7 @@ public struct FamilyVerdict: Equatable, Sendable {
         }
 
         let forecast = family.forecast
-        let velocity = max(0, family.trend.memoryVelocityMegabytesPerMinute)
+        let velocity = family.trend.credibleMemoryVelocity
         let trustedBaseline = family.baseline.flatMap { $0.isMeasurementTrusted ? $0 : nil }
         let baselineMultiple = trustedBaseline?.memoryMultiple(for: family.totalPhysicalFootprintBytes) ?? 1
         let effectiveForecastState: ForecastState

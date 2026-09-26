@@ -19,7 +19,10 @@ struct FamilyEvidenceScorer: Sendable {
         let memoryRatio = Double(footprint) / Double(max(settings.memoryBytes, 1))
         let cpuRatio = cpu / max(settings.cpuPercent, 1)
         let gpuRatio = gpu / 80
-        let leakRatio = max(0, trend.memoryVelocityMegabytesPerMinute) / max(settings.leakVelocityMegabytesPerMinute, 1)
+        // Only history-proven growth scores as a leak: two close samples can
+        // turn one allocation into thousands of MB/min.
+        let leakVelocity = trend.credibleMemoryVelocity
+        let leakRatio = leakVelocity / max(settings.leakVelocityMegabytesPerMinute, 1)
         let childFanout = max(0, members.count - 6)
         let duplicateImpact = duplicateCluster.map { min(12, Double($0.memberCount) * 3) } ?? 0
         let hardwareImpact = min(24, hardwareSignals.reduce(0) { $0 + $1.impact })
@@ -70,10 +73,10 @@ struct FamilyEvidenceScorer: Sendable {
             ),
             GhostScoreComponent(
                 kind: .leak,
-                title: leakRatio >= 1 ? "memory climbing \(Int(trend.memoryVelocityMegabytesPerMinute.rounded())) MB/min" : "Memory growth",
+                title: leakRatio >= 1 ? "memory climbing \(Int(leakVelocity.rounded())) MB/min" : "Memory growth",
                 detail: String(
                     format: "%.0f MB/min is %.1fx the %.0f MB/min limit",
-                    max(0, trend.memoryVelocityMegabytesPerMinute),
+                    leakVelocity,
                     leakRatio,
                     settings.leakVelocityMegabytesPerMinute
                 ),
@@ -163,7 +166,7 @@ struct FamilyEvidenceScorer: Sendable {
             reasons.append("GPU activity \(RadarFormat.percent(gpu))")
         }
         if leakRatio >= 1 {
-            reasons.append("memory climbing \(Int(trend.memoryVelocityMegabytesPerMinute.rounded())) MB/min")
+            reasons.append("memory climbing \(Int(leakVelocity.rounded())) MB/min")
         }
         for signal in hardwareSignals.prefix(3) where !reasons.contains(signal.reason) {
             reasons.append(signal.reason)
@@ -190,6 +193,7 @@ struct FamilyEvidenceScorer: Sendable {
         var heat = GhostHeatModel.initial(
             memoryRatio: memoryRatio,
             cpuRatio: cpuRatio,
+            cpuThreshold: settings.cpuPercent,
             gpuRatio: gpuRatio,
             leakRatio: leakRatio,
             trend: trend,

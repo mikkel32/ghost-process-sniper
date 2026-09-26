@@ -23,8 +23,9 @@ public struct CulpritAnalysis: Equatable, Sendable {
         for signal in family.hardwareSignals.prefix(3) {
             evidence.append(signal.reason)
         }
-        if family.trend.memoryVelocityMegabytesPerMinute > 0 {
-            evidence.append("Memory rising \(Int(family.trend.memoryVelocityMegabytesPerMinute.rounded())) MB/min")
+        let growth = family.trend.credibleMemoryVelocity
+        if growth > 0 {
+            evidence.append("Memory rising \(Int(growth.rounded())) MB/min")
         }
         if family.totalCPUPercent >= 50 {
             evidence.append("CPU burst \(Int(family.totalCPUPercent.rounded()))%")
@@ -45,14 +46,14 @@ public struct CulpritAnalysis: Equatable, Sendable {
 
         switch classification.kind {
         case .nodeServer:
-            likelyCause = hasCredibleEscalation ? "Node dev server is trending toward a leak" : (family.trend.memoryVelocityMegabytesPerMinute > 0 ? "Node dev server or watcher memory growth" : "JavaScript dev server consuming resources")
+            likelyCause = hasCredibleEscalation ? "Node dev server is trending toward a leak" : (growth > 0 ? "Node dev server or watcher memory growth" : "Node or JavaScript dev server consuming resources")
             nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command, then Kill Tree if this server is stale." : "Inspect tree and stop the owning terminal/app.")
         case .electronApp:
             likelyCause = hasCredibleForecast ? "Electron helper tree is heating up before a hard threshold" : (family.childCount >= 4 ? "Electron renderer/helper fanout" : "Electron app helper using memory")
             nextAction = hasCredibleForecast ? forecastActionDetail : "Inspect renderer tree and close or restart the owning app."
         case .pythonService:
             likelyCause = "Python service, notebook, or worker process is active"
-            nextAction = hasCredibleForecast ? forecastActionDetail : (family.trend.memoryVelocityMegabytesPerMinute > 0 ? "Inspect cwd and restart the service before it crosses the threshold." : "Inspect command and stop it from its terminal if expected.")
+            nextAction = hasCredibleForecast ? forecastActionDetail : (growth > 0 ? "Inspect cwd and restart the service before it crosses the threshold." : "Inspect command and stop it from its terminal if expected.")
         case .dockerHelper:
             likelyCause = "Container or VM helper is backing a dev workload"
             nextAction = hasCredibleForecast ? forecastActionDetail : "Inspect ports and project path, then stop the compose/VM workload if stale."

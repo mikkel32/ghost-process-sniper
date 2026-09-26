@@ -59,7 +59,7 @@ public struct RadarRuleEngine: Sendable {
         guard family.score.value >= match.minimumScore else {
             return false
         }
-        if let leak = match.minimumLeakVelocity, family.trend.memoryVelocityMegabytesPerMinute < leak {
+        if let leak = match.minimumLeakVelocity, family.trend.credibleMemoryVelocity < leak {
             return false
         }
         if let age = match.minimumAgeMinutes {
@@ -113,7 +113,7 @@ public struct RadarRuleEngine: Sendable {
             RadarActionSuggestion(
                 type: .inspect,
                 title: "Inspect trend",
-                detail: "Leak \(Int(family.trend.memoryVelocityMegabytesPerMinute.rounded())) MB/min",
+                detail: "Leak \(Int(family.trend.credibleMemoryVelocity.rounded())) MB/min",
                 ruleID: rule.id,
                 createdAt: now
             )
@@ -327,7 +327,7 @@ public struct RadarIntelligence: Sendable {
 
         let memoryMultiple = baseline.memoryMultiple(for: family.totalPhysicalFootprintBytes)
         let cpuMultiple = baseline.cpuMultiple(for: family.totalCPUPercent)
-        let leakRatio = max(0, family.trend.memoryVelocityMegabytesPerMinute) / max(settings.leakVelocityMegabytesPerMinute, 1)
+        let leakRatio = family.trend.credibleMemoryVelocity / max(settings.leakVelocityMegabytesPerMinute, 1)
         var reasons = family.score.reasons
         var value = family.score.value
         var components = family.score.components

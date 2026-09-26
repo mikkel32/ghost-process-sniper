@@ -77,16 +77,18 @@ public enum GhostHeatModel {
     public static func initial(
         memoryRatio: Double,
         cpuRatio: Double,
+        cpuThreshold: Double,
         gpuRatio: Double,
         leakRatio: Double,
         trend: TrendMetrics,
         hardwareLevel: GhostLevel
     ) -> GhostHeat {
+        // The real limit, never one inferred from the last trend sample: that
+        // sample is stale whenever a cached reading skipped the append.
         let cpuSamples = trend.samples.map(\.cpuPercent)
         let sustainedCPUFraction: Double
-        if cpuSamples.count >= 4, cpuRatio > 0 {
-            let inferredThreshold = max(1, (cpuSamples.last ?? 0) / cpuRatio)
-            sustainedCPUFraction = Double(cpuSamples.filter { $0 >= inferredThreshold }.count) / Double(cpuSamples.count)
+        if cpuSamples.count >= 4, cpuThreshold > 0 {
+            sustainedCPUFraction = Double(cpuSamples.filter { $0 >= cpuThreshold }.count) / Double(cpuSamples.count)
         } else {
             sustainedCPUFraction = 0
         }
@@ -114,7 +116,8 @@ public enum GhostHeatModel {
 
         let sustainedCPU = trend.hasSustainedHistory && sustainedCPUFraction >= 0.6 && cpuRatio >= 1
         let pattern = trend.resolvedPattern
-        let sustainedLeak = trend.hasSustainedHistory && trend.memoryFitQuality >= 0.5 && leakRatio >= 1 && pattern.indicatesAccumulation
+        let sustainedLeak = trend.hasSustainedHistory && leakRatio >= 1 && pattern.indicatesAccumulation &&
+            (trend.memoryFitQuality >= 0.5 || pattern.pattern == .risingFloor)
         let corroboratingAxes = axes.filter { $0 >= 55 }.count
         let instantCorroboration = [memoryRatio >= 1, cpuRatio >= 0.8, gpuRatio >= 0.55, leakRatio >= 0.8]
             .filter { $0 }
@@ -140,7 +143,8 @@ public enum GhostHeatModel {
             1,
             0.24 +
                 min(0.28, Double(trend.sampleCount) * 0.035) +
-                trend.memoryFitQuality * 0.2 +
+                // R² of two or three points is trivially high; it is no evidence.
+                (trend.sampleCount >= 4 ? trend.memoryFitQuality * 0.2 : 0) +
                 (corroboratingAxes >= 2 ? 0.18 : 0) +
                 (sustainedCount > 0 ? 0.14 : 0)
         )
@@ -222,7 +226,7 @@ public enum GhostHeatModel {
         }
 
         let forecastIsHeatTrusted = forecast.confidence >= 0.55 && family.trend.hasSustainedHistory &&
-            (base.sustainedSignalCount > 0 || family.trend.memoryVelocityMegabytesPerMinute > 0)
+            (base.sustainedSignalCount > 0 || family.trend.credibleMemoryVelocity > 0)
         if forecastIsHeatTrusted {
             switch forecast.state {
             case .quiet:
