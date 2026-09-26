@@ -30,7 +30,7 @@ public enum KillRiskSeverity: Int, Codable, Comparable, Sendable {
 
 public enum KillRiskKind: String, Codable, Sendable {
     case unsavedWork, dataIntegrity, stopsContainers, lockFile, partialInstall, interruptedBuild,
-         respawn, unloadsModels, freesPorts, orphaned
+         respawn, stopsSiblings, unloadsModels, freesPorts, orphaned
 }
 
 public struct KillRisk: Identifiable, Equatable, Sendable {
@@ -51,8 +51,27 @@ public struct KillRisk: Identifiable, Equatable, Sendable {
     public var isBenefit: Bool { kind == .freesPorts || kind == .orphaned }
 }
 
+/// What a supervisor does when the process it runs exits.
+public enum KillRestartPolicy: String, Sendable {
+    /// Starts it again at once.
+    case onExit
+    /// Waits for the next change to a watched file.
+    case onFileChange
+    /// Stops every other process it runs.
+    case stopsSiblings
+}
+
 public enum KillSupervisorKind: String, Codable, Sendable {
     case launchd, nodemon, pm2, forever, supervisord, watchexec, cargoWatch, air, tsxWatch, entr, overmind
+
+    public var restartPolicy: KillRestartPolicy {
+        switch self {
+        case .launchd, .pm2, .forever, .supervisord: .onExit
+        // nodemon prints "app crashed - waiting for file changes".
+        case .nodemon, .watchexec, .cargoWatch, .air, .tsxWatch, .entr: .onFileChange
+        case .overmind: .stopsSiblings
+        }
+    }
 }
 
 /// Something that restarts the process after it stops.
@@ -182,13 +201,7 @@ public struct KillRiskAssessor: Sendable {
         }
 
         if let supervisor {
-            let who = supervisor.pid.map { "\(supervisor.name) (PID \($0))" } ?? supervisor.name
-            risks.append(KillRisk(
-                kind: .respawn, severity: .caution, title: "Will restart",
-                detail: supervisor.kind == .launchd
-                    ? "launchd manages this process and will likely start it again. Quit the app or disable the login item that owns it."
-                    : "\(who) watches this process and restarts it. Stop \(supervisor.name) instead to make it stay stopped."
-            ))
+            risks.append(Self.restartRisk(supervisor))
         } else if workload.parentIsLaunchd, !isAppMain, kind == .devServer || kind == .build || kind == .general {
             risks.append(KillRisk(kind: .orphaned, severity: .info, title: "Orphaned",
                                   detail: "Its terminal or parent is gone, so nothing will restart it."))
@@ -252,6 +265,24 @@ public struct KillRiskAssessor: Sendable {
             return KillSupervisor(pid: nil, name: "launchd", kind: .launchd)
         }
         return nil
+    }
+
+    private static func restartRisk(_ supervisor: KillSupervisor) -> KillRisk {
+        let name = supervisor.name
+        switch supervisor.kind.restartPolicy {
+        case .onExit:
+            let who = supervisor.pid.map { "\(name) (PID \($0))" } ?? name
+            return KillRisk(kind: .respawn, severity: .caution, title: "Will restart",
+                            detail: supervisor.kind == .launchd
+                                ? "launchd manages this process and will likely start it again. Quit the app or disable the login item that owns it."
+                                : "\(who) restarts this process when it exits. Stop \(name) instead to keep it stopped.")
+        case .onFileChange:
+            return KillRisk(kind: .respawn, severity: .info, title: "Restarts on your next save",
+                            detail: "\(name) starts it again the next time a watched file changes; stop \(name) to end the session.")
+        case .stopsSiblings:
+            return KillRisk(kind: .stopsSiblings, severity: .caution, title: "Stops the whole Procfile",
+                            detail: "\(name) shuts down every other process when this one exits.")
+        }
     }
 
     private static func portList(_ ports: [Int]) -> String {

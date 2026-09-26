@@ -175,7 +175,7 @@ public struct InterventionPolicyEngine: Sendable {
             let weight: Double = switch (item.isBenefit, item.kind, item.severity) {
             case (true, .orphaned, _): 8
             case (true, _, _): 4
-            case (false, .respawn, _): -12
+            case (false, .respawn, .caution), (false, .respawn, .danger): -12
             case (false, _, .danger): -14
             case (false, _, .caution): -6
             case (false, _, .info): -1

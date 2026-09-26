@@ -33,6 +33,9 @@ public struct KillReport: Equatable, Sendable {
     /// New processes that replaced the stopped ones: a supervisor restarted them.
     public var respawnedPIDs: [Int32] = []
     public var respawnedBy: String?
+    /// Plain follow-ups worth knowing, such as a file watcher that will
+    /// start the app again on the next save.
+    public var notes: [String] = []
     /// PIDs macOS refused to signal (EPERM), tried once each.
     public var signalDeniedPIDs: [Int32] = []
     /// The app accepted the quit request but was still open at the end,
@@ -90,13 +93,16 @@ public struct KillReport: Equatable, Sendable {
         parts += stuckExitingPIDs.sorted().map {
             "PID \($0) is stuck finishing its exit in the kernel (hung disk or network I/O); it disappears when that I/O completes."
         }
-        return parts.joined(separator: " ")
+        return (parts + notes).joined(separator: " ")
     }
 
     private var outcomeSummary: String {
         if !respawnedPIDs.isEmpty {
             let pids = respawnedPIDs.sorted().map(String.init).joined(separator: ", ")
-            return "Stopped, but \(respawnedBy ?? "a supervisor") started it again (PID \(pids)). Stop \(respawnedBy ?? "the supervisor") instead."
+            let advice = respawnedBy == "launchd"
+                ? "Quit the app or disable the login item that owns it."
+                : "Stop \(respawnedBy ?? "the supervisor") instead."
+            return "Stopped, but \(respawnedBy ?? "a supervisor") started it again (PID \(pids)). \(advice)"
         }
         if !survivorPIDs.isEmpty {
             let pids = survivorPIDs.sorted().map(String.init).joined(separator: ", ")

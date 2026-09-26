@@ -68,28 +68,60 @@ final class RiskAwareKillTests: XCTestCase {
     func testSupervisorRestartIsDetectedAndExplained() async {
         let restarted = metrics(777, "node", command: "node server.js", parent: 499,
                                 start: UInt64(Date().timeIntervalSince1970) + 5)
-        let workload = KillWorkloadProfile(
-            processes: [KillWorkloadProcess(pid: 500, parentPID: 499, name: "node", executablePath: "",
-                                            commandLine: "node server.js", isRoot: true)],
-            ancestors: [KillWorkloadAncestor(pid: 499, name: "node", executablePath: "/usr/local/bin/node",
-                                             commandLine: "node /usr/local/bin/nodemon server.js")],
-            parentIsLaunchd: false
-        )
-        let report = await killer(snapshots: [[server], [], [], [restarted]])
-            .kill(plan: plan(server, workload: workload), forceKillDelay: 2)
+        let sleeps = SleepLog()
+        let report = await killer(snapshots: [[server], [], [], [restarted]], sleeper: sleeps.record)
+            .kill(plan: plan(server, workload: supervised(by: "PM2 v5.3.0: God Daemon (/Users/me/.pm2)")), forceKillDelay: 2)
         XCTAssertEqual(report.respawnedPIDs, [777])
-        XCTAssertEqual(report.respawnedBy, "nodemon")
-        XCTAssertTrue(report.summary.contains("Stop nodemon instead"), report.summary)
+        XCTAssertEqual(report.respawnedBy, "PM2")
+        XCTAssertTrue(report.summary.contains("Stop PM2 instead"), report.summary)
+        XCTAssertEqual(sleeps.all.suffix(1), [150_000_000], "found on the first look, 150 ms after the stop")
+    }
+
+    func testNodemonChildIsNotReportedAsRespawn() async {
+        let restarted = metrics(778, "node", command: "node server.js", parent: 499,
+                                start: UInt64(Date().timeIntervalSince1970) + 5)
+        let sleeps = SleepLog()
+        let report = await killer(snapshots: [[server], [], [], [restarted]], sleeper: sleeps.record)
+            .kill(plan: plan(server, workload: supervised(by: "node /usr/local/bin/nodemon server.js")), forceKillDelay: 2)
+        XCTAssertTrue(report.respawnedPIDs.isEmpty, "nodemon restarts on the next save, not on exit")
+        XCTAssertFalse(sleeps.all.contains(1_500_000_000))
+        XCTAssertFalse(sleeps.all.contains(150_000_000), "no restart probe for a file watcher")
+        XCTAssertTrue(report.summary.contains("nodemon is waiting for file changes; it will start the app again the next time you save."),
+                      report.summary)
+    }
+
+    func testUnrelatedSameNameProcessIsNotARespawn() async {
+        let unrelated = metrics(779, "node", command: "node eslint_d", parent: 1,
+                                start: UInt64(Date().timeIntervalSince1970) + 5)
+        let sleeps = SleepLog()
+        let report = await killer(snapshots: [[server], [], [], [unrelated]], sleeper: sleeps.record)
+            .kill(plan: plan(server, workload: supervised(by: "PM2 v5.3.0: God Daemon (/Users/me/.pm2)")), forceKillDelay: 2)
+        XCTAssertTrue(report.respawnedPIDs.isEmpty, report.summary)
+        XCTAssertEqual(sleeps.all.suffix(4), [150_000_000, 250_000_000, 500_000_000, 900_000_000], "about 1.8 s of looking, then done")
     }
 
     // MARK: - Fixtures
 
-    private func killer(snapshots: [[ProcessMetrics]], signaler: RecordingSignaler = RecordingSignaler(quits: false)) -> ProcessKiller {
+    private func killer(
+        snapshots: [[ProcessMetrics]],
+        signaler: RecordingSignaler = RecordingSignaler(quits: false),
+        sleeper: @escaping @Sendable (UInt64) async -> Void = { _ in }
+    ) -> ProcessKiller {
         ProcessKiller(
             snapshotProvider: SequencedSnapshots(snapshots),
             signaler: signaler,
             currentUserID: 501,
-            sleeper: { _ in }
+            sleeper: sleeper
+        )
+    }
+
+    /// `server` under a supervisor with PID 499.
+    private func supervised(by command: String) -> KillWorkloadProfile {
+        KillWorkloadProfile(
+            processes: [KillWorkloadProcess(pid: 500, parentPID: 499, name: "node", executablePath: "",
+                                            commandLine: "node server.js", isRoot: true)],
+            ancestors: [KillWorkloadAncestor(pid: 499, name: "node", executablePath: "/usr/local/bin/node", commandLine: command)],
+            parentIsLaunchd: false
         )
     }
 
@@ -110,6 +142,17 @@ final class RiskAwareKillTests: XCTestCase {
         )
         return KillPlan(rootIdentity: root.identity, targetIdentities: members.map(\.identity), protectedPIDs: [],
                         displayName: root.name, workload: profile, strategyCalibrations: calibrations)
+    }
+}
+
+private final class SleepLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sleeps: [UInt64] = []
+
+    var all: [UInt64] { lock.withLock { sleeps } }
+
+    var record: @Sendable (UInt64) async -> Void {
+        { [self] nanoseconds in lock.withLock { sleeps.append(nanoseconds) } }
     }
 }
 

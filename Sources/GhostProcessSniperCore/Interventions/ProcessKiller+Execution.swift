@@ -78,37 +78,6 @@ extension ProcessKiller {
                     message: "Resumed \(target.name) so it can exit.", report: &report, eventSink: eventSink)
     }
 
-    /// A supervisor restarts what it watches within a moment of its exit.
-    /// Looks for a fresh process with a stopped target's name that started
-    /// after this operation began.
-    func detectRespawn(
-        of targets: [KillTarget],
-        by supervisor: KillSupervisor,
-        since start: Date,
-        operationID: KillOperationID,
-        report: inout KillReport,
-        eventSink: (@Sendable (KillOperationEvent) -> Void)?
-    ) async {
-        await sleeper(1_500_000_000)
-        guard let snapshot = try? await snapshotProvider.snapshot(policy: .verify) else { return }
-        let lites = snapshot.arena?.processes ?? snapshot.processes.map { KillProcessLite(process: $0) }
-        let stoppedNames = Set(targets.map(\.name))
-        let stopped = Set(targets.map(\.identity))
-        let started = UInt64(max(0, start.timeIntervalSince1970.rounded(.down)))
-        let respawned = lites.filter { process in
-            !stopped.contains(process.identity) &&
-                stoppedNames.contains(process.name) &&
-                process.identity.startTimeSeconds >= started &&
-                process.userID == currentUserID
-        }
-        guard !respawned.isEmpty else { return }
-        report.respawnedPIDs = respawned.map(\.pid).sorted()
-        report.respawnedBy = supervisor.name
-        appendEvent(.verified, operationID: operationID,
-                    message: "\(supervisor.name) restarted it as PID \(report.respawnedPIDs.map(String.init).joined(separator: ", ")).",
-                    report: &report, eventSink: eventSink)
-    }
-
     /// Rows show "Stopping" until an exit is seen; only the exit watcher
     /// and the final classification say a process terminated.
     @discardableResult

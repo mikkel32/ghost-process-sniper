@@ -275,7 +275,7 @@ public final class ProcessKiller: Sendable {
             )
             if let supervisor = preflight.preview.riskAssessment.supervisor,
                report.survivorPIDs.isEmpty, report.partiallySucceeded {
-                await detectRespawn(of: targets, by: supervisor, since: totalStart, operationID: operationID, report: &report, eventSink: eventSink)
+                await detectRespawn(of: targets, by: supervisor, since: walk.lastSignalAt, operationID: operationID, report: &report, eventSink: eventSink)
             }
             appendEvent(.completed, operationID: operationID, message: report.summary, report: &report, eventSink: eventSink)
             RadarLogger.kill.info("Kill operation \(operationID.rawValue, privacy: .public) \(plan.displayName, privacy: .public) finished in \(report.timeline.totalMilliseconds, privacy: .public)ms, forced \(report.forcedPIDs.count, privacy: .public), survivors \(report.survivorPIDs.count, privacy: .public)")

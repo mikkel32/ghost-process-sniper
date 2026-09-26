@@ -108,7 +108,28 @@ final class KillRiskAssessorTests: XCTestCase {
         )
         XCTAssertEqual(risk.supervisor?.kind, .nodemon)
         XCTAssertEqual(risk.supervisor?.pid, 69)
-        XCTAssertTrue(risk.hazards.contains { $0.kind == .respawn })
+        let restart = risk.hazards.first { $0.kind == .respawn }
+        XCTAssertEqual(restart?.title, "Restarts on your next save", "nodemon waits for file changes after an exit")
+        XCTAssertEqual(restart?.severity, .info)
+    }
+
+    func testSupervisorsThatRestartOnExitWarnAndOvermindStopsSiblings() {
+        let pm2 = assess(
+            root: process(71, "node", command: "node server.js"),
+            ancestors: [KillWorkloadAncestor(pid: 68, name: "PM2 v5.3.0: God", executablePath: "",
+                                             commandLine: "PM2 v5.3.0: God Daemon (/Users/me/.pm2)")]
+        )
+        XCTAssertEqual(pm2.supervisor?.kind, .pm2)
+        XCTAssertEqual(pm2.hazards.first { $0.kind == .respawn }?.title, "Will restart")
+        XCTAssertEqual(pm2.hazards.first { $0.kind == .respawn }?.severity, .caution)
+
+        let overmind = assess(
+            root: process(72, "node", command: "node server.js"),
+            ancestors: [KillWorkloadAncestor(pid: 67, name: "overmind", executablePath: "/opt/homebrew/bin/overmind",
+                                             commandLine: "overmind start")]
+        )
+        XCTAssertEqual(overmind.hazards.first { $0.kind == .stopsSiblings }?.title, "Stops the whole Procfile")
+        XCTAssertFalse(overmind.hazards.contains { $0.kind == .respawn })
     }
 
     func testSupervisorInsideTheStopGoesDownWithIt() {

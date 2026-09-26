@@ -158,6 +158,7 @@ struct KillRiskCard: View {
         case .partialInstall: "arrow.down.circle"
         case .interruptedBuild: "hammer"
         case .respawn: "arrow.clockwise"
+        case .stopsSiblings: "stop.circle"
         case .unloadsModels: "cpu"
         case .freesPorts: "network"
         case .orphaned: "checkmark.circle"
