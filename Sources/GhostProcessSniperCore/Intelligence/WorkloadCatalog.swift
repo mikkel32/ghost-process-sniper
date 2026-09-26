@@ -325,6 +325,18 @@ public enum WorkloadCatalog {
 
     static let buildVerbs: Set<String> = ["build", "compile", "assemble", "bundle", "archive", "install", "check"]
     static let testVerbs: Set<String> = ["test", "nextest"]
+    /// Toolchain verbs that lint, document, benchmark or generate code.
+    static let checkVerbs: Set<String> = ["clippy", "doc", "bench", "fmt", "vet", "generate"]
+    /// Package scripts that build, test, lint or typecheck.
+    static let buildScripts: Set<String> = ["build", "test", "lint", "typecheck", "type-check", "check"]
+
+    /// Typecheckers, linters, formatters and bundlers: one-shot whole-project
+    /// work that holds a core for minutes, unless it watches or serves.
+    static let oneShotCheckers: Set<String> = [
+        "tsc", "vue-tsc", "eslint", "prettier", "biome", "webpack", "rollup", "esbuild",
+        "mypy", "pyright", "ruff", "pylint", "black",
+    ]
+    private static let servingArguments: Set<String> = ["--watch", "-w", "watch", "serve", "server", "--stdio", "--lsp", "lsp", "lsp-proxy"]
 
     /// The catalog's verdict for kinds a language alone cannot name, or nil.
     public static func match(_ tokens: WorkloadTokens) -> WorkloadMatch? {
@@ -368,19 +380,29 @@ public enum WorkloadCatalog {
     /// Build or test work, from the verbs of any toolchain: CPU bursts here
     /// are expected and end by themselves.
     public static func isBuildOrTest(_ tokens: WorkloadTokens) -> Bool {
-        if tokens.named(swiftTools) || tokens.named(compilers) || tokens.named(testRunners) {
+        if tokens.named(swiftTools) || tokens.named(compilers) || tokens.named(testRunners) || isOneShotChecker(tokens) {
             return true
         }
         guard let verb = tokens.verb else { return false }
         switch tokens.argv0 {
         case "cargo", "go", "swift", "dotnet", "mvn", "gradle", "gradlew", "turbo", "nx", "flutter", "xcrun", "mix", "zig":
-            return buildVerbs.contains(verb) || testVerbs.contains(verb)
+            return buildVerbs.contains(verb) || testVerbs.contains(verb) || checkVerbs.contains(verb)
         case "npm", "pnpm", "yarn", "bun", "deno":
             let script = verb == "run" ? tokens.arguments.dropFirst().first { !$0.hasPrefix("-") } : verb
-            return script.map { $0 == "build" || $0 == "test" || $0.hasPrefix("build:") || $0.hasPrefix("test:") } ?? false
+            return script.map { script in
+                buildScripts.contains(script) || buildScripts.contains { script.hasPrefix($0 + ":") }
+            } ?? false
         default:
             return tokens.mentions(["next build", "vite build", "webpack --mode production", "nuxt build", "astro build"])
         }
+    }
+
+    /// By what the process runs, not the package it comes from: a language
+    /// server shipped in the pyright package is not a one-shot check.
+    private static func isOneShotChecker(_ tokens: WorkloadTokens) -> Bool {
+        let runs = [tokens.name, tokens.argv0, tokens.executable, tokens.script ?? ""]
+        guard runs.contains(where: oneShotCheckers.contains) else { return false }
+        return !tokens.arguments.contains { servingArguments.contains($0) || $0.hasPrefix("--watch=") }
     }
 
     public static func isDevServer(_ tokens: WorkloadTokens) -> Bool {

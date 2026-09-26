@@ -84,6 +84,50 @@ final class CPUBehaviorTests: XCTestCase {
         XCTAssertTrue(spinner.forecast.whyNow.contains("busy-looping on one core"), spinner.forecast.whyNow)
     }
 
+    /// Whole-project typechecks and lints hold one core for minutes and end
+    /// by themselves: build work, not a busy loop.
+    func testOneShotTypecheckIsNotASpin() throws {
+        let checkers: [(name: String, path: String, command: String)] = [
+            ("node", "/usr/local/bin/node", "node /Users/dev/app/node_modules/typescript/bin/tsc --noEmit -p ."),
+            ("node", "/usr/local/bin/node", "node /Users/dev/app/node_modules/.bin/eslint ."),
+            ("python3.12", "/opt/homebrew/bin/python3.12", "python3.12 .venv/bin/mypy src"),
+        ]
+        for checker in checkers {
+            var jitter = Fixture.Jitter(seed: 7)
+            let families = run(minutes: 3.5) { _, date, clock in
+                [self.process(210, name: checker.name, path: checker.path, command: checker.command,
+                              cpu: 99 + jitter.next(amplitude: 1), clock: clock, at: date)]
+            }
+            let family = try XCTUnwrap(families.first, checker.command)
+            XCTAssertNotEqual(family.forecast.cpuBehavior?.kind, .spin, checker.command)
+            XCTAssertNotEqual(family.forecast.state, .runaway, checker.command)
+            XCTAssertNotEqual(family.forecast.recommendedAction.action, .suggestKill, checker.command)
+            XCTAssertNotEqual(family.forecast.recommendedAction.title, "Preview Stop Tree", checker.command)
+        }
+    }
+
+    func testCheckerCommandsAreBuildWork() {
+        let builds = [
+            "cargo clippy --all-targets", "cargo doc", "cargo bench", "cargo fmt --check", "go vet ./...", "go generate ./...",
+            "npm run lint", "pnpm typecheck", "yarn check", "npm run typecheck:app",
+            "node /Users/dev/app/node_modules/vue-tsc/bin/vue-tsc.js --noEmit", "node /Users/dev/app/node_modules/.bin/prettier --check .",
+            "python3 -m ruff check .", "python3 -m black --check src", "python3 -m pylint pkg",
+            "node /Users/dev/app/node_modules/.bin/webpack --mode development",
+        ]
+        for command in builds {
+            let tokens = WorkloadTokens(name: String(command.split(separator: " ")[0]), path: "", command: command)
+            XCTAssertTrue(WorkloadCatalog.isBuildOrTest(tokens), command)
+        }
+        let services = [
+            "node /Users/dev/app/node_modules/typescript/bin/tsc --watch", "node /Users/dev/app/node_modules/.bin/webpack serve",
+            "node /Users/dev/app/node_modules/.bin/eslint --stdio", "ruff server", "biome lsp-proxy", "node server.js",
+        ]
+        for command in services {
+            let tokens = WorkloadTokens(name: String(command.split(separator: " ")[0]), path: "", command: command)
+            XCTAssertFalse(WorkloadCatalog.isBuildOrTest(tokens), command)
+        }
+    }
+
     /// A few cores on a twelve-core Mac is a busy app, not an emergency:
     /// the automatic CPU limit scales with the Mac, and CPU is sustained
     /// only after the ledger or a 90 s window proves it.
