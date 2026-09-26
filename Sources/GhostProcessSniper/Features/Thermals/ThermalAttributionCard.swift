@@ -29,17 +29,12 @@ struct ThermalAttributionCard: View {
     }
 
     private var earlierWork: ThermalRecentContributor? {
-        guard isFresh else { return nil }
-        return summary.recentContributors.first {
-            $0.lastActiveAt < summary.sampledAt &&
-            (0...ThermalActivityHistory.maximumAge).contains(now.timeIntervalSince($0.lastActiveAt))
-        }
+        isFresh ? summary.earlierContributor(at: now) : nil
     }
 
     private var scopeTitle: String {
         if !isFresh { return "Outdated scan" }
         if summary.observedProcessCount == 0 { return "No process data yet" }
-        if summary.coverage == .monitoredFamilies { return "Selected processes" }
         return summary.cpuObservedProcessCount < summary.observedProcessCount ||
             summary.gpuObservedProcessCount < summary.observedProcessCount ? "Partial resource readings" : "Process scan"
     }
@@ -47,8 +42,7 @@ struct ThermalAttributionCard: View {
     private var scopeDetail: String {
         guard isFresh else { return "Scan again before using app activity to explain current heat." }
         guard summary.observedProcessCount > 0 else { return "No process readings yet." }
-        let scope = summary.coverage == .processInventory ? "processes seen" : "monitored processes seen"
-        return "At the scan, of \(summary.observedProcessCount) \(scope), CPU was measured for \(summary.cpuObservedProcessCount) and GPU was reported for \(summary.gpuObservedProcessCount)."
+        return "At the scan, of \(summary.observedProcessCount) processes seen, CPU was measured for \(summary.cpuObservedProcessCount) and GPU was reported for \(summary.gpuObservedProcessCount)."
     }
 
     var body: some View {
@@ -85,8 +79,8 @@ struct ThermalAttributionCard: View {
 
             HStack(alignment: .top, spacing: 7) {
                 Image(systemName: isFresh && summary.cpuObservedProcessCount == summary.observedProcessCount &&
-                      summary.gpuObservedProcessCount == summary.observedProcessCount &&
-                      summary.coverage == .processInventory ? "checkmark.circle" : "info.circle")
+                      summary.gpuObservedProcessCount == summary.observedProcessCount
+                      ? "checkmark.circle" : "info.circle")
                     .foregroundStyle(RadarTheme.brand)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {

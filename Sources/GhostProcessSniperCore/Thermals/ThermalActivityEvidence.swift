@@ -9,7 +9,7 @@ public enum ThermalActivitySort: String, CaseIterable, Identifiable, Sendable {
 }
 
 public enum ThermalActivityCoverage: Equatable, Sendable {
-    case monitoredFamilies
+    /// Every sampled process is projected, independent of radar family filters.
     case processInventory
 }
 
@@ -70,18 +70,6 @@ public extension ThermalContributor {
         let cpu = cpuCapacityPercent(at: now)
         let gpu = gpuActivityPercent(at: now)
         return (cpu != nil && (cpuPercent >= 80 || (cpu ?? 0) >= 10)) || (gpu ?? 0) >= 15
-    }
-
-    var activityLabel: String {
-        activityLabel(at: measuredAt)
-    }
-
-    func activityLabel(at now: Date) -> String {
-        let cpu = cpuCapacityPercent(at: now) ?? 0
-        let gpu = gpuActivityPercent(at: now) ?? 0
-        if cpu >= 15 && gpu >= 15 { return "CPU and GPU active" }
-        if gpu > cpu && gpu >= 5 { return "Graphics activity" }
-        return cpu >= 15 ? "High CPU activity" : "CPU activity"
     }
 
     var suggestedAction: String {

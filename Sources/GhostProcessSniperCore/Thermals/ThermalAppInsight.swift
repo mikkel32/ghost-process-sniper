@@ -27,10 +27,7 @@ public struct ThermalAppInsight: Equatable, Sendable {
         let active = rows.filter { $0.isSubstantial(at: now) }.max {
             ($0.observedActivity(at: now) ?? 0) < ($1.observedActivity(at: now) ?? 0)
         }
-        let recent = heatNeedsReview ? activity.recentContributors.first(where: {
-            $0.lastActiveAt < activity.sampledAt && (0...ThermalActivityHistory.maximumAge)
-                .contains(now.timeIntervalSince($0.lastActiveAt))
-        }) : nil
+        let recent = heatNeedsReview ? activity.earlierContributor(at: now) : nil
         if active == nil, let recent {
             let seconds = Int(max(0, now.timeIntervalSince(recent.lastActiveAt)).rounded())
             let span = recent.activeSpanSeconds

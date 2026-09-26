@@ -34,14 +34,6 @@ public struct ThermalTemperatureAssessment: Equatable, Sendable {
         return hottestCelsius.formatted(.number.precision(.fractionLength(1))) + "°C"
     }
 
-    public var persistenceText: String? {
-        let duration = band.rawValue >= ThermalTemperatureBand.hot.rawValue
-            ? trajectory.hotSeconds : trajectory.warmSeconds
-        guard duration >= 30 else { return nil }
-        let label = band.rawValue >= ThermalTemperatureBand.hot.rawValue ? "80°C+" : "70°C+"
-        return "\(label) in samples spanning \(Int(duration))s"
-    }
-
     public static func evaluate(snapshot: ThermalSnapshot, observations: ThermalObservationWindow = .init(),
                                 at now: Date) -> Self {
         let age = now.timeIntervalSince(snapshot.sampledAt)

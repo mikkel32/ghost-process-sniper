@@ -121,14 +121,6 @@ public actor ThermalSampler {
         let cpu = readings(cpuKeys)
         let gpu = readings(gpuKeys)
         let keys = (cpu + gpu).map(\.0)
-        let state: String
-        switch ProcessInfo.processInfo.thermalState {
-        case .nominal: state = "Nominal"
-        case .fair: state = "Elevated"
-        case .serious: state = "Serious"
-        case .critical: state = "Critical"
-        @unknown default: state = "Unknown"
-        }
         let hottestCPU = cpu.max { $0.1 < $1.1 }
         let hottestGPU = gpu.max { $0.1 < $1.1 }
         snapshot = ThermalSnapshot(
@@ -137,7 +129,7 @@ public actor ThermalSampler {
             gpuCelsius: hottestGPU?.1,
             sensorCount: keys.count,
             sensorKeys: keys,
-            systemState: state,
+            systemState: ThermalPressureReading.current(at: now).systemStateLabel,
             unavailableReason: keys.isEmpty ? (cpuKeys.isEmpty ? "Sensor mapping is not verified for this Mac" : "Hardware sensors could not be read") : nil,
             cpuSensorKey: hottestCPU?.0,
             gpuSensorKey: hottestGPU?.0,

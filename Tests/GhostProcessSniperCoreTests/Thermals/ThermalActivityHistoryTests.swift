@@ -62,7 +62,7 @@ final class ThermalActivityHistoryTests: XCTestCase {
             executablePath: "/Applications/Browser.app/Contents/MacOS/Browser",
             cpuPercent: 100, gpuPercent: 0, measuredAt: later)
         let current = history.record(ThermalActivitySummary.build(samples: [browser], now: later,
-            processorCount: 10, coverage: .processInventory), at: later)
+            processorCount: 10), at: later)
         let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(84, at: later), activity: current, at: later)
         let insight = ThermalAppInsight.evaluate(activity: current, diagnosis: diagnosis, at: later)
         XCTAssertEqual(insight.kind, .active)
@@ -117,7 +117,7 @@ final class ThermalActivityHistoryTests: XCTestCase {
             executablePath: "/Applications/Editor.app/Contents/MacOS/Editor",
             cpuPercent: cpu, gpuPercent: 0, measuredAt: date)
         return ThermalActivitySummary.build(samples: [sample], now: date,
-                                            processorCount: 10, coverage: .processInventory)
+                                            processorCount: 10)
     }
 
     private func snapshot(_ temperature: Double, at date: Date) -> ThermalSnapshot {

@@ -9,12 +9,9 @@ public struct ThermalDiagnosis: Equatable, Sendable {
 
     /// The platform's pressure state is retained independently of our review bands.
     public let state: State
-    /// Compatibility label for the platform signal. Use reviewStatus for the combined headline.
-    public let status: String
     public let reviewStatus: String
     public let headline: String
     public let explanation: String
-    public let nextStep: String
     public let coverageText: String
     public let isActivityFresh: Bool
     public let temperature: ThermalTemperatureAssessment
@@ -102,17 +99,8 @@ public struct ThermalDiagnosis: Equatable, Sendable {
                 explanation = "\(pressure) \(activity)"
             }
         }
-        let nextStep = workload.nextStep(temperature: temperature,
-                                         pressureIsHigh: state == .warm || state == .serious || state == .critical)
-        let pressureStatus = switch state {
-        case .checking: "Checking"
-        case .normal: "Normal pressure"
-        case .warm: "Elevated pressure"
-        case .serious: "High pressure"
-        case .critical: "Critical pressure"
-        }
-        return Self(state: state, status: pressureStatus, reviewStatus: status, headline: headline, explanation: explanation,
-                    nextStep: nextStep, coverageText: workload.coverageText, isActivityFresh: workload.isFresh,
+        return Self(state: state, reviewStatus: status, headline: headline, explanation: explanation,
+                    coverageText: workload.coverageText, isActivityFresh: workload.isFresh,
                     temperature: temperature, pressureText: pressureText)
     }
 }

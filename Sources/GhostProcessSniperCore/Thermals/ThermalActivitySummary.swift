@@ -41,7 +41,7 @@ public struct ThermalActivitySummary: Equatable, Sendable {
     private let gpuContributors: [ThermalContributor]
 
     public init(sampledAt: Date, contributors: [ThermalContributor], observedProcessCount: Int,
-                unavailableProcessCount: Int, coverage: ThermalActivityCoverage = .monitoredFamilies,
+                unavailableProcessCount: Int, coverage: ThermalActivityCoverage = .processInventory,
                 cpuObservedProcessCount: Int = 0, gpuObservedProcessCount: Int = 0,
                 recentContributors: [ThermalRecentContributor] = [], historySampleCount: Int = 0,
                 historySpanSeconds: TimeInterval = 0,
@@ -106,6 +106,14 @@ public struct ThermalActivitySummary: Equatable, Sendable {
         }
     }
 
+    /// The most recent app that was busy before this scan and is quiet or unmeasured now.
+    public func earlierContributor(at now: Date) -> ThermalRecentContributor? {
+        recentContributors.first {
+            $0.lastActiveAt < sampledAt &&
+                (0...ThermalActivityHistory.maximumAge).contains(now.timeIntervalSince($0.lastActiveAt))
+        }
+    }
+
     func includingHistory(_ recent: [ThermalRecentContributor], sampleCount: Int,
                           spanSeconds: TimeInterval) -> Self {
         Self(sampledAt: sampledAt, contributors: contributors, observedProcessCount: observedProcessCount,
@@ -119,7 +127,7 @@ public struct ThermalActivitySummary: Equatable, Sendable {
         samples: [ThermalActivitySample],
         now: Date,
         processorCount: Int,
-        coverage: ThermalActivityCoverage = .monitoredFamilies
+        coverage: ThermalActivityCoverage = .processInventory
     ) -> ThermalActivitySummary {
         var unique: [ProcessIdentity: ThermalActivitySample] = [:]
         for sample in samples {
