@@ -8,7 +8,12 @@ public struct GhostHeat: Equatable, Sendable {
     public let level: GhostLevel
     public let confidence: Double
     public let evidence: [String]
+    /// Trend-proven persistence only (sustained CPU or a sustained leak).
+    /// History gates read this, so it must never count context.
     public let sustainedSignalCount: Int
+    /// Context votes that corroborate urgency without proving persistence:
+    /// a learned-baseline anomaly or host memory pressure.
+    public let corroborationCount: Int
 
     public static let quiet = GhostHeat(
         value: 0,
@@ -23,13 +28,28 @@ public struct GhostHeat: Equatable, Sendable {
         level: GhostLevel,
         confidence: Double,
         evidence: [String],
-        sustainedSignalCount: Int
+        sustainedSignalCount: Int,
+        corroborationCount: Int = 0
     ) {
         self.value = min(100, max(0, value))
         self.level = level
         self.confidence = min(1, max(0, confidence))
         self.evidence = Array(evidence.prefix(5))
         self.sustainedSignalCount = max(0, sustainedSignalCount)
+        self.corroborationCount = max(0, corroborationCount)
+    }
+
+    /// A copy with presentation-level changes that keeps confidence and both
+    /// vote counts, for suppression, hysteresis and visibility floors.
+    public func replacing(value: Double? = nil, level: GhostLevel? = nil, evidence: [String]? = nil) -> GhostHeat {
+        GhostHeat(
+            value: value ?? self.value,
+            level: level ?? self.level,
+            confidence: confidence,
+            evidence: evidence ?? self.evidence,
+            sustainedSignalCount: sustainedSignalCount,
+            corroborationCount: corroborationCount
+        )
     }
 
     public var valueText: String {
@@ -42,9 +62,9 @@ public struct GhostHeat: Equatable, Sendable {
 
     /// Heat can react quickly, while disruptive product behavior waits for
     /// corroboration. Critical heat is always actionable; ordinary Hot heat
-    /// needs either reasonable confidence or a sustained signal.
+    /// needs reasonable confidence, a sustained signal, or two context votes.
     public var isConfirmed: Bool {
-        level >= .critical || confidence >= 0.45 || sustainedSignalCount > 0
+        level >= .critical || confidence >= 0.45 || sustainedSignalCount > 0 || corroborationCount >= 2
     }
 
     public var shouldRecordIncident: Bool {
@@ -183,7 +203,7 @@ public enum GhostHeatModel {
     ) -> GhostHeat {
         var heat = base.value
         var evidence = base.evidence
-        var corroboration = base.sustainedSignalCount
+        var contextVotes = base.corroborationCount
         var confidence = base.confidence
 
         if let baseline, baseline.isMeasurementTrusted {
@@ -193,7 +213,7 @@ public enum GhostHeatModel {
                 heat += min(14, (memoryMultiple - 1) * 7)
                 evidence.append(String(format: "Memory is %.1fx this family's learned normal", memoryMultiple))
                 confidence += 0.08
-                if memoryMultiple >= 2.2 { corroboration += 1 }
+                if memoryMultiple >= 2.2 { contextVotes += 1 }
                 if memoryMultiple >= 3 {
                     heat = max(60, heat)
                     confidence = max(0.5, confidence)
@@ -222,7 +242,7 @@ public enum GhostHeatModel {
             }
             evidence.append("Host memory pressure is \(pressure.level.label.lowercased())")
             confidence += 0.08
-            corroboration += 1
+            contextVotes += 1
         }
 
         let forecastIsHeatTrusted = forecast.confidence >= 0.55 && family.trend.hasSustainedHistory &&
@@ -249,6 +269,9 @@ public enum GhostHeatModel {
         heat = min(100, heat)
         confidence = min(1, confidence)
 
+        // Levels weigh persistence and context together; only the history
+        // gates distinguish them.
+        let corroboration = base.sustainedSignalCount + contextVotes
         let criticalForecast = forecastIsHeatTrusted && forecast.confidence >= 0.62 && forecast.state >= .runaway
         let refinedLevel: GhostLevel
         if heat >= 80, confidence >= 0.62, (corroboration >= 2 || criticalForecast || pressure.level == .critical) {
@@ -268,7 +291,8 @@ public enum GhostHeatModel {
             level: level,
             confidence: confidence,
             evidence: evidence,
-            sustainedSignalCount: corroboration
+            sustainedSignalCount: base.sustainedSignalCount,
+            corroborationCount: contextVotes
         )
     }
 }

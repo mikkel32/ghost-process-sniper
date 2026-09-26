@@ -225,13 +225,7 @@ struct RadarHysteresis: Sendable {
                 level: level,
                 reasons: family.score.reasons + ["held briefly to avoid flicker"],
                 components: family.score.components,
-                heat: GhostHeat(
-                    value: family.score.heat.value,
-                    level: level,
-                    confidence: family.score.heat.confidence,
-                    evidence: family.score.heat.evidence,
-                    sustainedSignalCount: family.score.heat.sustainedSignalCount
-                )
+                heat: family.score.heat.replacing(level: level)
             )
             return family.enriched(score: score)
         }

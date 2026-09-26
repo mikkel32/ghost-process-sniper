@@ -52,3 +52,36 @@ final class HeatEvidenceTests: XCTestCase {
         XCTAssertFalse(RadarRuleEngine().suggestions(for: climbing, rules: [rule], now: Fixture.now).isEmpty)
     }
 }
+
+final class CorroborationHistoryTests: XCTestCase {
+    private typealias Fixture = IntelligenceFixture
+    private let warning = SystemMemoryPressure(level: .warning, usedFraction: 0.88, totalBytes: 16 * 1_073_741_824,
+                                               availableBytes: 2 * 1_073_741_824, compressedBytes: 1_073_741_824)
+
+    func testHostPressureIsNotHistory() throws {
+        var window = TrendWindow()
+        let context = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: warning)
+        let family = try XCTUnwrap(Fixture.scored([Fixture.process(megabytes: 1_300, cpu: 2)], context: context, window: &window).first)
+
+        XCTAssertEqual(family.trend.sampleCount, 1)
+        XCTAssertEqual(family.score.heat.sustainedSignalCount, 0)
+        XCTAssertGreaterThanOrEqual(family.score.heat.corroborationCount, 1)
+        XCTAssertFalse(family.forecastIsCredibleEscalation)
+        let verdict = FamilyVerdict.synthesize(family: family, pattern: family.trend.resolvedPattern)
+        XCTAssertFalse(verdict.headline.hasPrefix("Leak"), verdict.headline)
+    }
+
+    func testSustainedGrowthUnderPressureStillEscalates() throws {
+        var window = TrendWindow()
+        let context = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: warning)
+        var family: ProcessFamily?
+        for step in 0..<6 {
+            let date = Fixture.now.addingTimeInterval(Double(step - 5) * 4)
+            let process = Fixture.process(megabytes: 1_300 + Double(step) * 200 * 4 / 60, cpu: 2, date: date)
+            family = Fixture.scored([process], context: context, window: &window, at: date).first
+        }
+        let growing = try XCTUnwrap(family)
+        XCTAssertTrue(growing.forecastIsCredibleEscalation)
+        XCTAssertGreaterThanOrEqual(growing.forecast.state, .leaking)
+    }
+}

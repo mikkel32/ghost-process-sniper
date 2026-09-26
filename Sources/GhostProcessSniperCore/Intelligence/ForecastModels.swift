@@ -281,7 +281,13 @@ public extension ProcessFamily {
     /// history requirement next to the family so every subsystem uses the same
     /// credibility policy.
     var forecastHasUsefulHistory: Bool {
-        trend.sampleCount >= 3 || score.heat.sustainedSignalCount > 0
+        forecastHasUsefulHistory(heat: score.heat)
+    }
+
+    /// Only trend-proven persistence substitutes for samples; baseline and
+    /// host-pressure votes (corroborationCount) never do.
+    func forecastHasUsefulHistory(heat: GhostHeat) -> Bool {
+        trend.sampleCount >= 3 || heat.sustainedSignalCount > 0
     }
 
     var forecastHasEscalationHistory: Bool {

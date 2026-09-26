@@ -246,8 +246,7 @@ public struct RadarIntelligence: Sendable {
         forecast: RiskForecast,
         family: ProcessFamily
     ) -> GhostScore {
-        let hasEnoughHistory = family.trend.sampleCount >= 3 || score.heat.sustainedSignalCount > 0
-        guard forecast.isCredibleEarlyWarning, hasEnoughHistory else {
+        guard forecast.isCredibleEarlyWarning, family.forecastHasUsefulHistory(heat: score.heat) else {
             return score
         }
         let impact: Double = switch forecast.state {
@@ -455,7 +454,7 @@ public struct RadarIntelligence: Sendable {
                         level: .quiet
                     )
                 ],
-                heat: GhostHeat(value: min(score.heat.value, 12), level: .quiet, confidence: score.heat.confidence, evidence: ["Muted by ignore rule"], sustainedSignalCount: score.heat.sustainedSignalCount)
+                heat: score.heat.replacing(value: min(score.heat.value, 12), level: .quiet, evidence: ["Muted by ignore rule"])
             )
         }
         if suggestions.contains(where: { $0.type == .snooze }) {
@@ -473,7 +472,7 @@ public struct RadarIntelligence: Sendable {
                         level: .watch
                     )
                 ],
-                heat: GhostHeat(value: min(score.heat.value, 29), level: .watch, confidence: score.heat.confidence, evidence: ["Temporarily snoozed"], sustainedSignalCount: score.heat.sustainedSignalCount)
+                heat: score.heat.replacing(value: min(score.heat.value, 29), level: .watch, evidence: ["Temporarily snoozed"])
             )
         }
         return score

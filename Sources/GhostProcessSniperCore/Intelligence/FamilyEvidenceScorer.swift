@@ -205,7 +205,8 @@ struct FamilyEvidenceScorer: Sendable {
                 level: .watch,
                 confidence: max(0.5, heat.confidence),
                 evidence: heat.evidence + ["\(duplicateCluster.memberCount) independent matching instances need review"],
-                sustainedSignalCount: heat.sustainedSignalCount
+                sustainedSignalCount: heat.sustainedSignalCount,
+                corroborationCount: heat.corroborationCount
             )
         }
 
