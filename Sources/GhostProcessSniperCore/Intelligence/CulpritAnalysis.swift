@@ -54,8 +54,8 @@ public struct CulpritAnalysis: Equatable, Sendable {
         case .pythonService:
             likelyCause = "Python service, notebook, or worker process is active"
             nextAction = hasCredibleForecast ? forecastActionDetail : (growth > 0 ? "Inspect cwd and restart the service before it crosses the threshold." : "Inspect command and stop it from its terminal if expected.")
-        case .dockerHelper:
-            likelyCause = "Container or VM helper is backing a dev workload"
+        case .containerRuntime:
+            likelyCause = "Container or VM runtime is backing a dev workload"
             nextAction = hasCredibleForecast ? forecastActionDetail : "Inspect ports and project path, then stop the compose/VM workload if stale."
         case .localModelRunner:
             likelyCause = "Local model runner has a large resident footprint"
@@ -90,6 +90,27 @@ public struct CulpritAnalysis: Equatable, Sendable {
         case .dotnetService:
             likelyCause = ".NET service, dotnet watch reloader, or build target is active"
             nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command, then Kill Tree if dotnet reloader is stale." : "Terminate the active dotnet session or reload server.")
+        case .languageServer:
+            likelyCause = growth > 0 ? "Language server is growing its project model" : "Language server is indexing or holding a project model"
+            nextAction = hasCredibleForecast ? forecastActionDetail : "Language servers restart automatically when stopped; restart it from the editor if it keeps growing."
+        case .testRunner:
+            likelyCause = "Test runner or its worker pool is running"
+            nextAction = hasCredibleForecast ? forecastActionDetail : "Let the run finish; stop the watch session from its terminal when you are done testing."
+        case .buildWatcher:
+            likelyCause = "Build watcher is rebuilding on file changes"
+            nextAction = hasCredibleForecast ? forecastActionDetail : "Stop the watch task from its terminal if the project is closed."
+        case .dataStore:
+            likelyCause = "Database or data store is holding memory for its caches"
+            nextAction = hasCredibleForecast ? forecastActionDetail : "Databases: stop with the service manager (brew services, pg_ctl) to avoid crash recovery."
+        case .simulator:
+            likelyCause = "Simulator runtime and its apps are running"
+            nextAction = hasCredibleForecast ? forecastActionDetail : "Shut down unused simulators from Xcode or with xcrun simctl shutdown all."
+        case .ideService:
+            likelyCause = "IDE indexing or preview service is working"
+            nextAction = hasCredibleForecast ? forecastActionDetail : "Let indexing finish; if it stays busy, restart the IDE rather than the service."
+        case .editorApp:
+            likelyCause = family.childCount >= 4 ? "Editor with many windows, extensions or helpers" : "Editor or IDE is using resources"
+            nextAction = hasCredibleForecast ? forecastActionDetail : "Close unused windows or heavy extensions; quit the app normally to keep unsaved work."
         case .cliTool:
             likelyCause = "Developer CLI process is still running in the background"
             nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect and Kill Tree if this command is stale." : "Inspect owner before taking action.")

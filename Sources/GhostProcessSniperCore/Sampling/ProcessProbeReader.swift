@@ -3,13 +3,6 @@ import Foundation
 
 /// Reads the cheap identity graph before spending the bounded enrichment budget.
 enum ProcessProbeReader {
-    private static let developerNames: Set<String> = [
-        "node", "npm", "pnpm", "yarn", "bun", "vite", "deno", "python", "python3",
-        "ruby", "rails", "java", "gradle", "mvn", "docker", "com.docker.backend",
-        "colima", "ollama", "swift", "swift-frontend", "swift-build", "xcodebuild",
-        "electron", "uvicorn", "gunicorn", "webpack", "next"
-    ]
-
     static func read(_ pids: [pid_t], startIndex: Int, endIndex: Int,
                      plan: SamplingPlan, deadline: SamplerDeadline, pass: UInt64, budget: Int) -> ParallelProbeResult {
         var samples: [RawProcessSample] = []
@@ -93,7 +86,7 @@ enum ProcessProbeReader {
 
     private static func isDeveloperName(_ name: String) -> Bool {
         let lowered = name.lowercased()
-        return developerNames.contains(lowered) || lowered.contains("electron") ||
+        return WorkloadCatalog.probeHintNames.contains(lowered) || lowered.contains("electron") ||
             lowered.contains("vite") || lowered.contains("ollama") ||
             lowered.contains("llama") || lowered.contains("node")
     }

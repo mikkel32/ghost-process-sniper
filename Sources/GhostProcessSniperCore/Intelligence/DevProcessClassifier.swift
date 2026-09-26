@@ -5,7 +5,9 @@ public enum DevProcessKind: String, Codable, CaseIterable, Sendable {
     case nodeServer
     case electronApp
     case pythonService
-    case dockerHelper
+    /// Stored as "dockerHelper", its name before it covered every container
+    /// and VM runtime, so persisted kinds and kill learning keep matching.
+    case containerRuntime = "dockerHelper"
     case localModelRunner
     case javaServer
     case rubyServer
@@ -17,15 +19,25 @@ public enum DevProcessKind: String, Codable, CaseIterable, Sendable {
     case phpService
     case elixirService
     case dotnetService
+    case languageServer
+    case testRunner
+    case buildWatcher
+    case dataStore
+    case simulator
+    case ideService
+    case editorApp
     case cliTool
     case unknownHeavy
+
+    /// The old name of `containerRuntime`.
+    public static var dockerHelper: DevProcessKind { .containerRuntime }
 
     public var label: String {
         switch self {
         case .nodeServer: "Node server"
         case .electronApp: "Electron app"
         case .pythonService: "Python service"
-        case .dockerHelper: "Docker helper"
+        case .containerRuntime: "Container runtime"
         case .localModelRunner: "Model runner"
         case .javaServer: "Java server"
         case .rubyServer: "Ruby server"
@@ -37,8 +49,24 @@ public enum DevProcessKind: String, Codable, CaseIterable, Sendable {
         case .phpService: "PHP service"
         case .elixirService: "Elixir service"
         case .dotnetService: ".NET service"
+        case .languageServer: "Language server"
+        case .testRunner: "Test runner"
+        case .buildWatcher: "Build watcher"
+        case .dataStore: "Database"
+        case .simulator: "Simulator"
+        case .ideService: "IDE service"
+        case .editorApp: "Editor"
         case .cliTool: "CLI tool"
         case .unknownHeavy: "Heavy process"
+        }
+    }
+
+    /// Long-running helpers that serve an editor or a project and that a
+    /// family boundary should keep separate from what launched them.
+    public var isServiceKind: Bool {
+        switch self {
+        case .languageServer, .dataStore, .localModelRunner, .testRunner, .buildWatcher: true
+        default: false
         }
     }
 }
@@ -47,11 +75,15 @@ public struct DevClassification: Equatable, Sendable {
     public let kind: DevProcessKind
     public let confidence: Double
     public let reason: String
+    /// What the process is for beyond its kind: dev server, build or test
+    /// work, long-lived service, notebook kernel.
+    public let traits: WorkloadTraits
 
-    public init(kind: DevProcessKind, confidence: Double, reason: String) {
+    public init(kind: DevProcessKind, confidence: Double, reason: String, traits: WorkloadTraits = []) {
         self.kind = kind
         self.confidence = confidence
         self.reason = reason
+        self.traits = traits
     }
 
     /// Picks the representative classification of a group: kinds that own
@@ -62,7 +94,7 @@ public struct DevClassification: Equatable, Sendable {
             0
         case .cliTool:
             0.03
-        case .electronApp, .localModelRunner, .dockerHelper:
+        case .electronApp, .localModelRunner, .containerRuntime, .editorApp:
             0.2
         default:
             0.12
@@ -75,7 +107,8 @@ public struct DevProcessClassifier: Sendable {
     private let strongNames: Set<String>
     private let strongMarkers: [String]
     private let weakMarkers: [String]
-    private let kindMarkers: KindMarkers
+    /// User-supplied markers keep plain substring matching.
+    private let customMarkers: [String]
 
     public init(additionalCommandMarkers: [String] = []) {
         self.strongNames = [
@@ -88,6 +121,8 @@ public struct DevProcessClassifier: Sendable {
             "php", "php-fpm", "artisan", "frankenphp", "composer",
             "beam.smp", "elixir", "iex", "mix", "dotnet"
         ]
+        // Single words match whole words only; phrases and paths match as
+        // substrings of the command and path.
         self.strongMarkers = [
             "electron framework", "electron helper", "code helper", "cursor helper",
             "node_modules", "vite", "webpack", "next dev", "npm run",
@@ -103,36 +138,41 @@ public struct DevProcessClassifier: Sendable {
             "watchexec", "nodemon", "tsx", "ts-node", "app-server",
             "/applications/codex.app", "/applications/cursor.app",
             "/applications/visual studio code.app"
-        ] + additionalCommandMarkers.map { $0.lowercased() }
+        ]
         self.weakMarkers = [
             "python", "ruby", "java", "docker", "go run", "pytest",
             "localhost", "server", "watch", "repl", "debug", "build",
             "swiftpm", ".build", "package.swift", "cargo", "rustc",
             "deno", "php", "composer", "mix", "dotnet"
         ]
-        self.kindMarkers = KindMarkers()
+        self.customMarkers = additionalCommandMarkers.map { $0.lowercased() }.filter { !$0.isEmpty }
     }
 
     public func confidence(for process: ProcessMetrics) -> Double {
-        confidence(for: NormalizedProcessText(process))
+        confidence(for: WorkloadTokens(process))
     }
 
-    private func confidence(for text: NormalizedProcessText) -> Double {
+    private func confidence(for tokens: WorkloadTokens) -> Double {
         var score = 0.0
 
-        if strongNames.contains(text.name) {
+        if strongNames.contains(tokens.name) {
             score += 0.75
         }
-        if let executableName = text.executableName, strongNames.contains(executableName) {
+        if !tokens.executable.isEmpty, strongNames.contains(tokens.executable) {
             score += 0.55
         }
-        if containsAny(strongMarkers, in: text.combined) {
+        if tokens.mentions(strongMarkers) || customMarkers.contains(where: { tokens.lowerCommand.contains($0) || tokens.lowerPath.contains($0) }) {
             score += 0.65
         }
-        if containsAny(weakMarkers, in: text.combined) {
+        if tokens.mentions(weakMarkers) {
             score += 0.25
         }
-        if containsAnyPathRoot(in: text.path) {
+        // A binary running out of a project's build output is dev work.
+        if tokens.mentions(Self.buildOutputDirectories) {
+            score += 0.4
+        }
+        if tokens.pathComponents.contains("developer") || tokens.lowerPath.hasPrefix("/usr/local/") ||
+            tokens.lowerPath.hasPrefix("/opt/homebrew/") {
             score += 0.12
         }
 
@@ -140,70 +180,94 @@ public struct DevProcessClassifier: Sendable {
     }
 
     public func classification(for process: ProcessMetrics) -> DevClassification {
-        let text = NormalizedProcessText(process)
-        let confidence = confidence(for: text)
+        classification(for: WorkloadTokens(process))
+    }
 
-        let kind: DevProcessKind
-        let reason: String
-        if text.containsAny(kindMarkers.electron) {
-            kind = .electronApp
-            reason = "Electron helper/app signature"
-        } else if text.name == "bun" || text.containsAny(kindMarkers.bun) {
-            kind = .bunServer
-            reason = "Bun server runtime/process"
-        } else if text.name == "deno" || text.containsAny(kindMarkers.deno) {
-            kind = .denoServer
-            reason = "Deno server runtime/process"
-        } else if kindMarkers.nodeNames.contains(text.name) || text.containsAny(kindMarkers.node) {
-            kind = .nodeServer
-            reason = "JavaScript dev server/runtime"
-        } else if text.containsAny(kindMarkers.modelRunner) {
-            kind = .localModelRunner
-            reason = "Local model runner"
-        } else if text.containsAny(kindMarkers.docker) {
-            kind = .dockerHelper
-            reason = "Container or VM helper"
-        } else if text.name.hasPrefix("python") || text.containsAny(kindMarkers.python) {
-            kind = .pythonService
-            reason = "Python service or notebook"
-        } else if kindMarkers.phpNames.contains(text.name) || text.containsAny(kindMarkers.php) {
-            kind = .phpService
-            reason = "PHP or Laravel developer service"
-        } else if kindMarkers.elixirNames.contains(text.name) || text.containsAny(kindMarkers.elixir) {
-            kind = .elixirService
-            reason = "Elixir/Phoenix service or runner"
-        } else if text.name == "dotnet" || text.containsAny(kindMarkers.dotnet) || cContains(text.path, "/bin/debug/") || cContains(text.path, "/bin/release/") {
-            kind = .dotnetService
-            reason = ".NET service or compiler runner"
-        } else if text.name == "java" || text.containsAny(kindMarkers.java) {
-            kind = .javaServer
-            reason = "JVM build/server process"
-        } else if text.name == "ruby" || text.containsAny(kindMarkers.ruby) {
-            kind = .rubyServer
-            reason = "Ruby/Rails service"
-        } else if text.name == "swift" || text.name == "swift-frontend" || text.containsAny(kindMarkers.swift) {
-            kind = .swiftBuild
-            reason = "Swift build toolchain"
-        } else if ["go", "air", "dlv"].contains(text.name) || text.containsAny(kindMarkers.go) || cContains(text.path, "/go-build/") || cContains(text.path, "/go/") || cContains(text.name, "-go-") || text.name.hasSuffix("-go") || text.name.hasPrefix("go-") {
-            kind = .goService
-            reason = "Go developer service or compiler"
-        } else if text.name == "cargo" || text.name == "rustc" || cContains(text.path, "/target/debug/") || cContains(text.path, "/target/release/") || text.containsAny(kindMarkers.rust) || cContains(text.name, "-rust-") || cContains(text.name, "rust-") || text.name.hasSuffix("-rust") || text.name.hasPrefix("rust-") {
-            kind = .rustService
-            reason = "Rust developer service or compiler"
-        } else if confidence >= 0.45 {
-            kind = .cliTool
-            reason = "Developer command markers"
-        } else {
-            kind = .unknownHeavy
-            reason = "Heavy or watched process"
+    public func classification(for tokens: WorkloadTokens) -> DevClassification {
+        let confidence = confidence(for: tokens)
+        var traits: WorkloadTraits = []
+        if WorkloadCatalog.isDevServer(tokens) {
+            traits.formUnion([.devServer, .longLived])
         }
+        if WorkloadCatalog.isBuildOrTest(tokens) {
+            traits.insert(.buildOrTest)
+        }
+        if let match = WorkloadCatalog.match(tokens) {
+            return DevClassification(
+                kind: match.kind,
+                confidence: max(confidence, match.confidence),
+                reason: match.reason,
+                traits: traits.union(match.traits)
+            )
+        }
+        let (kind, reason) = languageKind(tokens, confidence: confidence, traits: &traits)
+        return DevClassification(kind: kind, confidence: confidence, reason: reason, traits: traits)
+    }
 
-        return DevClassification(kind: kind, confidence: confidence, reason: reason)
+    private func languageKind(
+        _ tokens: WorkloadTokens,
+        confidence: Double,
+        traits: inout WorkloadTraits
+    ) -> (DevProcessKind, String) {
+        let name = tokens.name
+        if tokens.mentions(["electron framework", "electron helper", "code helper", "cursor helper"]) ||
+            tokens.named(["electron"]) || tokens.pathComponents.contains("electron.app") {
+            return (.electronApp, "Electron helper/app signature")
+        }
+        if tokens.named(["bun", "bunx"]) || tokens.mentions(["bun run", "bun start", "bun dev"]) {
+            return (.bunServer, "Bun server runtime/process")
+        }
+        if tokens.named(["deno"]) || tokens.mentions(["deno run", "deno task", "deno serve"]) {
+            return (.denoServer, "Deno server runtime/process")
+        }
+        if tokens.named(Self.nodeNames) || tokens.pathComponents.contains("node_modules") || tokens.mentions(["next dev"]) {
+            return (.nodeServer, traits.contains(.devServer) ? "JavaScript dev server" : "Node.js runtime or tool")
+        }
+        if name.hasPrefix("python") || tokens.argv0.hasPrefix("python") || tokens.named(Self.pythonNames) ||
+            tokens.mentions(["manage.py runserver"]) {
+            if tokens.words.contains(where: { $0.hasPrefix("ipykernel") }) || tokens.named(["jupyter", "jupyter-lab", "jupyter-notebook"]) {
+                traits.formUnion([.notebookKernel, .longLived])
+                return (.pythonService, "Python notebook kernel")
+            }
+            return (.pythonService, "Python service or notebook")
+        }
+        if tokens.named(Self.phpNames) ||
+            tokens.mentions(["artisan serve", "artisan queue", "composer run", "composer.json", "swoole", "roadrunner"]) {
+            return (.phpService, "PHP or Laravel developer service")
+        }
+        if tokens.named(Self.elixirNames) || tokens.mentions(["mix phx.server", "mix test", "mix run", "mix.exs"]) {
+            return (.elixirService, "Elixir/Phoenix service or runner")
+        }
+        if tokens.named(["dotnet"]) || tokens.mentions(["dotnet run", "dotnet watch", "dotnet test", "dotnet build", "/bin/debug/", "/bin/release/"]) {
+            return (.dotnetService, ".NET service or compiler runner")
+        }
+        if tokens.named(["java", "gradle", "gradlew", "mvn", "mvnw"]) || tokens.mentions(["spring-boot"]) {
+            return (.javaServer, "JVM build/server process")
+        }
+        if tokens.named(["ruby", "rails", "puma", "unicorn"]) || tokens.mentions(["rails server"]) {
+            return (.rubyServer, "Ruby/Rails service")
+        }
+        if tokens.named(["swift"]) || tokens.pathComponents.contains("swiftpm") {
+            return (.swiftBuild, "Swift build toolchain")
+        }
+        if tokens.named(["go", "air", "dlv"]) || tokens.mentions(["go run", "go build"]) ||
+            tokens.pathComponents.contains("go-build") || tokens.pathComponents.contains("go") ||
+            name.contains("-go-") || name.hasSuffix("-go") || name.hasPrefix("go-") {
+            return (.goService, "Go developer service or compiler")
+        }
+        if tokens.named(["cargo", "rustc"]) || tokens.mentions(["/target/debug/", "/target/release/", "cargo run"]) ||
+            name.contains("-rust-") || name.hasPrefix("rust-") || name.hasSuffix("-rust") {
+            return (.rustService, "Rust developer service or compiler")
+        }
+        if confidence >= 0.45 {
+            return (.cliTool, "Developer command markers")
+        }
+        return (.unknownHeavy, "Heavy or watched process")
     }
 
     public func classification(for family: ProcessFamily) -> DevClassification {
         let root = classification(for: family.root)
-        let memberClassifications = family.members.map(classification(for:))
+        let memberClassifications = family.members.map { classification(for: $0) }
         let strongest = memberClassifications.max { $0.confidence < $1.confidence } ?? root
         if strongest.kind == .unknownHeavy, let signal = family.hardwareSignals.first {
             return DevClassification(
@@ -218,87 +282,18 @@ public struct DevProcessClassifier: Sendable {
         return root
     }
 
-    private func containsAny(_ markers: [String], in text: String) -> Bool {
-        cContainsAny(text, markers)
-    }
-
-    private func containsAnyPathRoot(in path: String) -> Bool {
-        cContains(path, "/developer/") ||
-            cContains(path, "/usr/local/") ||
-            cContains(path, "/opt/homebrew/")
-    }
-}
-
-private struct NormalizedProcessText {
-    let name: String
-    let path: String
-    let command: String
-    let combined: String
-    let executableName: String?
-
-    init(_ process: ProcessMetrics) {
-        name = process.name.lowercased()
-        path = process.executablePath.lowercased()
-        command = process.commandLine.lowercased()
-        combined = name + " " + path + " " + command
-        if let slash = path.lastIndex(of: "/") {
-            executableName = String(path[path.index(after: slash)...])
-        } else {
-            executableName = path.isEmpty ? nil : path
-        }
-    }
-
-    func containsAny(_ markers: [String]) -> Bool {
-        cContainsAny(combined, markers)
-    }
-}
-
-private struct KindMarkers: Sendable {
-    let nodeNames: Set<String> = ["node", "npm", "npx", "pnpm", "yarn"]
-    let phpNames: Set<String> = ["php", "php-fpm", "artisan", "frankenphp", "composer"]
-    let elixirNames: Set<String> = ["beam.smp", "elixir", "iex", "mix"]
-
-    let electron = ["electron", "code helper", "cursor helper"]
-    let bun = ["bun run", "bun start", "bun dev"]
-    let deno = ["deno run", "deno task", "deno serve"]
-    let node = ["node_modules", "vite", "next dev"]
-    let modelRunner = ["ollama", "llama", "vllm", "mlx_lm", "localai"]
-    let docker = ["docker", "colima", "qemu-system"]
-    let python = ["uvicorn", "gunicorn", "manage.py runserver", "jupyter"]
-    let php = ["artisan serve", "artisan queue", "phpunit", "composer run", "composer.json", "swoole", "roadrunner"]
-    let elixir = ["mix phx.server", "mix test", "mix run", "mix.exs"]
-    let dotnet = ["dotnet run", "dotnet watch", "dotnet test", "dotnet build"]
-    let java = ["gradle", "mvn", "spring-boot"]
-    let ruby = ["rails server"]
-    let swift = ["xcodebuild", "swiftpm"]
-    let go = ["go run", "go build"]
-    let rust = ["cargo run"]
-}
-
-private func cContains(_ haystack: String, _ needle: String) -> Bool {
-    guard !needle.isEmpty, !haystack.isEmpty else {
-        return false
-    }
-    return haystack.withCString { haystackPointer in
-        needle.withCString { needlePointer in
-            strstr(haystackPointer, needlePointer) != nil
-        }
-    }
-}
-
-private func cContainsAny(_ haystack: String, _ needles: [String]) -> Bool {
-    guard !haystack.isEmpty, !needles.isEmpty else {
-        return false
-    }
-    return haystack.withCString { haystackPointer in
-        for needle in needles where !needle.isEmpty {
-            let found = needle.withCString { needlePointer in
-                strstr(haystackPointer, needlePointer) != nil
-            }
-            if found {
-                return true
-            }
-        }
-        return false
-    }
+    private static let nodeNames: Set<String> = [
+        "node", "nodejs", "npm", "npx", "pnpm", "yarn", "nodemon", "ts-node", "tsx", "next-server", "next",
+        "vite", "webpack", "webpack-dev-server",
+    ]
+    private static let pythonNames: Set<String> = [
+        "uvicorn", "gunicorn", "hypercorn", "jupyter", "jupyter-lab", "jupyter-notebook", "ipython", "celery",
+        "flask", "django-admin", "streamlit", "gradio",
+    ]
+    private static let buildOutputDirectories = [
+        "/target/debug/", "/target/release/", "/.build/debug/", "/.build/release/", "/bin/debug/", "/bin/release/",
+        "/deriveddata/",
+    ]
+    private static let phpNames: Set<String> = ["php", "php-fpm", "artisan", "frankenphp", "composer"]
+    private static let elixirNames: Set<String> = ["beam.smp", "elixir", "iex", "mix"]
 }
