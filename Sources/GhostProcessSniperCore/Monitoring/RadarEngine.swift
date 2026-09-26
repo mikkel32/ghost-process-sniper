@@ -251,7 +251,8 @@ public struct RadarScheduler: Sendable {
             scannerBudget: scannerBudget,
             candidateSet: candidates,
             probePolicy: probePolicy,
-            metricsEnrichmentBudget: max(scannerBudget.maxTelemetryRefreshes, demand.hotFamilyCount * 4 + demand.focusedFamilyCount * 4)
+            metricsEnrichmentBudget: max(scannerBudget.maxTelemetryRefreshes, demand.hotFamilyCount * 4 + demand.focusedFamilyCount * 4),
+            uiVisible: popoverVisible
         )
         lastPlan = plan
         return plan

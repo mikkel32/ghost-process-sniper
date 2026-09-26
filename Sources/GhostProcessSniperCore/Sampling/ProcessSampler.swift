@@ -72,7 +72,6 @@ public actor NativeProcessSampler: ProcessSampling {
     private var scanCache = ProcessScanCache()
     private var gpuUsageTracker = ProcessGPUUsageTracker()
     private var pidBuffer = [pid_t](repeating: 0, count: 4096)
-    private var rawSamplesScratch: [RawProcessSample] = []
     private var telemetryJobsScratch: [TelemetryJob] = []
     private var forensicsJobsScratch: [ForensicsJob] = []
     private var lastCachePruneDate: Date?
@@ -91,84 +90,39 @@ public actor NativeProcessSampler: ProcessSampling {
         let pidCount = try listPIDCount(counters: &counters)
         let pass = probePass
         probePass &+= 1
-        let richBudget = plan.metricsEnrichmentBudget
-
-        let plannedWorkerCount = Self.workerCount(for: pidCount, mode: plan.performanceMode)
-        let workerCount = pidCount < 2_000 ? min(plannedWorkerCount, 1) : plannedWorkerCount
-        counters.scannerWorkerCount = workerCount
-        var chunkedProbes: [ParallelProbeResult] = []
-
-        if workerCount <= 1 || pidCount < 2_000 {
-            chunkedProbes = [
-                ProcessProbeReader.read(
-                    pidBuffer,
-                    startIndex: 0,
-                    endIndex: pidCount,
-                    plan: plan,
-                    deadline: deadline,
-                    pass: pass,
-                    budget: richBudget
-                )
-            ]
-        } else {
-            let pidsSnapshot = Array(pidBuffer.prefix(pidCount))
-            counters.pidBufferCopyCount += 1
-            let chunkSize = (pidCount + workerCount - 1) / workerCount
-            chunkedProbes = try await withThrowingTaskGroup(of: ParallelProbeResult.self) { group in
-                for workerIndex in 0..<workerCount {
-                    let startIdx = workerIndex * chunkSize
-                    let endIdx = min(pidCount, (workerIndex + 1) * chunkSize)
-                    guard startIdx < endIdx else { continue }
-                    counters.scannerTaskCount += 1
-                    let chunkBudget = richBudget / workerCount + (workerIndex < richBudget % workerCount ? 1 : 0)
-
-                    group.addTask {
-                        ProcessProbeReader.read(
-                            pidsSnapshot,
-                            startIndex: startIdx,
-                            endIndex: endIdx,
-                            plan: plan,
-                            deadline: deadline,
-                            pass: pass,
-                            budget: chunkBudget
-                        )
-                    }
-                }
-
-                var results: [ParallelProbeResult] = []
-                for try await result in group {
-                    results.append(result)
-                }
-                return results
-            }
-        }
-
-        // Phase 2: Ingest chunked results sequentially on the actor
-        counters.scratchpadReuseCount += 1
-        rawSamplesScratch.removeAll(keepingCapacity: true)
-        rawSamplesScratch.reserveCapacity(pidCount)
-        for probe in chunkedProbes {
-            rawSamplesScratch.append(contentsOf: probe.samples)
-            counters.skippedPIDCount += probe.skippedCount
-            counters.expensiveCallCount += probe.expensiveCallCount
-            counters.richMetricRefreshCount += probe.richMetricsCount
-            counters.bsdReadCount += probe.bsdReadCount
-            counters.taskInfoReadCount += probe.taskInfoReadCount
-            counters.count(.cheapMetrics, by: probe.cheapMetricsCount)
-            counters.count(.richMetrics, by: probe.richMetricsCount)
-            if probe.didHitDeadline {
-                counters.didHitDeadline = true
-                counters.count(.deadlineSkipped, by: probe.skippedCount)
-            }
+        counters.scannerWorkerCount = pidCount > 0 ? 1 : 0
+        // One pass on the actor. BSD reads cost microseconds per PID, and
+        // chunking the list across tasks split the rich budget evenly per
+        // chunk, starving focused PIDs that happened to share a chunk.
+        let probe = ProcessProbeReader.read(
+            pidBuffer,
+            startIndex: 0,
+            endIndex: pidCount,
+            plan: plan,
+            deadline: deadline,
+            pass: pass,
+            budget: plan.metricsEnrichmentBudget
+        )
+        counters.skippedPIDCount += probe.skippedCount
+        counters.expensiveCallCount += probe.expensiveCallCount
+        counters.richMetricRefreshCount += probe.richMetricsCount
+        counters.bsdReadCount += probe.bsdReadCount
+        counters.taskInfoReadCount += probe.taskInfoReadCount
+        counters.count(.cheapMetrics, by: probe.cheapMetricsCount)
+        counters.count(.richMetrics, by: probe.richMetricsCount)
+        if probe.didHitDeadline {
+            counters.didHitDeadline = true
+            counters.count(.deadlineSkipped, by: probe.skippedCount)
         }
 
         var activeSamples: [ActiveProcessSample] = []
+        counters.scratchpadReuseCount += 1
         telemetryJobsScratch.removeAll(keepingCapacity: true)
         forensicsJobsScratch.removeAll(keepingCapacity: true)
         telemetryJobsScratch.reserveCapacity(min(pidCount, plan.scannerBudget.maxTelemetryRefreshes * 2))
         forensicsJobsScratch.reserveCapacity(min(pidCount, plan.maxForensicsPerRefresh * 2 + 8))
 
-        for rawSample in rawSamplesScratch {
+        for rawSample in probe.samples {
             let pid = rawSample.pid
             let liteRecord = rawSample.liteRecord
             let taskInfo = rawSample.taskInfo
@@ -386,43 +340,22 @@ public actor NativeProcessSampler: ProcessSampling {
             }
         }
 
+        // Fan out only when someone is watching and the queue is long enough
+        // to repay the task-group overhead; otherwise stay on the actor.
         let telemetryResults: [TelemetryResult]
-        if activeTelemetryJobs.isEmpty {
-            telemetryResults = []
-        } else if activeTelemetryJobs.count <= 4 {
-            counters.tinyQueueSequentialCount += 1
-            telemetryResults = activeTelemetryJobs.map { job in
-                let executablePath = processPath(for: job.pid)
-                let name = processName(for: job.pid, fallbackPath: executablePath)
-                let command = commandLine(for: job.pid) ?? executablePath.ifNotEmpty ?? name
-                let entry = ProcessTelemetryCache.Entry(
-                    name: name,
-                    executablePath: executablePath,
-                    commandLine: command,
-                    ownerName: UserNameResolver.name(for: job.userID),
-                    refreshedAt: now
-                )
-                return TelemetryResult(identity: job.identity, entry: entry)
-            }
-        } else {
+        if plan.uiVisible, activeTelemetryJobs.count > Self.sequentialJobLimit {
             telemetryResults = try await runTelemetryJobs(activeTelemetryJobs, now: now, counters: &counters, mode: plan.performanceMode)
+        } else {
+            if !activeTelemetryJobs.isEmpty { counters.tinyQueueSequentialCount += 1 }
+            telemetryResults = activeTelemetryJobs.map { telemetryResult(for: $0, now: now) }
         }
 
         let forensicsResults: [ForensicsResult]
-        if activeForensicsJobs.isEmpty {
-            forensicsResults = []
-        } else if activeForensicsJobs.count <= 2 {
-            counters.tinyQueueSequentialCount += 1
-            forensicsResults = activeForensicsJobs.map { job in
-                let info = forensics(for: job.pid)
-                return ForensicsResult(
-                    identity: job.identity,
-                    forensics: info.forensics,
-                    expensiveCallCount: info.expensiveCallCount
-                )
-            }
-        } else {
+        if plan.uiVisible, activeForensicsJobs.count > Self.sequentialJobLimit {
             forensicsResults = try await runForensicsJobs(activeForensicsJobs, counters: &counters, mode: plan.performanceMode)
+        } else {
+            if !activeForensicsJobs.isEmpty { counters.tinyQueueSequentialCount += 1 }
+            forensicsResults = activeForensicsJobs.map { forensicsResult(for: $0) }
         }
 
         // Ingest telemetry results back sequentially on the actor
@@ -557,17 +490,7 @@ public actor NativeProcessSampler: ProcessSampling {
                 for jobIndex in index..<end {
                     let job = jobs[jobIndex]
                     group.addTask {
-                        let executablePath = self.processPath(for: job.pid)
-                        let name = self.processName(for: job.pid, fallbackPath: executablePath)
-                        let command = self.commandLine(for: job.pid) ?? executablePath.ifNotEmpty ?? name
-                        let entry = ProcessTelemetryCache.Entry(
-                            name: name,
-                            executablePath: executablePath,
-                            commandLine: command,
-                            ownerName: UserNameResolver.name(for: job.userID),
-                            refreshedAt: now
-                        )
-                        return TelemetryResult(identity: job.identity, entry: entry)
+                        self.telemetryResult(for: job, now: now)
                     }
                 }
                 var batchResults: [TelemetryResult] = []
@@ -599,12 +522,7 @@ public actor NativeProcessSampler: ProcessSampling {
                 for jobIndex in index..<end {
                     let job = jobs[jobIndex]
                     group.addTask {
-                        let info = self.forensics(for: job.pid)
-                        return ForensicsResult(
-                            identity: job.identity,
-                            forensics: info.forensics,
-                            expensiveCallCount: info.expensiveCallCount
-                        )
+                        self.forensicsResult(for: job)
                     }
                 }
                 var batchResults: [ForensicsResult] = []
@@ -620,24 +538,26 @@ public actor NativeProcessSampler: ProcessSampling {
         return output
     }
 
-    public nonisolated static func recommendedWorkerCount(for processCount: Int, mode: RadarPerformanceMode) -> Int {
-        workerCount(for: processCount, mode: mode)
+    nonisolated private func telemetryResult(for job: TelemetryJob, now: Date) -> TelemetryResult {
+        let executablePath = processPath(for: job.pid)
+        let name = processName(for: job.pid, fallbackPath: executablePath)
+        let command = commandLine(for: job.pid) ?? executablePath.ifNotEmpty ?? name
+        let entry = ProcessTelemetryCache.Entry(
+            name: name,
+            executablePath: executablePath,
+            commandLine: command,
+            ownerName: UserNameResolver.name(for: job.userID),
+            refreshedAt: now
+        )
+        return TelemetryResult(identity: job.identity, entry: entry)
     }
 
-    nonisolated private static func workerCount(for processCount: Int, mode: RadarPerformanceMode) -> Int {
-        guard processCount > 0 else {
-            return 0
-        }
-        if processCount < 180 {
-            return 1
-        }
-        let maxWorkers: Int = switch mode {
-        case .batterySaver: 3
-        case .balanced: 5
-        case .realtime: 8
-        }
-        return min(maxWorkers, max(2, (processCount + 399) / 400))
+    nonisolated private func forensicsResult(for job: ForensicsJob) -> ForensicsResult {
+        let info = forensics(for: job.pid)
+        return ForensicsResult(identity: job.identity, forensics: info.forensics, expensiveCallCount: info.expensiveCallCount)
     }
+
+    private static let sequentialJobLimit = 8
 
     nonisolated private static func maxParallelJobCount(for mode: RadarPerformanceMode) -> Int {
         switch mode {

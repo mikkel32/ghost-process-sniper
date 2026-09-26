@@ -158,6 +158,8 @@ public struct SamplingPlan: Equatable, Sendable {
     public var candidateSet: CandidateSet
     public var probePolicy: ProcessProbePolicy
     public var metricsEnrichmentBudget: Int
+    /// Someone is looking at the radar, so latency matters more than overhead.
+    public var uiVisible: Bool
 
     public static func balanced(now: Date = Date()) -> SamplingPlan {
         let budget = ScannerBudget.budget(for: .balanced)
@@ -192,7 +194,8 @@ public struct SamplingPlan: Equatable, Sendable {
         candidateSet: CandidateSet = .empty,
         probePolicy: ProcessProbePolicy = .balanced,
         lanePriorities: [ScanLane] = [],
-        metricsEnrichmentBudget: Int? = nil
+        metricsEnrichmentBudget: Int? = nil,
+        uiVisible: Bool = false
     ) {
         self.sampledAt = sampledAt
         self.performanceMode = performanceMode
@@ -207,6 +210,7 @@ public struct SamplingPlan: Equatable, Sendable {
         self.candidateSet = candidateSet
         self.probePolicy = probePolicy
         self.metricsEnrichmentBudget = metricsEnrichmentBudget ?? max(4, (scannerBudget ?? ScannerBudget.budget(for: performanceMode)).maxTelemetryRefreshes * 2)
+        self.uiVisible = uiVisible
     }
 }
 

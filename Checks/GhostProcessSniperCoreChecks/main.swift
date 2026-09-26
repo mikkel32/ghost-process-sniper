@@ -59,7 +59,7 @@ struct CoreChecks {
         await run("scannerHealthFeedsDiagnostics") { try scannerHealthFeedsDiagnostics() }
         await run("gpuUsageTrackerComputesDeltaPercent") { try gpuUsageTrackerComputesDeltaPercent() }
         await run("spikeRingBufferBoundsReports") { try spikeRingBufferBoundsReports() }
-        await run("samplerExecutionPlanScalesAndCounts") { try samplerExecutionPlanScalesAndCounts() }
+        await run("scannerBudgetCapsTelemetryBursts") { try scannerBudgetCapsTelemetryBursts() }
         await run("radarPublishPayloadSkipsUnchangedContentRebuild") { try radarPublishPayloadSkipsUnchangedContentRebuild() }
         await run("menuBarStatusPresentationIsIconOnlyAndCompact") { try menuBarStatusPresentationIsIconOnlyAndCompact() }
         await run("menuBarPresentationKeepsDiagnosticsOutOfTitle") { try menuBarPresentationKeepsDiagnosticsOutOfTitle() }
@@ -210,10 +210,7 @@ private func nativeSamplerUsesBSDFirstCheapGraph() async throws {
 
     try check(first.stats.bsdReadCount >= first.stats.processCount, "cheap graph scan should read BSD identity for sampled processes")
     try check(first.stats.taskInfoReadCount < max(1, first.stats.bsdReadCount), "quiet scan should avoid all-process task-info sweeps")
-    // Successful BSD reads can be fewer than enumerated PIDs due to exits,
-    // permissions, or the deadline. Assert against the selected scan strategy.
-    let expectedPIDCopies = first.stats.scannerWorkerCount > 1 ? 1 : 0
-    try check(first.stats.pidBufferCopyCount == expectedPIDCopies, "sequential scans should avoid PID copies; parallel scans should share exactly one snapshot")
+    try check(first.stats.pidBufferCopyCount == 0, "the single probe pass should read the PID buffer in place")
     try check(second.stats.scratchpadReuseCount > 0, "sampler should reuse actor-owned scratch buffers")
     try check(second.stats.reusedRecordCount > 0 || second.stats.commandCacheHitCount > 0, "stable quiet refresh should reuse cached process records or telemetry")
 }
@@ -1394,11 +1391,7 @@ private func spikeRingBufferBoundsReports() throws {
     try check(!report.recentSpikes.contains(where: { $0.contains("sample") }), "spike ring should evict old entries")
 }
 
-private func samplerExecutionPlanScalesAndCounts() throws {
-    try check(NativeProcessSampler.recommendedWorkerCount(for: 0, mode: .balanced) == 0, "empty scan should not create workers")
-    try check(NativeProcessSampler.recommendedWorkerCount(for: 100, mode: .balanced) == 1, "small scans should avoid task-group workers")
-    try check(NativeProcessSampler.recommendedWorkerCount(for: 2_000, mode: .balanced) <= 5, "balanced scans should cap workers")
-    try check(NativeProcessSampler.recommendedWorkerCount(for: 30_000, mode: .batterySaver) <= 3, "battery saver should cap worker fanout")
+private func scannerBudgetCapsTelemetryBursts() throws {
     try check(ScannerBudget.budget(for: .balanced).maxTelemetryRefreshes <= 16, "balanced scanner should cap command/path refresh bursts")
 }
 
