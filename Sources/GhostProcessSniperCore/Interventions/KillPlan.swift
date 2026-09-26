@@ -16,6 +16,10 @@ public struct KillPlan: Equatable, Sendable {
     public let approvedIdentities: Set<ProcessIdentity>?
     public let approvalExpiresAt: Date?
     public let approvedStrategy: KillStrategy?
+    /// Names, paths, command lines, ports and supervisors, for risk-aware stops.
+    public let workload: KillWorkloadProfile?
+    /// Local outcomes per strategy, so a strategy is only tuned by its own history.
+    public let strategyCalibrations: [KillStrategy: KillCalibrationSnapshot]
 
     public init(
         rootIdentity: ProcessIdentity,
@@ -31,7 +35,9 @@ public struct KillPlan: Equatable, Sendable {
         killCalibration: KillCalibrationSnapshot? = nil,
         approvedIdentities: Set<ProcessIdentity>? = nil,
         approvalExpiresAt: Date? = nil,
-        approvedStrategy: KillStrategy? = nil
+        approvedStrategy: KillStrategy? = nil,
+        workload: KillWorkloadProfile? = nil,
+        strategyCalibrations: [KillStrategy: KillCalibrationSnapshot] = [:]
     ) {
         self.rootIdentity = rootIdentity
         self.targetIdentities = targetIdentities
@@ -47,6 +53,15 @@ public struct KillPlan: Equatable, Sendable {
         self.approvedIdentities = approvedIdentities
         self.approvalExpiresAt = approvalExpiresAt
         self.approvedStrategy = approvedStrategy
+        self.workload = workload
+        self.strategyCalibrations = strategyCalibrations
+    }
+
+    /// History for the strategy about to run; never another strategy's.
+    public func calibration(for strategy: KillStrategy) -> KillCalibrationSnapshot {
+        if let own = strategyCalibrations[strategy] { return own }
+        guard let killCalibration, killCalibration.strategy == nil || killCalibration.strategy == strategy else { return .empty }
+        return killCalibration
     }
 
     public func binding(to identities: [ProcessIdentity], expiresAt: Date, strategy: KillStrategy? = nil) -> KillPlan {
@@ -54,12 +69,13 @@ public struct KillPlan: Equatable, Sendable {
                  displayName: displayName, gracefulSignal: gracefulSignal, treePolicy: treePolicy, scope: scope,
                  createdAt: createdAt, familyMetadata: familyMetadata, killHistory: killHistory,
                  killCalibration: killCalibration, approvedIdentities: Set(identities), approvalExpiresAt: expiresAt,
-                 approvedStrategy: strategy)
+                 approvedStrategy: strategy, workload: workload, strategyCalibrations: strategyCalibrations)
     }
 
     public func targetingOnly(_ process: ProcessMetrics) -> KillPlan {
         KillPlan(rootIdentity: process.identity, targetIdentities: [process.identity], protectedPIDs: protectedPIDs,
                  displayName: process.name, gracefulSignal: gracefulSignal, scope: .singleRoot,
-                 familyMetadata: familyMetadata, killHistory: killHistory, killCalibration: killCalibration)
+                 familyMetadata: familyMetadata, killHistory: killHistory, killCalibration: killCalibration,
+                 workload: workload?.restricted(to: process.pid), strategyCalibrations: strategyCalibrations)
     }
 }

@@ -631,6 +631,7 @@ public struct KillAttempt: Identifiable, Equatable, Sendable {
 
     private static func name(for signal: Int32) -> String {
         switch signal {
+        case KillSignalPhase.quitRequest: "QUIT"
         case SIGTERM: "SIGTERM"
         case SIGKILL: "SIGKILL"
         case SIGINT: "SIGINT"
@@ -765,6 +766,8 @@ public struct KillPreview: Equatable, Sendable {
     public let calibratedSurvivorRisk: Double
     public let recommendedGraceSeconds: TimeInterval
     public let verificationPlanText: String
+    /// What the stop interrupts and what could go wrong.
+    public let riskAssessment: KillRiskAssessment
 
     public var targetPIDs: [Int32] {
         targetIdentities.map(\.pid)
@@ -837,7 +840,8 @@ public struct KillPreview: Equatable, Sendable {
         calibratedForceProbability: Double? = nil,
         calibratedSurvivorRisk: Double? = nil,
         recommendedGraceSeconds: TimeInterval? = nil,
-        verificationPlanText: String = "Confirm uses a complete arena; pre-force and final verification use target-only reads unless watcher drift asks for a fresh arena."
+        verificationPlanText: String = "Confirm uses a complete arena; pre-force and final verification use target-only reads unless watcher drift asks for a fresh arena.",
+        riskAssessment: KillRiskAssessment = .none
     ) {
         self.displayName = displayName
         self.rootPID = rootPID
@@ -878,6 +882,7 @@ public struct KillPreview: Equatable, Sendable {
         self.calibratedSurvivorRisk = min(1, max(0, calibratedSurvivorRisk ?? strategySimulation.survivorRisk))
         self.recommendedGraceSeconds = max(0, recommendedGraceSeconds ?? strategyProfile.verificationSchedule.graceSeconds)
         self.verificationPlanText = verificationPlanText
+        self.riskAssessment = riskAssessment
         self.previewReportText = previewReportText.isEmpty ? Self.makePreviewReport(
             displayName: displayName,
             readiness: readiness,
@@ -889,7 +894,8 @@ public struct KillPreview: Equatable, Sendable {
             strategy: strategyRecommendation,
             scope: scopePreview,
             recommendedGraceSeconds: max(0, recommendedGraceSeconds ?? strategyProfile.verificationSchedule.graceSeconds),
-            verificationPlanText: verificationPlanText
+            verificationPlanText: verificationPlanText,
+            risk: riskAssessment
         ) : previewReportText
     }
 
@@ -904,11 +910,14 @@ public struct KillPreview: Equatable, Sendable {
         strategy: KillStrategyRecommendation,
         scope: KillScopePreview,
         recommendedGraceSeconds: TimeInterval,
-        verificationPlanText: String
+        verificationPlanText: String,
+        risk: KillRiskAssessment
     ) -> String {
         [
             "Ghost Process Sniper Kill Preview",
             "Family: \(displayName)",
+            "Workload: \(risk.kind.label)\(risk.headline.map { " - \($0)" } ?? "")",
+            "Risks: \(risk.risks.map { "\($0.title) (\($0.detail))" }.joined(separator: "; ").ifEmpty("none"))",
             "Readiness: \(readiness.label)",
             "Strategy: \(strategy.strategy.label) (\(Int((strategy.confidence * 100).rounded()))%)",
             "Recommended grace: \(String(format: "%.2f", recommendedGraceSeconds))s",

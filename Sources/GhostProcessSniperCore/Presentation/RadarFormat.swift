@@ -21,6 +21,13 @@ public enum RadarFormat {
         "\(value >= 0 ? "+" : "")\(Int(value.rounded()))%"
     }
 
+    /// "2 s", "1.5 s", "12 s".
+    public static func seconds(_ value: TimeInterval) -> String {
+        let clamped = max(0, value)
+        if clamped >= 10 || clamped == clamped.rounded() { return "\(Int(clamped.rounded())) s" }
+        return String(format: "%.1f s", clamped)
+    }
+
     public static func leak(_ value: Double) -> String {
         "\(Int(value.rounded())) MB/min"
     }

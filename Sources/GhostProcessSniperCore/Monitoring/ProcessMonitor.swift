@@ -387,38 +387,26 @@ public final class ProcessMonitor {
     }
 
     public func killPlan(for family: ProcessFamily) async -> KillPlan {
+        let workload = KillWorkloadProfile(family: family, sample: sampledProcesses)
         guard let store else {
-            return family.killPlan()
+            return family.killPlan(workload: workload)
         }
         do {
-            let history = try await store.killStrategyHistory(
-                signatureID: family.signature.id,
-                devKind: family.classification?.kind.rawValue
-            )
-            let gentleCalibration = try await store.killCalibrationSnapshot(
-                signatureID: family.signature.id,
-                devKind: family.classification?.kind.rawValue,
-                strategy: .gentleDevServer
-            )
-            let stubbornCalibration = try await store.killCalibrationSnapshot(
-                signatureID: family.signature.id,
-                devKind: family.classification?.kind.rawValue,
-                strategy: .stubbornRunaway
-            )
-            let standardCalibration = try await store.killCalibrationSnapshot(
-                signatureID: family.signature.id,
-                devKind: family.classification?.kind.rawValue,
-                strategy: .standard
-            )
-            let calibrations = [gentleCalibration, stubbornCalibration, standardCalibration]
-            let calibration = calibrations.max { $0.operationCount < $1.operationCount }
-            return family.killPlan(
-                killHistory: history,
-                killCalibration: calibration?.operationCount == 0 ? nil : calibration
-            )
+            let devKind = family.classification?.kind.rawValue
+            let history = try await store.killStrategyHistory(signatureID: family.signature.id, devKind: devKind)
+            var calibrations: [KillStrategy: KillCalibrationSnapshot] = [:]
+            for strategy in KillStrategy.allCases where strategy != .inspectOnly {
+                let snapshot = try await store.killCalibrationSnapshot(
+                    signatureID: family.signature.id,
+                    devKind: devKind,
+                    strategy: strategy
+                )
+                if snapshot.operationCount > 0 { calibrations[strategy] = snapshot }
+            }
+            return family.killPlan(killHistory: history, workload: workload, strategyCalibrations: calibrations)
         } catch {
             storeError = error.localizedDescription
-            return family.killPlan()
+            return family.killPlan(workload: workload)
         }
     }
 
