@@ -6,7 +6,6 @@
   },
   "legacy_line_budgets": {
     "GhostProcessSniper/Features/Processes/FamilyDetailConsoleView.swift": 777,
-    "GhostProcessSniper/DesignSystem/SharedRadarViews.swift": 701,
     "GhostProcessSniper/Features/Overview/RadarOverviewView.swift": 713,
     "GhostProcessSniper/Features/Interventions/KillPreviewSheet.swift": 635,
     "GhostProcessSniperCore/Persistence/RadarStore.swift": 1072,

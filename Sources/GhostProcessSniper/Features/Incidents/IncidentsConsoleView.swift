@@ -173,7 +173,7 @@ struct IncidentsConsoleView: View {
 
                     RadarSection(title: "Metrics") {
                         HStack(spacing: 8) {
-                            RadarChip(title: "Memory", value: RadarBytes.string(incident.memoryBytes), systemImage: "memorychip", level: incident.level)
+                            RadarChip(title: "Memory", value: RadarFormat.bytes(incident.memoryBytes), systemImage: "memorychip", level: incident.level)
                             RadarChip(title: "CPU", value: "\(Int(incident.cpuPercent.rounded()))%", systemImage: "cpu", level: incident.level)
                             RadarChip(title: "Leak", value: "\(Int(incident.leakVelocityMegabytesPerMinute.rounded())) MB/min", systemImage: "chart.line.uptrend.xyaxis", level: incident.leakVelocityMegabytesPerMinute > 0 ? .watch : .quiet)
                         }
