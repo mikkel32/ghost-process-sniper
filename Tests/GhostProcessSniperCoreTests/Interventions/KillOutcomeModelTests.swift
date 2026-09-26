@@ -274,6 +274,24 @@ final class KillOutcomeStoreTests: XCTestCase {
         XCTAssertNil(other.signature[.standard])
         XCTAssertEqual(other.kind[.standard]?.observationCount, 2)
     }
+
+    func testAStopOfAnotherProcessIsAuditedButNotLearned() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("kill-outcomes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let family = RefreshPerformanceFixture.family(RefreshPerformanceFixture.process(5))
+            .enriched(classification: DevClassification(kind: .nodeServer, confidence: 1, reason: "test"))
+        let store = try RadarStore(url: folder.appendingPathComponent("radar.sqlite"))
+        var supervisorStop = KillReport(displayName: "PM2", rootPID: 499, gracefulPIDs: [499], forcedPIDs: [499],
+                                        attempts: [KillAttempt(pid: 499, signal: SIGTERM, stage: "graceful", succeeded: true)])
+        supervisorStop.graceWaitedSeconds = 2
+        try await store.recordKillOperation(report: supervisorStop, family: family, learnsFromOutcome: false)
+
+        let history = try await store.killOutcomeHistory(signatureID: family.signature.id, devKind: "nodeServer")
+        XCTAssertEqual(history, .empty, "stopping PM2 says nothing about how the server stops")
+        let audit = try await store.recentKillOperations()
+        XCTAssertEqual(audit.map(\.displayName), ["PM2"])
+    }
 }
 
 /// A small deterministic generator, so the convergence test is repeatable.

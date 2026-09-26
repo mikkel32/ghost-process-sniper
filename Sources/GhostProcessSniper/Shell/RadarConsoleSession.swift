@@ -402,18 +402,23 @@ final class RadarConsoleSession {
 
     /// Previews an alternative the advisor proposed, such as the supervisor
     /// that restarts the family. It replaces any open preview, and the stop
-    /// is recorded against the family that owns the new root.
+    /// is learned by the family that owns the new root. A root no family
+    /// owns, like an unlisted pm2 daemon, is only audited: its stop says
+    /// nothing about how `family` stops.
     func prepareKill(_ family: ProcessFamily, plan: KillPlan) {
         guard !isPreparingIntervention else { return }
         isPreparingIntervention = true
         Task {
             defer { isPreparingIntervention = false }
-            let owner = monitor.families.first { $0.ownedIdentities.contains(plan.rootIdentity) } ?? family
-            await presentPreview(of: plan, for: owner)
+            if let owner = monitor.families.first(where: { $0.ownedIdentities.contains(plan.rootIdentity) }) {
+                await presentPreview(of: plan, for: owner)
+            } else {
+                await presentPreview(of: plan, for: family, learnsFromOutcome: false)
+            }
         }
     }
 
-    private func presentPreview(of plan: KillPlan, for family: ProcessFamily) async {
+    private func presentPreview(of plan: KillPlan, for family: ProcessFamily, learnsFromOutcome: Bool = true) async {
         let delay = monitor.settings.forceKillDelay
         let preview = await killer.preview(plan: plan, forceKillDelay: delay)
         let expiresAt = Date().addingTimeInterval(60)
@@ -422,7 +427,8 @@ final class RadarConsoleSession {
             preview: preview,
             plan: plan.binding(to: preview.targetIdentities, expiresAt: expiresAt, strategy: preview.strategyRecommendation.strategy),
             forceKillDelay: delay,
-            expiresAt: expiresAt
+            expiresAt: expiresAt,
+            learnsFromOutcome: learnsFromOutcome
         )
     }
 
@@ -438,6 +444,7 @@ final class RadarConsoleSession {
             approvedPlan: pending.plan,
             forceKillDelay: pending.forceKillDelay,
             skipForce: skipForce,
+            learnsFromOutcome: pending.learnsFromOutcome,
             control: control,
             eventSink: eventSink
         )
@@ -482,6 +489,8 @@ struct PendingKill: Identifiable {
     let plan: KillPlan
     let forceKillDelay: TimeInterval
     let expiresAt: Date
+    /// False when the stop is of another process than `family`.
+    let learnsFromOutcome: Bool
 }
 
 struct RadarToast: Identifiable, Equatable {

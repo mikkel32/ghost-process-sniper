@@ -343,14 +343,10 @@ public final class ProcessMonitor {
         }
     }
 
-    public func recordKill(report: KillReport, family: ProcessFamily) async {
+    public func recordKill(report: KillReport, family: ProcessFamily, learnsFromOutcome: Bool = true) async {
         do {
-            try await store?.recordAction(
-                kind: .kill,
-                family: family,
-                summary: report.diagnosticText
-            )
-            try await store?.recordKillOperation(report: report, family: family)
+            try await store?.recordAction(kind: .kill, family: family, summary: report.diagnosticText)
+            try await store?.recordKillOperation(report: report, family: family, learnsFromOutcome: learnsFromOutcome)
             try await store?.flush()
             RadarLogger.kill.info("Kill report for \(family.displayName, privacy: .public): \(report.summary, privacy: .public)")
         } catch {
@@ -364,6 +360,7 @@ public final class ProcessMonitor {
         approvedPlan: KillPlan? = nil,
         forceKillDelay: TimeInterval? = nil,
         skipForce: Bool = false,
+        learnsFromOutcome: Bool = true,
         control: KillOperationControl? = nil,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
     ) async -> KillReport {
@@ -382,7 +379,7 @@ public final class ProcessMonitor {
             control: operationControl,
             eventSink: eventSink
         )
-        await recordKill(report: report, family: family)
+        await recordKill(report: report, family: family, learnsFromOutcome: learnsFromOutcome)
         await refresh()
         return report
     }

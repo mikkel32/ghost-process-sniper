@@ -3,7 +3,15 @@ import SQLite3
 
 /// Kill operations and the outcome history that tunes future stops.
 extension RadarStore {
-    public func recordKillOperation(report: KillReport, family: ProcessFamily?, at date: Date = Date()) throws {
+    /// - Parameter learnsFromOutcome: false when the stop was of another
+    ///   process than `family`, such as its supervisor: it is audited, but
+    ///   says nothing about how the family stops.
+    public func recordKillOperation(
+        report: KillReport,
+        family: ProcessFamily?,
+        learnsFromOutcome: Bool = true,
+        at date: Date = Date()
+    ) throws {
         let record = KillOperationRecord(report: report, family: family, createdAt: date)
         try transaction {
             try execute(
@@ -39,7 +47,7 @@ extension RadarStore {
             try insertKillExitEvents(report: report)
             // Refused, expired and inspect-only stops sent nothing; they say
             // nothing about how the family stops and stay audit-only.
-            guard !report.attempts.isEmpty else { return }
+            guard !report.attempts.isEmpty, learnsFromOutcome else { return }
             let devKind = family?.classification?.kind.rawValue
             try insertKillOutcomeHistory(report: report, signatureID: record.signatureID, createdAt: date)
             try insertKillStrategyHistory(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
