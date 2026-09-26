@@ -24,8 +24,12 @@ struct RadarConsoleView: View {
         // Keep a single structural identity for the split view. Toggling the
         // searchable modifier used to recreate the sidebar and its motion state.
         consoleShell
-        .searchable(text: $searchDraft, placement: .toolbar, prompt: "Search families")
+        .searchable(text: $searchDraft, placement: .toolbar, prompt: "Search processes, PIDs, ports")
         .searchFocused($searchFocused)
+        .onSubmit(of: .search) {
+            commitSearchDraft()
+            session.openBestMatch()
+        }
         .tint(RadarTheme.brand)
         .navigationSubtitle(session.navigationSubtitle)
         .toolbar {
@@ -91,7 +95,12 @@ struct RadarConsoleView: View {
             }
         }
         .onChange(of: searchDraft) { _, value in
-            if !showsGlobalSearch, !value.isEmpty { session.focus(.processes) }
+            // Results live on the process list (Duplicates filters in place).
+            // Only a user edit navigates; syncing from state never does.
+            if value != session.state.searchText, !value.trimmingCharacters(in: .whitespaces).isEmpty,
+               session.state.focusedSelection != .processes, session.state.focusedSelection != .duplicates {
+                session.focus(.processes)
+            }
             storedSearchText = value
             searchDebounceTask?.cancel()
             searchDebounceTask = Task { @MainActor in
@@ -189,6 +198,13 @@ struct RadarConsoleView: View {
                         .inspectorColumnWidth(min: 260, ideal: 315, max: 380)
                 }
         }
+    }
+
+    private func commitSearchDraft() {
+        searchDebounceTask?.cancel()
+        guard session.state.searchText != searchDraft else { return }
+        session.state.searchText = searchDraft
+        session.updateFocusedFamilies()
     }
 
     private var showsGlobalSearch: Bool {

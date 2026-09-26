@@ -351,10 +351,6 @@ public struct RadarScheduler: Sendable {
         return interval
     }
 
-    public var currentInterval: TimeInterval {
-        lastInterval
-    }
-
     public var currentPressure: SystemPressureLevel {
         systemPressure
     }

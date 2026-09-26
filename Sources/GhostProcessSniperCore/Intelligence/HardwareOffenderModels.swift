@@ -62,10 +62,6 @@ public struct HardwareOffenderProfile: Equatable, Sendable {
         signals.map(\.level).max() ?? .quiet
     }
 
-    public var scoreImpact: Double {
-        min(34, signals.reduce(0) { $0 + $1.impact })
-    }
-
     public var shouldPromote: Bool {
         level >= .watch && !signals.isEmpty
     }

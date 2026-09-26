@@ -221,54 +221,6 @@ private struct FamilyDetailHeader: View {
     }
 }
 
-private struct FamilyVerdictBanner: View {
-    let verdict: FamilyVerdict
-    let pattern: MemoryPatternAnalysis
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: verdict.systemImage)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(RadarStyle.color(for: verdict.level))
-                .frame(width: 30, height: 30)
-                .background(
-                    RadarStyle.color(for: verdict.level).opacity(verdict.level == .quiet ? 0.08 : 0.14),
-                    in: Circle()
-                )
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(verdict.headline)
-                        .font(.headline)
-                        .contentTransition(.opacity)
-                    InfoTip(tip: RadarTip(
-                        title: "Verdict",
-                        message: "One synthesized judgment from everything the engine knows: forecast state, the shape of the memory curve (steady climb vs churn vs step), deviation from this family's learned baseline, and any active rules. It's the sentence you'd want a colleague to tell you about this process."
-                    ))
-                }
-                Text(verdict.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 8)
-
-            if pattern.pattern != .unknown {
-                Label(pattern.pattern.label, systemImage: pattern.pattern.systemImage)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(.quaternary, in: Capsule())
-                    .help(pattern.detail)
-            }
-        }
-        .padding(14)
-        .radarSurface(tint: RadarTheme.accent(for: verdict.level), cornerRadius: 16, raised: verdict.level >= .hot)
-    }
-}
-
 private struct FamilyForecastPanel: View {
     let panel: FamilyDetailPanelModel
 

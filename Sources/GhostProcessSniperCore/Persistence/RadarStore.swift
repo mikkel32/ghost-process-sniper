@@ -220,11 +220,6 @@ public actor RadarStore {
         return IncidentQuery(filter: filter, limit: limit).apply(to: incidents)
     }
 
-    public func queryIncidents(_ query: IncidentQuery) throws -> [RadarIncident] {
-        let fetchLimit = max(query.limit * 3, query.limit, 80)
-        return query.apply(to: try recentIncidents(limit: fetchLimit))
-    }
-
     public func recentForecasts(limit: Int = 80) throws -> [ForecastStoreSnapshot] {
         let statement = try prepare(RadarStoreQueries.recentForecasts)
         defer { sqlite3_finalize(statement) }
@@ -296,10 +291,6 @@ public actor RadarStore {
         cachedStoredRules = nil
         cachedRulesKey = nil
         cachedComposedRules.removeAll(keepingCapacity: true)
-    }
-
-    public func queryRules(includeBuiltIns: Bool = true, settings: ThresholdSettings = .aggressive) throws -> [RadarRule] {
-        try loadRules(includeBuiltIns: includeBuiltIns, settings: settings)
     }
 
     public func saveRule(_ rule: RadarRule) throws {

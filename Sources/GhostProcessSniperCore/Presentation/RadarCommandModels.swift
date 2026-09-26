@@ -121,6 +121,10 @@ public struct IncidentQuery: Equatable, Sendable {
     }
 
     public func matches(_ incident: RadarIncident) -> Bool {
+        matches(incident, query: ProcessSearchQuery(text))
+    }
+
+    private func matches(_ incident: RadarIncident, query: ProcessSearchQuery) -> Bool {
         let filterMatches: Bool = switch filter {
         case .all:
             true
@@ -134,18 +138,16 @@ public struct IncidentQuery: Equatable, Sendable {
         guard filterMatches else {
             return false
         }
-
-        let query = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else {
-            return true
-        }
-        return incident.familyName.lowercased().contains(query) ||
-            incident.signature.canonicalPath.lowercased().contains(query) ||
-            incident.reasons.joined(separator: " ").lowercased().contains(query)
+        return query.terms.isEmpty || query.matchesText([
+            incident.familyName,
+            incident.signature.canonicalPath,
+            incident.reasons.joined(separator: " ")
+        ])
     }
 
     public func apply(to incidents: [RadarIncident]) -> [RadarIncident] {
-        let filtered = incidents.filter(matches)
+        let query = ProcessSearchQuery(text)
+        let filtered = incidents.filter { matches($0, query: query) }
         let sorted: [RadarIncident]
         if sort == .recurrence {
             let recurrenceCounts = Dictionary(grouping: filtered, by: { $0.signature.id })
@@ -350,42 +352,10 @@ public struct RadarCommandCoordinator: Sendable {
         router.availability(for: command, selection: selection, families: families)
     }
 
-    public func availabilityMap(
-        selection: RadarFocusedSelection,
-        families: [ProcessFamily]
-    ) -> [RadarCommand: RadarCommandAvailability] {
-        Dictionary(uniqueKeysWithValues: RadarCommand.allCases.map { command in
-            (command, availability(for: command, selection: selection, families: families))
-        })
-    }
-
     public func selectedFamily(
         selection: RadarFocusedSelection,
         families: [ProcessFamily]
     ) -> ProcessFamily? {
         router.selectedFamily(selection: selection, families: families)
-    }
-
-    public func selection(
-        after selection: RadarFocusedSelection,
-        families: [ProcessFamily],
-        direction: Int
-    ) -> RadarFocusedSelection {
-        guard !families.isEmpty else {
-            return selection
-        }
-        let sorted = families.sorted { lhs, rhs in
-            if lhs.score.level != rhs.score.level { return lhs.score.level > rhs.score.level }
-            if lhs.score.heat.value != rhs.score.heat.value { return lhs.score.heat.value > rhs.score.heat.value }
-            if lhs.score.value != rhs.score.value { return lhs.score.value > rhs.score.value }
-            return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
-        }
-        guard let familyKey = selection.familyKey,
-              let currentIndex = sorted.firstIndex(where: { $0.familyKey == familyKey || $0.signature.id == familyKey })
-        else {
-            return .family(sorted[0].familyKey)
-        }
-        let next = (currentIndex + direction + sorted.count) % sorted.count
-        return .family(sorted[next].familyKey)
     }
 }

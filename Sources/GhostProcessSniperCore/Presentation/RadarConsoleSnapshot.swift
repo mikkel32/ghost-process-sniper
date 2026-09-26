@@ -3,24 +3,6 @@ import Foundation
 public enum ConsoleSidebarSectionKind: String, Codable, Sendable {
     case attention
     case watched
-    case quiet
-    case tools
-}
-
-public struct ConsoleSidebarSection: Identifiable, Equatable, Sendable {
-    public var id: ConsoleSidebarSectionKind { kind }
-
-    public let kind: ConsoleSidebarSectionKind
-    public let title: String
-    public let count: Int
-    public let families: [FamilyTriageViewModel]
-
-    public init(kind: ConsoleSidebarSectionKind, title: String, count: Int, families: [FamilyTriageViewModel]) {
-        self.kind = kind
-        self.title = title
-        self.count = count
-        self.families = families
-    }
 }
 
 public struct RadarConsoleSnapshot: Equatable, Sendable {
@@ -134,7 +116,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             let classification = family.classification ?? classifier.classification(for: family)
             return FamilyTriageViewModel(family: family, classification: classification,
                                          culprit: CulpritAnalysis(family: family, classifier: classifier, classification: classification))
-        }.sorted(by: Self.smartSort)
+        }.sorted { FamilyTriageViewModel.areInIncreasingOrder($0, $1, by: .smart) }
         var wantedKeys: Set<String>?
         if let detailSignatures {
             let priorities = CompactConsoleSnapshot.priorityRows(from: triage.map(CompactSidebarRowModel.init(item:)))
@@ -226,57 +208,16 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
         )
     }
 
+    /// Rows matching a search, filter and sort, via the console's search
+    /// engine but without a live process sample.
     public func families(query: String, filter: RadarFilter, sort: RadarSort) -> [FamilyTriageViewModel] {
-        let loweredQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return families
-            .filter { item in
-                switch filter {
-                case .all: true
-                case .attention: item.level >= .watch || item.forecastState >= .warming
-                case .leaking: item.leakVelocity > 0 || item.forecastState >= .leaking
-                case .killable: item.isKillable
-                case .quiet: item.level == .quiet && item.forecastState == .quiet
-                }
-            }
-            .filter { item in
-                loweredQuery.isEmpty ||
-                    item.displayName.lowercased().contains(loweredQuery) ||
-                    item.subtitle.lowercased().contains(loweredQuery) ||
-                    item.signature.canonicalPath.lowercased().contains(loweredQuery) ||
-                    item.kindText.lowercased().contains(loweredQuery)
-            }
-            .sorted { lhs, rhs in
-                switch sort {
-                case .smart: return Self.smartSort(lhs, rhs)
-                case .memory:
-                    if lhs.memoryBytes != rhs.memoryBytes { return lhs.memoryBytes > rhs.memoryBytes }
-                    if lhs.score != rhs.score { return lhs.score > rhs.score }
-                    return lhs.id < rhs.id
-                case .cpu:
-                    if lhs.cpuPercent != rhs.cpuPercent { return lhs.cpuPercent > rhs.cpuPercent }
-                    if lhs.score != rhs.score { return lhs.score > rhs.score }
-                    return lhs.id < rhs.id
-                case .leak:
-                    if lhs.leakVelocity != rhs.leakVelocity { return lhs.leakVelocity > rhs.leakVelocity }
-                    if lhs.score != rhs.score { return lhs.score > rhs.score }
-                    return lhs.id < rhs.id
-                case .name:
-                    let comparison = lhs.displayName.localizedStandardCompare(rhs.displayName)
-                    return comparison == .orderedSame ? lhs.id < rhs.id : comparison == .orderedAscending
-                }
-            }
-    }
-
-    public func sidebarSections(query: String, sort: RadarSort) -> [ConsoleSidebarSection] {
-        let matches = families(query: query, filter: .all, sort: sort)
-        let attention = matches.filter { $0.level >= .watch || $0.forecastState >= .warming }
-        let quiet = matches.filter { $0.level == .quiet && $0.forecastState == .quiet }
-        return [
-            ConsoleSidebarSection(kind: .attention, title: "Attention", count: attention.count, families: attention),
-            ConsoleSidebarSection(kind: .watched, title: "Watched", count: matches.count, families: matches),
-            ConsoleSidebarSection(kind: .quiet, title: "Quiet", count: quiet.count, families: quiet),
-            ConsoleSidebarSection(kind: .tools, title: "Tools", count: 4, families: [])
-        ]
+        ConsoleSearchProjection.run(
+            rows: families,
+            query: ProcessSearchQuery(query),
+            filter: filter,
+            sort: sort,
+            index: nil
+        ).rows
     }
 
     public func detailPanel(for familyKey: String) -> FamilyDetailPanelModel? {
@@ -291,16 +232,5 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             if families.contains(where: { $0.familyKey == key || $0.signature.id == key }) { return false }
         }
         return true
-    }
-
-    private static func smartSort(_ lhs: FamilyTriageViewModel, _ rhs: FamilyTriageViewModel) -> Bool {
-        if lhs.level != rhs.level { return lhs.level > rhs.level }
-        if lhs.heat != rhs.heat { return lhs.heat > rhs.heat }
-        if lhs.forecastPriority != rhs.forecastPriority { return lhs.forecastPriority > rhs.forecastPriority }
-        if lhs.score != rhs.score { return lhs.score > rhs.score }
-        if lhs.leakVelocity != rhs.leakVelocity { return lhs.leakVelocity > rhs.leakVelocity }
-        if lhs.memoryBytes != rhs.memoryBytes { return lhs.memoryBytes > rhs.memoryBytes }
-        if lhs.cpuPercent != rhs.cpuPercent { return lhs.cpuPercent > rhs.cpuPercent }
-        return lhs.id < rhs.id
     }
 }

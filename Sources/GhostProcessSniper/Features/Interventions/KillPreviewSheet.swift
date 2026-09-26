@@ -568,14 +568,6 @@ struct KillPreviewSheet: View {
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    private func signalLabel(_ signal: Int32) -> String {
-        switch signal {
-        case SIGINT: "SIGINT"
-        case SIGTERM: "SIGTERM"
-        case SIGKILL: "SIGKILL"
-        default: "SIG\(signal)"
-        }
-    }
 }
 
 private enum KillPreviewStep: Int, CaseIterable, Identifiable {

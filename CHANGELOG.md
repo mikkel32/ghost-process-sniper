@@ -2,6 +2,26 @@
 
 All notable changes to Ghost Process Sniper are documented here. The project follows [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Search
+- Search reaches every running process, not only tracked families. Apps outside the watch scope appear under *Other running processes* with memory, CPU, PID, and copy/reveal actions.
+- Matches helper names, command lines, paths, PIDs, and listening ports; words match in any order and ignore case and accents.
+- Ranked results with highlighted names and a note explaining matches found through a helper, command, PID, or port.
+- Filters: `-exclude`, `"phrases"`, `name:`/`cmd:`/`path:`/`user:`/`kind:`, `pid:`/`port:`, `cpu>`/`mem>`/`gpu>`/`threads>`/`leak>`/`children>`, and `is:` states. Understood filters show as chips; half-typed filters never blank the list.
+- Typo- and acronym-tolerant fallback (`crhome`, `vsc`) when nothing matches exactly.
+- Return in the search field opens the best match; typing from any section opens the results.
+- Incident and duplicate search use the same matching.
+
+### Fixed
+- Paste, copy, cut, select all, and undo now work in the console's text fields (the app menu had no Edit menu).
+- The **Leaks** filter shows credible leaks only, instead of any family whose memory grew at all.
+- The sidebar's *View all* for Stable families opens exactly those families.
+- **All Processes** (⌘6) is available from the Radar menu.
+
+### Removed
+- Unused views, models, and APIs left over from earlier designs, and a second, divergent copy of the family filter logic.
+
 ## [1.0.0] — 2026-09-26
 
 First public release.

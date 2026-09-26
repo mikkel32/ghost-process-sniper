@@ -91,6 +91,8 @@ public struct RefreshOutcome: Equatable, Sendable {
     public let phaseTrace: RefreshPhaseTrace
     public let generatedAt: Date
     public let thermalActivity: ThermalActivitySummary
+    /// Every sampled process, tracked or not, for search.
+    public let processes: [ProcessMetrics]
 
     public init(
         families: [ProcessFamily],
@@ -106,7 +108,8 @@ public struct RefreshOutcome: Equatable, Sendable {
         payload: RadarPublishPayload,
         phaseTrace: RefreshPhaseTrace,
         generatedAt: Date,
-        thermalActivity: ThermalActivitySummary = .empty
+        thermalActivity: ThermalActivitySummary = .empty,
+        processes: [ProcessMetrics] = []
     ) {
         self.families = families
         self.summary = summary
@@ -122,6 +125,7 @@ public struct RefreshOutcome: Equatable, Sendable {
         self.phaseTrace = phaseTrace
         self.generatedAt = generatedAt
         self.thermalActivity = thermalActivity
+        self.processes = processes
     }
 }
 
@@ -344,7 +348,8 @@ public actor RadarRefreshWorker {
             payload: payload,
             phaseTrace: phaseTrace,
             generatedAt: request.now,
-            thermalActivity: thermalActivity
+            thermalActivity: thermalActivity,
+            processes: batch.processes
         )
     }
 

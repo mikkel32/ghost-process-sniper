@@ -11,15 +11,16 @@ NativeProcessSampler (actor)
     -> ProcessMonitor (MainActor, observable facade)
         -> small overview sections / current family
         -> ConsoleProjectionWorker (actor)
+            -> ProcessSearchIndex (folded text per process identity, built only while searching)
             -> ConsoleQueryStore (MainActor, latest complete query)
                 -> process browser / sidebar / incident rows
 ```
 
-The sampler owns process identity and measurement provenance. The refresh worker owns candidate building, scoring, persistence coordination, and presentation preparation. The monitor performs the short main-actor handoff. Process queries are prepared by a separate actor; reading a list from a view does not filter, sort, format, or mutate a cache.
+The sampler owns process identity and measurement provenance. Every sampled process — tracked or not — travels with the refresh outcome, so search can reach apps outside the watch scope without a second scan. The refresh worker owns candidate building, scoring, persistence coordination, and presentation preparation. The monitor performs the short main-actor handoff. Process queries are prepared by a separate actor; reading a list from a view does not filter, sort, format, or mutate a cache.
 
 ## Source organization
 
-The app now separates platform lifecycle (`Application`), menu-bar integration (`MenuBar`), console navigation (`Shell`), reusable visual primitives (`DesignSystem`), and individual `Features`. The core target has named responsibility folders for domain values, configuration, monitoring, sampling, thermal analysis, intelligence, persistence, presentation, diagnostics, and interventions. SwiftPM still builds the existing app and core targets; these folders are responsibility boundaries, not new binary modules.
+The app now separates platform lifecycle (`Application`), menu-bar integration (`MenuBar`), console navigation (`Shell`), reusable visual primitives (`DesignSystem`), and individual `Features`. The core target has named responsibility folders for domain values, configuration, monitoring, sampling, thermal analysis, intelligence, persistence, search, presentation, diagnostics, and interventions. SwiftPM still builds the existing app and core targets; these folders are responsibility boundaries, not new binary modules.
 
 Process identity, measurements, signatures, forensics, families, and intervention plans now have separate files. The hardware detector is separate from its value models. Process-cause and precision-target views belong to the Processes feature, rather than sharing the temperature-view file. Existing source moves preserve their contents and public type names.
 
@@ -34,6 +35,7 @@ See [Development and source ownership](Development.md) for the complete ownershi
 | `CompactConsoleSnapshot.swift` | Dashboard guidance, bounded priority queues, compact sidebar rows |
 | `ConsoleRowModels.swift` | Incident/rule rows and diagnostic presentation |
 | `ConsoleQueryModels.swift` | Pure query transformations and reusable query cache |
+| `ConsoleSearchModels.swift` | Filter, search, and ordering of family rows; untracked-process result rows |
 | `ConsoleQueryStore.swift` | Actor-based query execution, cancellation, and latest-request publication |
 | `RadarPublishPayload.swift` | Worker-to-monitor handoff and content-versus-diagnostics decisions |
 | `SnapshotContentRevision.swift` | Rendering invalidation buckets; not raw-measurement ownership |
@@ -42,6 +44,17 @@ See [Development and source ownership](Development.md) for the complete ownershi
 The former 1,445-line `RadarConsoleSnapshot.swift` was split along these responsibilities, rather than simply renamed. Publication types also moved out of `SmoothnessModels.swift`; that file now contains refresh timing and responsiveness instrumentation.
 
 The existing core sampling, intelligence, persistence, sensor, and intervention files remain in the core target. The app target contains platform integration and SwiftUI views. This is an incremental refactor of the measured hot paths, not a claim that every implementation file has been rewritten or exhaustively reviewed.
+
+`Sources/GhostProcessSniperCore/Search/` holds the process search engine. It is platform-free apart from `ProcessSearchIndex.swift`, which adapts families and samples:
+
+| File | Responsibility |
+| --- | --- |
+| `SearchText.swift` | Case-, accent- and width-folded UTF-8 text with word starts; literal, acronym, subsequence, and typo matching |
+| `ProcessSearchQuery.swift` | Query language: words, phrases, exclusions, field scopes, identities, measurements, and `is:` states |
+| `ProcessSearchEngine.swift` | Scoring across a family's root and helpers, match reasons, highlights, and the exact-then-approximate policy |
+| `ProcessSearchIndex.swift` | Search subjects for families and untracked processes, with folded text cached per process identity |
+
+An idle console never touches the index. While a query is active, each new sample re-runs the search (about 2 ms for 1,000 processes); folding happens once per process lifetime.
 
 ## Rendering rules
 

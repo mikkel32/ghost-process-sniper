@@ -16,7 +16,32 @@ Process rows explain the cause using memory, CPU, GPU, and sustained growth. The
 
 ## All Processes
 
-**All Processes** includes every family in the current query, not just the sidebar's short priority list. Search by name, command, or executable path. Use the filters and sort menu to narrow the list, then select a row to inspect it.
+**All Processes** includes every family in the current query, not just the sidebar's short priority list. Use the filters and sort menu to narrow the list, then select a row to inspect it.
+
+### Searching
+
+Press **⌘F** anywhere in the console and start typing; results open on this page. Search covers every running process, not only the families the radar tracks:
+
+- **Words** match in any order, ignoring case and accents, across process names, helper names, command lines, and executable paths. A row that matched through a helper or its command says so underneath its name.
+- **Numbers** match a PID or a listening port as well as text, so `5173` finds the dev server serving that port.
+- **Tracked families come first**, then *Other running processes* — apps outside the current watch scope. They show memory, CPU, and PID, and their context menu copies the PID or command line or reveals the app in Finder.
+- **Close matches** appear only when nothing matches exactly: `crhome` finds Chrome and `vsc` finds Visual Studio Code.
+- **Return** opens the best-matching family.
+
+Narrow a search with filters; the chips under the filter bar show how the search was understood:
+
+| Filter | Meaning |
+| --- | --- |
+| `"exact phrase"` | Words that must appear together. |
+| `-word` | Exclude matches, for example `chrome -helper`. |
+| `name:` `cmd:` `path:` `user:` `kind:` | Search one field only. |
+| `pid:123,456` `port:3000` | Exact identities. |
+| `cpu>20` `mem>1.5gb` `gpu>5` `threads>100` | Measurements; memory without a unit means MB. |
+| `leak>2` `children>3` | Growth in MB/min and helper count (tracked families only). |
+| `is:attention` `is:hot` `is:critical` `is:quiet` `is:leaking` `is:killable` `is:dev` `is:duplicate` | Radar states (tracked families only). |
+| `is:mine` `is:system` `is:tracked` `is:untracked` | Ownership and tracking. |
+
+Any unambiguous prefix works for `is:` filters, so `is:leak` means `is:leaking`. A half-typed filter such as `cpu>` is ignored until it is complete.
 
 A *family* groups related processes — an app and its helpers, or a dev server and the workers it spawned. Opening a row never stops anything.
 
