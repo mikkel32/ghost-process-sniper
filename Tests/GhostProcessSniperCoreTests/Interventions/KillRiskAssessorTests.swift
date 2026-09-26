@@ -105,6 +105,19 @@ final class KillRiskAssessorTests: XCTestCase {
         XCTAssertNil(orphan.supervisor)
     }
 
+    func testLongCommandLinesAreReadFromTheirStart() {
+        let padding = String(repeating: "--flag=\u{00e9}t\u{00e9} ", count: 600)
+        XCTAssertEqual(assess(root: process(92, "npm", command: "npm install \(padding)")).kind, .packageManager)
+        let tail = assess(root: process(93, "node", command: "node worker.js \(padding) vite"))
+        XCTAssertEqual(tail.kind, .general, "only the start of argv identifies a workload")
+    }
+
+    func testAppMainBinaryIsTheLastBundleExecutable() {
+        XCTAssertEqual(assess(root: process(94, "Code", path: "/Applications/Visual Studio Code.app/Contents/MacOS/Code")).appQuitPID, 94)
+        XCTAssertNil(assess(root: process(95, "tool", path: "/Applications/Tool.app/Contents/MacOS/bin/tool")).appQuitPID)
+        XCTAssertNil(assess(root: process(96, "Tool", path: "/Applications/Tool.app/Contents/MacOS/")).appQuitPID)
+    }
+
     func testEmptyWorkloadIsNeutral() {
         XCTAssertEqual(assessor.assess(.empty), .none)
     }

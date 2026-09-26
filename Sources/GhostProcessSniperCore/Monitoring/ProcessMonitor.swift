@@ -31,6 +31,7 @@ public final class ProcessMonitor {
     /// console re-queries on each publish, and views never read it directly.
     @ObservationIgnored public private(set) var sampledProcesses: [ProcessMetrics] = []
     @ObservationIgnored public private(set) var sampleRevision: UInt64 = 0
+    @ObservationIgnored var stopRiskCache = StopRiskCache()
 
     @ObservationIgnored private let thermalSampler = ThermalSampler()
     @ObservationIgnored private var selfUsageMonitor = SelfUsageMonitor()
@@ -387,10 +388,8 @@ public final class ProcessMonitor {
     }
 
     public func killPlan(for family: ProcessFamily) async -> KillPlan {
-        let workload = KillWorkloadProfile(family: family, sample: sampledProcesses)
-        guard let store else {
-            return family.killPlan(workload: workload)
-        }
+        let workload = stopWorkload(for: family)
+        guard let store else { return family.killPlan(workload: workload) }
         do {
             let devKind = family.classification?.kind.rawValue
             let history = try await store.killStrategyHistory(signatureID: family.signature.id, devKind: devKind)

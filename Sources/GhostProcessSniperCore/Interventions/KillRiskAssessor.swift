@@ -256,23 +256,32 @@ private struct Fingerprint {
     let binary: String
     let args: [String]
     let command: String
+    private let identities: [String]
 
     init(_ process: KillWorkloadProcess) {
         self.init(name: process.name, path: process.executablePath, command: process.commandLine)
     }
 
+    /// What identifies a workload sits at the front of argv; the rest is
+    /// flags and file lists. Electron helpers carry kilobytes of it.
+    private static let commandPrefixBytes = 512
+
     init(name: String, path: String, command: String) {
         self.name = name.lowercased()
         self.path = path.lowercased()
         rawPath = path
-        self.command = command.lowercased()
-        let tokens = self.command.split(whereSeparator: \.isWhitespace).map(String.init)
-        let first = tokens.first.map { ($0 as NSString).lastPathComponent } ?? ""
+        self.command = String(decoding: command.utf8.prefix(Self.commandPrefixBytes), as: UTF8.self).lowercased()
+        let tokens = self.command.unicodeScalars.split(whereSeparator: \.properties.isWhitespace).map(String.init)
+        let first = tokens.first.map(Self.lastComponent) ?? ""
         binary = first.isEmpty ? self.name : first
         args = Array(tokens.dropFirst())
+        identities = [self.name, binary, Self.lastComponent(self.path)]
     }
 
-    private var identities: [String] { [name, binary, (path as NSString).lastPathComponent] }
+    private static func lastComponent(_ path: String) -> String {
+        guard let slash = path.lastIndex(of: "/") else { return path }
+        return String(path[path.index(after: slash)...])
+    }
 
     private func named(_ candidates: Set<String>) -> Bool {
         identities.contains(where: candidates.contains)
@@ -282,7 +291,7 @@ private struct Fingerprint {
     private var verb: String? { args.first { !$0.hasPrefix("-") } }
 
     private func mentions(_ needles: [String]) -> Bool {
-        needles.contains { command.contains($0) || path.contains($0) }
+        needles.contains { command.includes($0) || path.includes($0) }
     }
 
     // App bundles
@@ -294,9 +303,11 @@ private struct Fingerprint {
     }
 
     var isAppMainBinary: Bool {
-        guard path.range(of: #"\.app/contents/macos/[^/]+$"#, options: .regularExpression) != nil else { return false }
+        guard let range = path.range(of: ".app/contents/macos/", options: .backwards) else { return false }
+        let executable = path[range.upperBound...]
+        guard !executable.isEmpty, !executable.contains("/") else { return false }
         let nested = [".app/contents/frameworks/", "/contents/helpers/", ".app/contents/library/", "/contents/xpcservices/"]
-        return !nested.contains(where: path.contains) && !name.contains("helper")
+        return !nested.contains(where: path.includes) && !name.includes("helper")
     }
 
     var isEditorApp: Bool {
@@ -316,7 +327,7 @@ private struct Fingerprint {
     var isContainerRuntime: Bool {
         named(["com.docker.backend", "com.docker.virtualization", "com.docker.vmnetd", "docker desktop", "colima",
                "limactl", "qemu-system-aarch64", "qemu-system-x86_64", "vfkit", "gvproxy", "orbstack", "podman"])
-            || path.contains("/docker.app/contents/macos/") || path.contains("/orbstack.app/contents/macos/")
+            || path.includes("/docker.app/contents/macos/") || path.includes("/orbstack.app/contents/macos/")
     }
 
     var isDataStore: Bool {
@@ -406,7 +417,7 @@ private struct Fingerprint {
         if named(["watchexec"]) { return .watchexec }
         if named(["cargo-watch"]) || (binary == "cargo" && verb == "watch") { return .cargoWatch }
         if named(["air"]) { return .air }
-        if (binary == "tsx" || command.contains("/tsx")) && args.contains("watch") { return .tsxWatch }
+        if (binary == "tsx" || command.includes("/tsx")) && args.contains("watch") { return .tsxWatch }
         if named(["entr"]) { return .entr }
         if named(["overmind"]) { return .overmind }
         return nil
@@ -430,6 +441,25 @@ private struct Fingerprint {
         let managed = ["/system/", "/usr/libexec/", "/usr/sbin/", "/library/apple/", "/library/privilegedhelpertools/",
                        ".app/contents/library/loginitems/", "/contents/library/launchservices/", ".app/contents/helpers/",
                        "/library/application support/"]
-        return managed.contains(where: path.hasPrefix) || managed.dropFirst(4).contains(where: path.contains)
+        return managed.contains(where: path.hasPrefix) || managed.dropFirst(4).contains(where: path.includes)
+    }
+}
+
+private extension String {
+    /// A byte-wise substring test. Foundation's `contains` bridges on every
+    /// call, which made scanning a large family's argv cost milliseconds.
+    func includes(_ needle: String) -> Bool {
+        var haystack = self
+        var needle = needle
+        return haystack.withUTF8 { text in
+            needle.withUTF8 { pattern in
+                guard let first = pattern.first else { return true }
+                guard pattern.count <= text.count else { return false }
+                for start in 0...(text.count - pattern.count) where text[start] == first {
+                    if memcmp(text.baseAddress! + start, pattern.baseAddress!, pattern.count) == 0 { return true }
+                }
+                return false
+            }
+        }
     }
 }

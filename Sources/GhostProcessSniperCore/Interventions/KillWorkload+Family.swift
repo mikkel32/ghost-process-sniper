@@ -4,6 +4,12 @@ public extension KillWorkloadProfile {
     /// Captures a family's members and, from the full sample, the chain of
     /// processes above its root, where supervisors such as nodemon live.
     init(family: ProcessFamily, sample: [ProcessMetrics]) {
+        self.init(family: family, index: Self.pidIndex(sample))
+    }
+
+    /// The same capture from a PID index built once per sample, so families
+    /// share it instead of each indexing the whole sample.
+    init(family: ProcessFamily, index: [Int32: ProcessMetrics]) {
         let members = [family.root] + family.members.filter { $0.identity != family.root.identity }
         let processes = members.map { process in
             KillWorkloadProcess(
@@ -16,15 +22,18 @@ public extension KillWorkloadProfile {
                 isRoot: process.identity == family.root.identity
             )
         }
-        let byPID = Dictionary(sample.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
         var ancestors: [KillWorkloadAncestor] = []
         var cursor = family.root.parentPID
         var visited: Set<Int32> = [family.root.pid]
-        while cursor > 1, ancestors.count < 8, let parent = byPID[cursor], visited.insert(parent.pid).inserted {
+        while cursor > 1, ancestors.count < 8, let parent = index[cursor], visited.insert(parent.pid).inserted {
             ancestors.append(KillWorkloadAncestor(pid: parent.pid, name: parent.name,
                                                   executablePath: parent.executablePath, commandLine: parent.commandLine))
             cursor = parent.parentPID
         }
         self.init(processes: processes, ancestors: ancestors, parentIsLaunchd: family.root.parentPID == 1)
+    }
+
+    static func pidIndex(_ sample: [ProcessMetrics]) -> [Int32: ProcessMetrics] {
+        Dictionary(sample.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
     }
 }
