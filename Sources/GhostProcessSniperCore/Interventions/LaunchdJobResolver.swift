@@ -11,13 +11,27 @@ public struct LaunchdJob: Equatable, Sendable {
     public let domain: String
     public let plistPath: String?
     public let keepAlive: Bool
+    /// The plist's ExitTimeOut; nil when it sets none.
+    public let exitTimeOut: TimeInterval?
 
-    public init(label: String, pid: Int32?, domain: String, plistPath: String?, keepAlive: Bool) {
+    public init(label: String, pid: Int32?, domain: String, plistPath: String?, keepAlive: Bool, exitTimeOut: TimeInterval? = nil) {
         self.label = label
         self.pid = pid
         self.domain = domain
         self.plistPath = plistPath
         self.keepAlive = keepAlive
+        self.exitTimeOut = exitTimeOut
+    }
+
+    /// launchd's default ExitTimeOut: system-defined, 20 s on macOS.
+    public static let defaultExitTimeOut: TimeInterval = 20
+
+    /// How long after a bootout launchd sends SIGKILL to a job still
+    /// running, whatever Ghost's force hold says; nil when it never does
+    /// (an ExitTimeOut of 0 means forever).
+    public var bootoutForceSeconds: TimeInterval? {
+        let seconds = exitTimeOut ?? Self.defaultExitTimeOut
+        return seconds > 0 ? seconds : nil
     }
 
     public var domainTarget: String { "\(domain)/\(label)" }
@@ -195,12 +209,12 @@ public struct LaunchdJobResolver: Sendable {
             guard let entry = Self.parseList(listing.stdout).first(where: { $0.pid == pid }) else { return (nil, true) }
             let agent = index.agent(label: entry.label)
             let job = LaunchdJob(label: entry.label, pid: pid, domain: "gui/\(userID)",
-                                 plistPath: agent?.plistPath, keepAlive: agent?.keepAlive ?? false)
+                                 plistPath: agent?.plistPath, keepAlive: agent?.keepAlive ?? false, exitTimeOut: agent?.exitTimeOut)
             return (job, true)
         }
         guard let agent = index.agent(forExecutable: executablePath) else { return (nil, false) }
         let job = LaunchdJob(label: agent.label, pid: nil, domain: agent.isDaemon ? "system" : "gui/\(userID)",
-                             plistPath: agent.plistPath, keepAlive: agent.keepAlive)
+                             plistPath: agent.plistPath, keepAlive: agent.keepAlive, exitTimeOut: agent.exitTimeOut)
         return (job, false)
     }
 

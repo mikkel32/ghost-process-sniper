@@ -30,6 +30,23 @@ final class KillLaunchAgentIndexTests: XCTestCase {
         XCTAssertNil(index.agent(label: "com.example.missing"))
     }
 
+    func testReadsExitTimeOutAndWhenLaunchdForcesABootedOutJob() {
+        folder.write(label: "homebrew.mxcl.redis", program: ["/opt/homebrew/opt/redis/bin/redis-server"], exitTimeOut: 45)
+        folder.write(label: "com.example.patient", program: ["/usr/local/bin/patient"], exitTimeOut: 0)
+        folder.write(label: "com.example.once", program: ["/usr/local/bin/once"])
+        let index = folder.index()
+
+        XCTAssertEqual(index.agent(label: "homebrew.mxcl.redis")?.exitTimeOut, 45)
+        XCTAssertEqual(index.agent(label: "com.example.patient")?.exitTimeOut, 0)
+        XCTAssertNil(index.agent(label: "com.example.once")?.exitTimeOut)
+        func job(_ exitTimeOut: TimeInterval?) -> LaunchdJob {
+            LaunchdJob(label: "x", pid: 1, domain: "gui/501", plistPath: nil, keepAlive: true, exitTimeOut: exitTimeOut)
+        }
+        XCTAssertEqual(job(45).bootoutForceSeconds, 45)
+        XCTAssertEqual(job(nil).bootoutForceSeconds, 20, "launchd's default")
+        XCTAssertNil(job(0).bootoutForceSeconds, "0 means launchd waits forever")
+    }
+
     func testSymlinkedProgramResolvesToTheProcessExecutable() {
         let postgres = folder.linkedExecutable(named: "postgres")
         let plist = folder.write(label: "homebrew.mxcl.postgresql@16", program: [postgres.link, "-D", "/opt/homebrew/var/postgresql@16"],

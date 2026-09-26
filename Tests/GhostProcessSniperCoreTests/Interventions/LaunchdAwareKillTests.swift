@@ -72,6 +72,62 @@ final class LaunchdAwareKillTests: XCTestCase {
         XCTAssertTrue(report.succeeded, report.summary)
     }
 
+    func testApprovedShutdownSignalGoesOutBeforeTheBootoutAndHeldForceNamesLaunchd() async {
+        let table = FakeProcessTable()
+        let postgres = KillProcessLite.fake(pid: 812, name: "postgres")
+        table.add(postgres, FakeProcessTable.Behaviour(onSignal: [SIGTERM: [.ignore], SIGINT: [.exit(afterTicks: 1)]]))
+        let sentBeforeBootout = SignalsAtBootout()
+        let launchctl = FakeLaunchctl(list: listing, onBootout: {
+            sentBeforeBootout.record(table.signals(to: 812))
+            table.signalFromOutside(SIGTERM, to: 812)
+        })
+
+        let report = await killer(table, launchctl).kill(
+            plan: plan(postgres, command: KillFixture.postgresCommand)
+                .binding(to: [postgres.identity], expiresAt: .distantFuture, launchdStop: .untilLogin),
+            forceKillDelay: 2, skipForce: true
+        )
+
+        XCTAssertEqual(report.launchdBootout?.accepted, true)
+        XCTAssertEqual(sentBeforeBootout.signals, [SIGINT], "the fast shutdown starts before launchd's SIGTERM can start a smart one")
+        XCTAssertEqual(table.signals(to: 812), [SIGINT])
+        XCTAssertTrue(report.succeeded, report.summary)
+        let waits = report.eventHistory.filter { $0.kind == .graceWaiting }.map(\.message)
+        XCTAssertFalse(waits.isEmpty)
+        XCTAssertFalse(waits.contains { $0.contains("nothing will be forced") }, "launchd force-stops a booted-out job after its exit timeout")
+        XCTAssertTrue(waits.allSatisfy { $0.contains("launchd force-stops it after 20 s") }, waits.joined(separator: "\n"))
+    }
+
+    func testHeldForceNamesTheJobsOwnExitTimeout() async {
+        folder.write(label: "homebrew.mxcl.postgresql@16", program: ["/opt/homebrew/opt/postgresql@16/bin/postgres"], keepAlive: true,
+                     exitTimeOut: 45)
+        let table = FakeProcessTable()
+        let postgres = KillProcessLite.fake(pid: 812, name: "postgres")
+        table.add(postgres, FakeProcessTable.Behaviour(onSignal: [SIGTERM: [.ignore], SIGINT: [.exit(afterTicks: 1)]]))
+        let launchctl = FakeLaunchctl(list: listing, onBootout: { table.signalFromOutside(SIGTERM, to: 812) })
+
+        let report = await killer(table, launchctl).kill(
+            plan: plan(postgres).binding(to: [postgres.identity], expiresAt: .distantFuture, launchdStop: .untilLogin),
+            forceKillDelay: 2, skipForce: true
+        )
+
+        XCTAssertEqual(report.launchdJob?.exitTimeOut, 45)
+        let wait = report.eventHistory.first { $0.kind == .graceWaiting }?.message ?? ""
+        XCTAssertTrue(wait.contains("launchd force-stops it after 45 s"), wait)
+    }
+
+    func testHeldForceWithoutABootoutStillPromisesNothingForced() async {
+        let table = FakeProcessTable()
+        let postgres = KillProcessLite.fake(pid: 812, name: "postgres")
+        table.add(postgres, FakeProcessTable.Behaviour(onSignal: [SIGINT: [.exit(afterTicks: 1)]]))
+
+        let report = await killer(table, FakeLaunchctl(list: listing)).kill(plan: plan(postgres), forceKillDelay: 2, skipForce: true)
+
+        XCTAssertNil(report.launchdBootout)
+        let wait = report.eventHistory.first { $0.kind == .graceWaiting }?.message ?? ""
+        XCTAssertTrue(wait.hasSuffix("; nothing will be forced."), wait)
+    }
+
     func testSuspendedRootIsResumedSoLaunchdCanStopIt() async {
         let table = FakeProcessTable()
         let syncer = KillProcessLite.fake(pid: 812, name: "syncer", status: FakeProcessTable.stoppedStatus)
@@ -220,5 +276,17 @@ final class LaunchdAwareKillTests: XCTestCase {
         )
         return KillPlan(rootIdentity: root.identity, targetIdentities: [root.identity], protectedPIDs: [],
                         displayName: root.name, workload: workload)
+    }
+}
+
+/// What Ghost had sent the root when launchctl bootout ran.
+private final class SignalsAtBootout: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [Int32]?
+
+    var signals: [Int32]? { lock.withLock { recorded } }
+
+    func record(_ signals: [Int32]) {
+        lock.withLock { recorded = signals }
     }
 }
