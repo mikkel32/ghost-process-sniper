@@ -31,6 +31,10 @@ public struct KillOperationEvent: Identifiable, Codable, Equatable, Sendable {
     public let targetState: KillTargetState?
     public let message: String
     public let createdAt: Date
+    /// Set on the graceful wait only: how long it may last and when it ends
+    /// at the latest, for a countdown.
+    public let waitSeconds: TimeInterval?
+    public let deadline: Date?
 
     public init(
         id: UUID = UUID(),
@@ -40,7 +44,9 @@ public struct KillOperationEvent: Identifiable, Codable, Equatable, Sendable {
         signalName: String? = nil,
         targetState: KillTargetState? = nil,
         message: String,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        waitSeconds: TimeInterval? = nil,
+        deadline: Date? = nil
     ) {
         self.id = id
         self.operationID = operationID
@@ -50,20 +56,45 @@ public struct KillOperationEvent: Identifiable, Codable, Equatable, Sendable {
         self.targetState = targetState
         self.message = message
         self.createdAt = createdAt
+        self.waitSeconds = waitSeconds
+        self.deadline = deadline
     }
 }
 
+/// What the user asks of a running stop. Holding force and ending a wait
+/// are separate: holding force must never cut a graceful wait short.
 public actor KillOperationControl {
-    private var skipForceRequested = false
+    private var forceHeld = false
+    private var waitingStopped = false
 
     public init() {}
 
+    /// Never escalate to force. The graceful waits still run in full.
+    public func holdForce() {
+        forceHeld = true
+    }
+
+    public func isForceHeld() -> Bool {
+        forceHeld
+    }
+
+    /// Ends the wait in progress, and any later one, and holds force.
+    public func stopWaiting() {
+        waitingStopped = true
+        forceHeld = true
+    }
+
+    public func shouldStopWaiting() -> Bool {
+        waitingStopped
+    }
+
+    /// The earlier name for `stopWaiting()`.
     public func requestSkipForce() {
-        skipForceRequested = true
+        stopWaiting()
     }
 
     public func shouldSkipForce() -> Bool {
-        skipForceRequested
+        forceHeld
     }
 }
 
@@ -80,9 +111,8 @@ public actor KillOperationRunner {
         await killer.kill(
             plan: plan,
             forceKillDelay: forceKillDelay,
-            skipForceCheck: {
-                await control.shouldSkipForce()
-            },
+            stopWaitingCheck: { await control.shouldStopWaiting() },
+            forceHeldCheck: { await control.isForceHeld() },
             eventSink: eventSink
         )
     }

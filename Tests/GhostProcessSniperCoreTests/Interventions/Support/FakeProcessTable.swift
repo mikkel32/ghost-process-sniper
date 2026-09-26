@@ -118,7 +118,8 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
 
     // MARK: - Inspection
 
-    /// Every signal the engine sent, in order; quit requests are not signals.
+    /// Every signal the engine sent, in order; quit requests are not signals
+    /// and are logged apart, with signal 0.
     var log: [Sent] { lock.withLock { sentLog } }
     var quitRequests: [Sent] { lock.withLock { quitLog } }
     var requests: [KillSnapshotRequest] { lock.withLock { seenRequests } }
@@ -187,6 +188,10 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
         lock.withLock { listedIdentity(for: pid) != nil }
     }
 
+    func isZombieOrGone(pid: Int32) -> Bool {
+        lock.withLock { listedIdentity(for: pid).flatMap { entries[$0]?.zombie } ?? true }
+    }
+
     func requestQuit(pid: Int32) async -> Bool {
         lock.withLock {
             guard let identity = listedIdentity(for: pid),
@@ -194,7 +199,7 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
                   let ticks = entry.behaviour.quitsOnRequest else {
                 return false
             }
-            quitLog.append(Sent(tick: currentTick, pid: pid, signal: KillSignalPhase.quitRequest))
+            quitLog.append(Sent(tick: currentTick, pid: pid, signal: 0))
             schedule(.exit(identity), afterTicks: ticks)
             return true
         }

@@ -5,7 +5,6 @@ public enum KillExitEventKind: String, Codable, Sendable {
     case exit
     case fork
     case exec
-    case signal
     case unavailable
 }
 
@@ -40,12 +39,13 @@ public enum KillWatcherHintKind: String, Codable, Sendable {
     case exit
     case fork
     case exec
-    case signal
     case unavailable
 
+    /// Our own signals are not news, so NOTE_SIGNAL is not watched: only a
+    /// fork or exec means the tree may have changed.
     public var requiresCompleteVerification: Bool {
         switch self {
-        case .fork, .exec, .signal:
+        case .fork, .exec:
             true
         case .exit, .unavailable:
             false
@@ -112,7 +112,7 @@ private final class KillExitWatcherToken: @unchecked Sendable {
     }
 }
 
-/// Streams kernel exit, fork, exec and signal hints for the targets of one stop.
+/// Streams kernel exit, fork and exec hints for the targets of one stop.
 public struct KillExitWatcher: Sendable {
     public static func watchHints(
         operationID: KillOperationID,
@@ -130,7 +130,7 @@ public struct KillExitWatcher: Sendable {
             for target in targets.prefix(max(0, maxTargets)) {
                 let source = DispatchSource.makeProcessSource(
                     identifier: pid_t(target.pid),
-                    eventMask: [.exit, .fork, .exec, .signal],
+                    eventMask: [.exit, .fork, .exec],
                     queue: queue
                 )
                 source.setEventHandler {
@@ -178,7 +178,7 @@ public struct KillExitWatcher: Sendable {
                     pid: target.pid,
                     identity: target.identity,
                     kind: .fork,
-                    message: "Fork hint observed for \(target.name); complete verification will refresh the tree."
+                    message: "Fork observed for \(target.name)."
                 )
             )
         }
@@ -190,17 +190,6 @@ public struct KillExitWatcher: Sendable {
                     identity: target.identity,
                     kind: .exec,
                     message: "Exec hint observed for \(target.name); identity verification remains authoritative."
-                )
-            )
-        }
-        if event.contains(.signal) {
-            hints.append(
-                KillWatcherHint(
-                    operationID: operationID,
-                    pid: target.pid,
-                    identity: target.identity,
-                    kind: .signal,
-                    message: "Signal hint observed for \(target.name)."
                 )
             )
         }
@@ -252,52 +241,43 @@ public struct KillSignalWave: Identifiable, Codable, Equatable, Sendable {
 public struct KillGraceResult: Codable, Equatable, Sendable {
     public let waitedSeconds: TimeInterval
     public let endedEarly: Bool
-    public let skipForceRequested: Bool
+    /// The user chose to stop waiting.
+    public let stoppedByUser: Bool
 
-    public static let empty = KillGraceResult(waitedSeconds: 0, endedEarly: false, skipForceRequested: false)
+    public static let empty = KillGraceResult(waitedSeconds: 0, endedEarly: false, stoppedByUser: false)
 }
 
 public struct KillGraceCoordinator: Sendable {
     public init() {}
 
+    /// Waits up to `seconds`, ending early when the targets are gone or the
+    /// user stops waiting. Holding force never shortens it.
     public func wait(
         seconds: TimeInterval,
         sleeper: @escaping @Sendable (UInt64) async -> Void,
-        skipForceCheck: (@Sendable () async -> Bool)? = nil,
+        now: @escaping @Sendable () -> Date = { Date() },
+        stopWaitingCheck: (@Sendable () async -> Bool)? = nil,
         shouldEndEarly: @escaping @Sendable () async -> Bool
     ) async -> KillGraceResult {
         guard seconds > 0 else {
-            return KillGraceResult(
-                waitedSeconds: 0,
-                endedEarly: await shouldEndEarly(),
-                skipForceRequested: await skipForceCheck?() ?? false
-            )
+            return KillGraceResult(waitedSeconds: 0, endedEarly: await shouldEndEarly(), stoppedByUser: false)
         }
 
-        let started = Date()
+        let started = now()
         let step = min(0.075, max(0.02, seconds / 8))
-        while Date().timeIntervalSince(started) < seconds {
-            if await skipForceCheck?() == true {
-                return KillGraceResult(
-                    waitedSeconds: Date().timeIntervalSince(started),
-                    endedEarly: true,
-                    skipForceRequested: true
-                )
-            }
+        while now().timeIntervalSince(started) < seconds {
+            // A cancelled Task.sleep returns at once; without this the loop
+            // would spin for the rest of the grace.
+            if Task.isCancelled { break }
             if await shouldEndEarly() {
-                return KillGraceResult(
-                    waitedSeconds: Date().timeIntervalSince(started),
-                    endedEarly: true,
-                    skipForceRequested: false
-                )
+                return KillGraceResult(waitedSeconds: now().timeIntervalSince(started), endedEarly: true, stoppedByUser: false)
+            }
+            if await stopWaitingCheck?() == true {
+                return KillGraceResult(waitedSeconds: now().timeIntervalSince(started), endedEarly: true, stoppedByUser: true)
             }
             await sleeper(UInt64(step * 1_000_000_000))
         }
-        return KillGraceResult(
-            waitedSeconds: Date().timeIntervalSince(started),
-            endedEarly: false,
-            skipForceRequested: await skipForceCheck?() ?? false
-        )
+        return KillGraceResult(waitedSeconds: now().timeIntervalSince(started), endedEarly: false, stoppedByUser: false)
     }
 }
 

@@ -149,23 +149,23 @@ public struct KillStrategySimulator: Sendable {
             baseGrace = 0.76
             baseForce = 0.18
             baseSurvivor = 0.05
-            baseDuration = profile.verificationSchedule.graceSeconds + profile.verificationSchedule.secondaryGraceSeconds + 0.2
+            baseDuration = profile.graceSeconds + profile.secondaryGraceSeconds + 0.2
         case .stubbornRunaway:
             baseGrace = 0.42
             baseForce = 0.54
             baseSurvivor = 0.08
-            baseDuration = profile.verificationSchedule.graceSeconds + profile.verificationSchedule.settleSeconds
+            baseDuration = profile.graceSeconds + profile.settleSeconds
         case .quitApp:
             // Apps answer a quit request well, but may pause on a save prompt.
             baseGrace = 0.84
             baseForce = 0.08
             baseSurvivor = 0.1
-            baseDuration = profile.verificationSchedule.graceSeconds * 0.4 + profile.verificationSchedule.secondaryGraceSeconds
+            baseDuration = profile.graceSeconds * 0.4 + profile.secondaryGraceSeconds
         case .carefulShutdown:
             baseGrace = 0.8
             baseForce = 0.12
             baseSurvivor = 0.08
-            baseDuration = profile.verificationSchedule.graceSeconds * 0.5 + profile.verificationSchedule.settleSeconds
+            baseDuration = profile.graceSeconds * 0.5 + profile.settleSeconds
         case .inspectOnly:
             return KillStrategySimulation(
                 strategy: .inspectOnly,
@@ -179,7 +179,7 @@ public struct KillStrategySimulator: Sendable {
             baseGrace = 0.62
             baseForce = 0.28
             baseSurvivor = 0.06
-            baseDuration = profile.verificationSchedule.graceSeconds + profile.verificationSchedule.settleSeconds
+            baseDuration = profile.graceSeconds + profile.settleSeconds
         }
 
         let targetPenalty = min(0.18, Double(max(0, targets.count - 1)) * 0.025)
@@ -239,41 +239,29 @@ public struct KillStrategyCalibrator: Sendable {
         guard calibration.operationCount > 0, base.strategy != .inspectOnly else {
             return base
         }
-        let learnedGrace = calibration.averageGraceSeconds > 0 ? calibration.averageGraceSeconds : base.verificationSchedule.graceSeconds
+        let learnedGrace = calibration.averageGraceSeconds > 0 ? calibration.averageGraceSeconds : base.graceSeconds
         let forceBias = calibration.forceRate >= 0.45 || calibration.survivorRate >= 0.25
         let reclaimBias = calibration.reclaimAccuracy < 0.45
         // Apps and databases get their clean-shutdown time as a floor: the
         // wait ends as soon as they exit, so a long ceiling costs nothing when
         // history says they are quick, and learning never cuts it short.
         let lowerBound: Double = switch base.strategy {
-        case .quitApp, .carefulShutdown: base.verificationSchedule.graceSeconds
+        case .quitApp, .carefulShutdown: base.graceSeconds
         case .gentleDevServer: 0.45
         default: 0.25
         }
         let upperBound = max(lowerBound, forceKillDelay)
         let tunedGrace = min(upperBound, max(lowerBound, forceBias || reclaimBias ? learnedGrace * 0.8 : learnedGrace * 1.08))
-        let schedule = KillVerificationSchedule(
-            graceSeconds: tunedGrace,
-            secondaryGraceSeconds: base.verificationSchedule.secondaryGraceSeconds,
-            settleSeconds: base.verificationSchedule.settleSeconds
-        )
         let phases = base.phases.map { phase in
-            guard phase.order == 0, phase.signal != nil, !phase.isForce else {
+            guard phase.order == 0, !phase.isForce else {
                 return phase
             }
-            return KillSignalPhase(
-                order: phase.order,
-                label: phase.label,
-                signal: phase.signal,
-                waitAfterSeconds: tunedGrace,
-                isForce: phase.isForce
-            )
+            return KillSignalPhase(order: phase.order, label: phase.label, action: phase.action, waitAfterSeconds: tunedGrace)
         }
         return KillStrategyProfile(
             strategy: base.strategy,
             confidence: min(1, base.confidence + min(0.08, Double(calibration.operationCount) * 0.01)),
             phases: phases,
-            verificationSchedule: schedule,
             summary: "\(base.summary) Grace calibrated to \(String(format: "%.2f", tunedGrace))s from local outcomes."
         )
     }

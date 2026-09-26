@@ -27,6 +27,10 @@ final class RiskAwareKillTests: XCTestCase {
         XCTAssertEqual(report.strategyUsed, .quitApp)
         XCTAssertEqual(report.attempts.first?.signalName, "QUIT")
         XCTAssertTrue(report.survivorPIDs.isEmpty)
+        let helperResult = report.targetResults.first { $0.pid == 301 }
+        XCTAssertEqual(helperResult?.state, .terminated)
+        XCTAssertTrue(helperResult?.reason.contains("Closed with") == true, helperResult?.reason ?? "")
+        XCTAssertEqual(report.realizedMemoryReclaimBytes, 400_000_000, "the helper's memory is reclaimed too")
     }
 
     func testNonAppsFallBackToSigterm() async {

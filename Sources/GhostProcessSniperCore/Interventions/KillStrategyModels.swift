@@ -44,24 +44,6 @@ public enum KillStrategy: String, Codable, CaseIterable, Sendable {
         case .inspectOnly: "Inspect only"
         }
     }
-
-    public func signals(gracefulSignal: Int32 = SIGTERM) -> [Int32] {
-        switch self {
-        case .standard:
-            return [gracefulSignal, SIGKILL]
-        case .gentleDevServer:
-            return [SIGINT, SIGTERM, SIGKILL]
-        case .quitApp:
-            return [KillSignalPhase.quitRequest, SIGTERM, SIGKILL]
-        case .stubbornRunaway, .carefulShutdown:
-            return [SIGTERM, SIGKILL]
-        case .inspectOnly:
-            return []
-        }
-    }
-
-    /// Strategies that try a second, still-polite step before any force.
-    var hasSecondaryStep: Bool { self == .gentleDevServer || self == .quitApp }
 }
 
 public enum KillDecisionFactorKind: String, Codable, Sendable {
@@ -108,92 +90,84 @@ public struct KillDecisionScore: Codable, Equatable, Sendable {
     }
 }
 
-public struct KillSignalPhase: Identifiable, Codable, Equatable, Sendable {
+/// What a phase does to its targets.
+public enum KillPhaseAction: Codable, Equatable, Sendable {
     /// Not a signal: a polite quit request, like choosing Quit from the app's menu.
-    public static let quitRequest: Int32 = 0
+    case quitRequest
+    case signal(Int32)
 
+    public var name: String {
+        switch self {
+        case .quitRequest: "QUIT"
+        case .signal(SIGINT): "SIGINT"
+        case .signal(SIGTERM): "SIGTERM"
+        case .signal(SIGKILL): "SIGKILL"
+        case .signal(let signal): "SIG\(signal)"
+        }
+    }
+}
+
+public struct KillSignalPhase: Identifiable, Codable, Equatable, Sendable {
     public var id: String { "\(order)-\(signalName)-\(label)" }
 
     public let order: Int
     public let label: String
-    public let signal: Int32?
+    public let action: KillPhaseAction
+    /// The longest wait for the targets to exit before the next phase.
     public let waitAfterSeconds: TimeInterval
-    public let isForce: Bool
 
-    public var signalName: String {
-        guard let signal else {
-            return "VERIFY"
-        }
-        return switch signal {
-        case Self.quitRequest: "QUIT"
-        case SIGINT: "SIGINT"
-        case SIGTERM: "SIGTERM"
-        case SIGKILL: "SIGKILL"
-        default: "SIG\(signal)"
-        }
-    }
+    public var signalName: String { action.name }
+    /// Force cannot be caught or answered; it is the step a hold stops before.
+    public var isForce: Bool { action == .signal(SIGKILL) }
 
-    public init(order: Int, label: String, signal: Int32?, waitAfterSeconds: TimeInterval, isForce: Bool) {
+    public init(order: Int, label: String, action: KillPhaseAction, waitAfterSeconds: TimeInterval) {
         self.order = order
         self.label = label
-        self.signal = signal
+        self.action = action
         self.waitAfterSeconds = max(0, waitAfterSeconds)
-        self.isForce = isForce
     }
 }
 
-public struct KillVerificationSchedule: Codable, Equatable, Sendable {
-    public let graceSeconds: TimeInterval
-    public let secondaryGraceSeconds: TimeInterval
-    public let settleSeconds: TimeInterval
-
-    public static let standard = KillVerificationSchedule(
-        graceSeconds: 2,
-        secondaryGraceSeconds: 0.15,
-        settleSeconds: 0.35
-    )
-
-    public init(
-        graceSeconds: TimeInterval,
-        secondaryGraceSeconds: TimeInterval,
-        settleSeconds: TimeInterval
-    ) {
-        self.graceSeconds = max(0, graceSeconds)
-        self.secondaryGraceSeconds = max(0, secondaryGraceSeconds)
-        self.settleSeconds = max(0, settleSeconds)
-    }
-}
-
+/// The phases a stop runs, in order. Approved in the preview, then run as-is.
 public struct KillStrategyProfile: Codable, Equatable, Sendable {
     public let strategy: KillStrategy
     public let confidence: Double
     public let phases: [KillSignalPhase]
-    public let verificationSchedule: KillVerificationSchedule
     public let summary: String
 
     public static let standard = KillStrategyProfile(
         strategy: .standard,
         confidence: 0.65,
         phases: [
-            KillSignalPhase(order: 0, label: "Ask target to terminate", signal: SIGTERM, waitAfterSeconds: 2, isForce: false),
-            KillSignalPhase(order: 1, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.35, isForce: true)
+            KillSignalPhase(order: 0, label: "Ask target to terminate", action: .signal(SIGTERM), waitAfterSeconds: 2),
+            KillSignalPhase(order: 1, label: "Force same-identity survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.35)
         ],
-        verificationSchedule: .standard,
         summary: "SIGTERM, verify, then SIGKILL same-identity survivors."
     )
 
-    public init(
-        strategy: KillStrategy,
-        confidence: Double,
-        phases: [KillSignalPhase],
-        verificationSchedule: KillVerificationSchedule,
-        summary: String
-    ) {
+    public init(strategy: KillStrategy, confidence: Double, phases: [KillSignalPhase], summary: String) {
         self.strategy = strategy
         self.confidence = min(1, max(0, confidence))
         self.phases = phases
-        self.verificationSchedule = verificationSchedule
         self.summary = summary
+    }
+
+    /// How long the first, graceful step waits for a clean exit.
+    public var graceSeconds: TimeInterval { phases.first?.waitAfterSeconds ?? 0 }
+
+    /// The wait after a polite follow-up such as SIGTERM after SIGINT.
+    public var secondaryGraceSeconds: TimeInterval {
+        phases.dropFirst().first { !$0.isForce }?.waitAfterSeconds ?? 0
+    }
+
+    /// The settle time after force.
+    public var settleSeconds: TimeInterval { phases.last { $0.isForce }?.waitAfterSeconds ?? 0 }
+
+    /// The same phases with the first wait raised to at least `seconds`.
+    func extendingGrace(to seconds: TimeInterval) -> KillStrategyProfile {
+        guard let first = phases.first, !first.isForce, seconds > first.waitAfterSeconds else { return self }
+        let longer = KillSignalPhase(order: first.order, label: first.label, action: first.action, waitAfterSeconds: seconds)
+        return KillStrategyProfile(strategy: strategy, confidence: confidence, phases: [longer] + phases.dropFirst(), summary: summary)
     }
 }
 

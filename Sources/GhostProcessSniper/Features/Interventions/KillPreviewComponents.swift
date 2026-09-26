@@ -84,6 +84,7 @@ struct KillTargetRow: View {
         case .locked: "lock"
         case .stale: "clock.badge.xmark"
         case .recycled: "arrow.triangle.2.circlepath"
+        case .stopping: "hourglass"
         case .terminated: "checkmark.seal"
         case .forceKilled: "bolt"
         case .survived: "exclamationmark.triangle"
@@ -95,7 +96,7 @@ struct KillTargetRow: View {
     private var color: Color {
         switch target.state {
         case .ready, .terminated: .green
-        case .locked, .stale, .recycled: .orange
+        case .locked, .stale, .recycled, .stopping: .orange
         case .forceKilled: .red
         case .exitedBeforeSignal: .secondary
         case .survived, .failed: .red

@@ -170,7 +170,7 @@ final class PrecisionTelemetryTests: XCTestCase {
         let child = process(pid: 92_012, parent: 92_011)
         let world = PrecisionWorld([root, child])
         let killer = ProcessKiller(lookup: world, signaler: world, currentUserID: 501, sleeper: { _ in })
-        let plan = family(root: root).killPlan().binding(to: [root.identity], expiresAt: Date().addingTimeInterval(60), strategy: .standard)
+        let plan = family(root: root).killPlan().binding(to: [root.identity], expiresAt: Date().addingTimeInterval(60), profile: .standard)
         let preview = await killer.preview(plan: plan)
         XCTAssertEqual(preview.targetIdentities, [root.identity])
         XCTAssertTrue(preview.lockedTargets.contains { $0.identity == child.identity })

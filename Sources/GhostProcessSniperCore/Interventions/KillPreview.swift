@@ -11,6 +11,9 @@ public struct KillPreview: Equatable, Sendable {
     public let lockedTargets: [KillTarget]
     public let staleTargets: [KillTarget]
     public let recycledTargets: [KillTarget]
+    /// Already exited but not yet collected by their parent (zombies):
+    /// nothing is left to signal.
+    public let exitedTargets: [KillTarget]
     public let readiness: KillReadiness
     public let usedCheapSnapshot: Bool
     public let reclaimEstimate: KillReclaimEstimate
@@ -39,7 +42,7 @@ public struct KillPreview: Equatable, Sendable {
     public var forcePolicyText: String { strategyRecommendation.previewText }
     public var whyKillEvidence: [KillDecisionFactor] { decisionScore.whyKill }
     public var whyWaitEvidence: [KillDecisionFactor] { decisionScore.whyWait }
-    public var recommendedGraceSeconds: TimeInterval { strategyProfile.verificationSchedule.graceSeconds }
+    public var recommendedGraceSeconds: TimeInterval { strategyProfile.graceSeconds }
     public var expectedGracefulSuccess: Double { strategySimulation.expectedGracefulSuccess }
     public var forceProbability: Double { strategySimulation.forceProbability }
     public var survivorRisk: Double { strategySimulation.survivorRisk }
@@ -69,6 +72,7 @@ public struct KillPreview: Equatable, Sendable {
         lockedTargets: [KillTarget] = [],
         staleTargets: [KillTarget] = [],
         recycledTargets: [KillTarget] = [],
+        exitedTargets: [KillTarget] = [],
         readiness: KillReadiness = .ready,
         usedCheapSnapshot: Bool = false,
         reclaimEstimate: KillReclaimEstimate = .empty,
@@ -92,6 +96,7 @@ public struct KillPreview: Equatable, Sendable {
         self.lockedTargets = lockedTargets
         self.staleTargets = staleTargets
         self.recycledTargets = recycledTargets
+        self.exitedTargets = exitedTargets
         self.readiness = readiness
         self.usedCheapSnapshot = usedCheapSnapshot
         self.reclaimEstimate = reclaimEstimate

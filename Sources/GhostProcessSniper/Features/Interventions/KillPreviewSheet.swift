@@ -308,9 +308,9 @@ struct KillPreviewSheet: View {
             if isKilling && !skipForce {
                 Button {
                     skipForce = true
-                    stageText = "Skip-force requested. The intervention will verify and report survivors."
+                    stageText = "Will report instead of force-stopping when the wait ends."
                     Task {
-                        await operationControl.requestSkipForce()
+                        await operationControl.holdForce()
                     }
                 } label: {
                     Label("Skip Force Now", systemImage: "hand.raised")

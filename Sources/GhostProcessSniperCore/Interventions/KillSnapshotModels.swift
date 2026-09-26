@@ -246,6 +246,11 @@ public struct KillProcessLite: Identifiable, Equatable, Sendable {
 
     public var pid: Int32 { identity.pid }
     public var memoryForScoringBytes: UInt64 { max(physicalFootprintBytes, residentMemoryBytes) }
+    /// Exited and waiting for its parent to collect it; signals do nothing.
+    public var isZombie: Bool { status == Self.zombieStatus }
+
+    /// SZOMB in sys/proc.h, which Swift does not import.
+    static let zombieStatus: UInt32 = 5
 
     public init(
         identity: ProcessIdentity,

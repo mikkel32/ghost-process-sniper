@@ -402,7 +402,7 @@ final class RadarConsoleSession {
             pendingKill = PendingKill(
                 family: family,
                 preview: preview,
-                plan: plan.binding(to: preview.targetIdentities, expiresAt: expiresAt, strategy: preview.strategyRecommendation.strategy),
+                plan: plan.binding(to: preview.targetIdentities, expiresAt: expiresAt, profile: preview.strategyProfile),
                 forceKillDelay: delay,
                 expiresAt: expiresAt
             )

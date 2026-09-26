@@ -3006,7 +3006,7 @@ private func interventionPolicyEngineAppliesCalibration() throws {
 
     try check(evaluation.calibration.operationCount == 6, "policy evaluation should carry calibration input")
     try check(evaluation.simulation.expectedGracefulSuccess > 0.76, "local graceful history should raise calibrated graceful odds")
-    try check(evaluation.profile.verificationSchedule.graceSeconds < 2, "calibrated grace should tune below the generic force delay")
+    try check(evaluation.profile.graceSeconds < 2, "calibrated grace should tune below the generic force delay")
     try check(evaluation.profile.summary.contains("calibrated"), "strategy profile should explain local grace calibration")
 }
 
@@ -3108,7 +3108,7 @@ private func killGraceCoordinatorEndsEarlyOnExitEvidence() async throws {
         sleeper: { _ in
             await calls.increment()
         },
-        skipForceCheck: { false },
+        stopWaitingCheck: { false },
         shouldEndEarly: { true }
     )
 
@@ -3197,8 +3197,10 @@ private func processKillerStreamsOperationEventsInOrder() async throws {
     let kinds = capture.events.map(\.kind)
 
     try check(kinds.prefix(2) == [.queued, .preflight], "event stream should begin queued and preflight")
-    try check(kinds.contains(.targetUpdated), "event stream should include target row updates")
+    try check(kinds.filter { $0 == .queued }.count == 1, "one queued event covers every target")
     try check(kinds.contains(.signaled), "event stream should include signal events")
+    try check(capture.events.filter { $0.kind == .signaled }.allSatisfy { $0.targetState == .stopping }, "a signalled row is stopping until its exit is seen")
+    try check(!capture.events.contains { $0.targetState == .terminated }, "only the exit watcher reports a live row as terminated")
     try check(kinds.last == .completed, "event stream should finish with completed")
     try check(report.eventHistory.map(\.kind) == kinds, "report should preserve the streamed event history")
 }
@@ -3224,8 +3226,11 @@ private func processKillerHonorsLiveSkipForceControl() async throws {
     let report = await killer.kill(
         plan: KillPlan(rootIdentity: target.identity, targetIdentities: [target.identity], protectedPIDs: [], displayName: "generic"),
         forceKillDelay: 0.1,
-        skipForceCheck: {
-            await control.shouldSkipForce()
+        stopWaitingCheck: {
+            await control.shouldStopWaiting()
+        },
+        forceHeldCheck: {
+            await control.isForceHeld()
         }
     )
 

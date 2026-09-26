@@ -372,7 +372,7 @@ public final class ProcessMonitor {
         await postKillTask?.value
         let plan = if let approvedPlan { approvedPlan } else { await killPlan(for: family) }
         let operationControl = control ?? KillOperationControl()
-        if skipForce { await operationControl.requestSkipForce() }
+        if skipForce { await operationControl.holdForce() }
         let report = await KillOperationRunner().runReport(plan: plan, killer: killer, forceKillDelay: forceKillDelay ?? settings.forceKillDelay,
                                                            control: operationControl, eventSink: eventSink)
         postKillTask = Task { @MainActor [weak self] in

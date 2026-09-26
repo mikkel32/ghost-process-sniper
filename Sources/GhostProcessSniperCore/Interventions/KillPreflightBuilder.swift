@@ -7,6 +7,9 @@ struct KillPreflight {
     let locked: [KillTarget]
     let stale: [KillTarget]
     let recycled: [KillTarget]
+    /// Zombies: already exited, so never signalled.
+    let exited: [KillTarget]
+    let zombieParentName: String?
 }
 
 /// Turns a snapshot into the preview a stop is approved from and the target
@@ -81,6 +84,7 @@ struct KillPreflightBuilder: Sendable {
         }
 
         let protectionFloor = applyProtection(plan: plan, arena: arena, index: index, targets: &targets, locked: &locked)
+        let zombies = separateZombies(arena: arena, index: index, targets: &targets)
 
         if let approved = plan.approvedIdentities {
             let additions = targets.filter { !approved.contains($0.identity) }
@@ -126,17 +130,12 @@ struct KillPreflightBuilder: Sendable {
             reclaim: reclaim
         )
         evidence += protectionFloor.cautions.map { KillDecisionEvidence(kind: $0.severity == .info ? .info : .caution, title: $0.title, detail: $0.detail) }
+        evidence += zombies.exited.map { KillDecisionEvidence(kind: .info, title: "Already exited", detail: $0.reason) }
         if let reason = protectionFloor.rootReason {
             // Stopping the rest of the tree without its root is not what
             // anyone asked for, so the whole plan becomes inspect-only.
             strategy = KillStrategyRecommendation(strategy: .inspectOnly, confidence: 1, reasons: [reason], previewText: reason)
-            strategyProfile = KillStrategyProfile(
-                strategy: .inspectOnly,
-                confidence: 1,
-                phases: [],
-                verificationSchedule: KillVerificationSchedule(graceSeconds: 0, secondaryGraceSeconds: 0, settleSeconds: 0),
-                summary: reason
-            )
+            strategyProfile = KillStrategyProfile(strategy: .inspectOnly, confidence: 1, phases: [], summary: reason)
             evidence.append(KillDecisionEvidence(kind: .blocking, title: "Protected", detail: reason))
         }
         let readiness = safetyGate.readiness(hasTargets: !targets.isEmpty, evidence: evidence)
@@ -151,6 +150,7 @@ struct KillPreflightBuilder: Sendable {
             lockedTargets: locked,
             staleTargets: stale,
             recycledTargets: recycled,
+            exitedTargets: zombies.exited,
             readiness: readiness,
             usedCheapSnapshot: snapshot.usedCheapPath,
             reclaimEstimate: reclaim,
@@ -166,7 +166,8 @@ struct KillPreflightBuilder: Sendable {
             arenaStats: arena.stats,
             riskAssessment: policy.risk.merging(protectionFloor.cautions, headline: protectionFloor.rootReason)
         )
-        return KillPreflight(preview: preview, targets: targets, locked: locked, stale: stale, recycled: recycled)
+        return KillPreflight(preview: preview, targets: targets, locked: locked, stale: stale, recycled: recycled,
+                             exited: zombies.exited, zombieParentName: zombies.parentName)
     }
 
     /// Moves every target below the protection floor to `locked` and
@@ -201,6 +202,32 @@ struct KillPreflightBuilder: Sendable {
         targets.removeAll { protected.contains($0.identity) }
         var seenKinds = Set<KillRiskKind>()
         return (rootReason, cautions.filter { seenKinds.insert($0.kind).inserted })
+    }
+
+    /// A zombie has already exited: a signal does nothing, and only its
+    /// parent collecting it makes it disappear.
+    private func separateZombies(
+        arena: KillGraphArena,
+        index: KillProcessIndex,
+        targets: inout [KillTarget]
+    ) -> (exited: [KillTarget], parentName: String?) {
+        var exited: [KillTarget] = []
+        var parentName: String?
+        for target in targets {
+            guard let process = arena.process(for: target.identity) ?? index.liteProcess(for: target.identity),
+                  process.isZombie else { continue }
+            let parent = arena.processes(for: process.parentPID).first
+            let name = parent?.name ?? "its parent"
+            let pidText = parent.map { " (PID \($0.pid))" } ?? ""
+            exited.append(target.updating(
+                state: .exitedBeforeSignal,
+                reason: "Already exited; its parent \(name)\(pidText) has not collected it. It disappears when \(name) exits or collects it \u{2014} stop \(name) to clear it."
+            ))
+            parentName = parentName ?? name
+        }
+        let zombieIdentities = Set(exited.map(\.identity))
+        targets.removeAll { zombieIdentities.contains($0.identity) }
+        return (exited, parentName)
     }
 
     private func classifyPlanIdentities(

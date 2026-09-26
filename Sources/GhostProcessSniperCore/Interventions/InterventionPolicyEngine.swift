@@ -194,7 +194,7 @@ public struct InterventionPolicyEngine: Sendable {
                 strategy: .quitApp,
                 confidence: max(0.82, decisionScore.confidence),
                 reasons: ["\(risk.kind.label): quitting lets it save state and close its own helpers."],
-                previewText: "Quit like \u{2318}Q, then SIGTERM anything left; SIGKILL only for same-identity survivors."
+                previewText: "Quit like \u{2318}Q, then SIGTERM leftover helpers; SIGKILL only for same-identity survivors."
             )
         }
         if risk.kind == .dataStore || risk.kind == .containerRuntime {
@@ -247,50 +247,37 @@ public struct InterventionPolicyEngine: Sendable {
         risk: KillRiskAssessment
     ) -> KillStrategyProfile {
         let cleanShutdownGrace = max(forceKillDelay, risk.graceSeconds ?? forceKillDelay)
-        let schedule: KillVerificationSchedule
-        let phases: [KillSignalPhase]
-        switch recommendation.strategy {
-        case .standard:
-            schedule = KillVerificationSchedule(graceSeconds: forceKillDelay, secondaryGraceSeconds: 0.15, settleSeconds: 0.35)
-            phases = [
-                KillSignalPhase(order: 0, label: "Ask target to terminate", signal: SIGTERM, waitAfterSeconds: forceKillDelay, isForce: false),
-                KillSignalPhase(order: 1, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.35, isForce: true)
-            ]
-        case .gentleDevServer:
-            schedule = KillVerificationSchedule(graceSeconds: min(forceKillDelay, 1.2), secondaryGraceSeconds: 0.45, settleSeconds: 0.35)
-            phases = [
-                KillSignalPhase(order: 0, label: "Interrupt dev server cleanly", signal: SIGINT, waitAfterSeconds: min(forceKillDelay, 1.2), isForce: false),
-                KillSignalPhase(order: 1, label: "Terminate survivors", signal: SIGTERM, waitAfterSeconds: 0.45, isForce: false),
-                KillSignalPhase(order: 2, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.35, isForce: true)
-            ]
-        case .stubbornRunaway:
-            schedule = KillVerificationSchedule(graceSeconds: min(forceKillDelay, 0.8), secondaryGraceSeconds: 0.1, settleSeconds: 0.25)
-            phases = [
-                KillSignalPhase(order: 0, label: "Terminate runaway", signal: SIGTERM, waitAfterSeconds: min(forceKillDelay, 0.8), isForce: false),
-                KillSignalPhase(order: 1, label: "Force verified survivors", signal: SIGKILL, waitAfterSeconds: 0.25, isForce: true)
-            ]
-        case .quitApp:
-            schedule = KillVerificationSchedule(graceSeconds: cleanShutdownGrace, secondaryGraceSeconds: 1.5, settleSeconds: 0.35)
-            phases = [
-                KillSignalPhase(order: 0, label: "Ask the app to quit, like \u{2318}Q", signal: KillSignalPhase.quitRequest, waitAfterSeconds: cleanShutdownGrace, isForce: false),
-                KillSignalPhase(order: 1, label: "Terminate what is left", signal: SIGTERM, waitAfterSeconds: 1.5, isForce: false),
-                KillSignalPhase(order: 2, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.35, isForce: true)
-            ]
-        case .carefulShutdown:
-            schedule = KillVerificationSchedule(graceSeconds: cleanShutdownGrace, secondaryGraceSeconds: 0.2, settleSeconds: 0.5)
-            phases = [
-                KillSignalPhase(order: 0, label: "Request a clean shutdown", signal: SIGTERM, waitAfterSeconds: cleanShutdownGrace, isForce: false),
-                KillSignalPhase(order: 1, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.5, isForce: true)
-            ]
-        case .inspectOnly:
-            schedule = KillVerificationSchedule(graceSeconds: 0, secondaryGraceSeconds: 0, settleSeconds: 0)
-            phases = []
+        let phases: [KillSignalPhase] = switch recommendation.strategy {
+        case .standard: [
+            KillSignalPhase(order: 0, label: "Ask target to terminate", action: .signal(SIGTERM), waitAfterSeconds: forceKillDelay),
+            KillSignalPhase(order: 1, label: "Force same-identity survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.35)
+        ]
+        case .gentleDevServer: [
+            KillSignalPhase(order: 0, label: "Interrupt dev server cleanly", action: .signal(SIGINT), waitAfterSeconds: min(forceKillDelay, 1.2)),
+            KillSignalPhase(order: 1, label: "Terminate survivors", action: .signal(SIGTERM), waitAfterSeconds: 0.45),
+            KillSignalPhase(order: 2, label: "Force same-identity survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.35)
+        ]
+        case .stubbornRunaway: [
+            KillSignalPhase(order: 0, label: "Terminate runaway", action: .signal(SIGTERM), waitAfterSeconds: min(forceKillDelay, 0.8)),
+            KillSignalPhase(order: 1, label: "Force verified survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.25)
+        ]
+        // The app itself is never sent SIGTERM: it would close past a
+        // save prompt. Only its leftover helpers are, and the app is forced.
+        case .quitApp: [
+            KillSignalPhase(order: 0, label: "Ask the app to quit, like \u{2318}Q", action: .quitRequest, waitAfterSeconds: cleanShutdownGrace),
+            KillSignalPhase(order: 1, label: "Terminate leftover helpers", action: .signal(SIGTERM), waitAfterSeconds: 1.5),
+            KillSignalPhase(order: 2, label: "Force same-identity survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.35)
+        ]
+        case .carefulShutdown: [
+            KillSignalPhase(order: 0, label: "Request a clean shutdown", action: .signal(SIGTERM), waitAfterSeconds: cleanShutdownGrace),
+            KillSignalPhase(order: 1, label: "Force same-identity survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.5)
+        ]
+        case .inspectOnly: []
         }
         return KillStrategyProfile(
             strategy: recommendation.strategy,
             confidence: recommendation.confidence,
             phases: phases,
-            verificationSchedule: schedule,
             summary: recommendation.previewText
         )
     }

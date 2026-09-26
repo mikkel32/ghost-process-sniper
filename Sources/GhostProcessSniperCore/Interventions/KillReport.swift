@@ -33,6 +33,13 @@ public struct KillReport: Equatable, Sendable {
     /// New processes that replaced the stopped ones: a supervisor restarted them.
     public var respawnedPIDs: [Int32] = []
     public var respawnedBy: String?
+    /// PIDs macOS refused to signal (EPERM), tried once each.
+    public var signalDeniedPIDs: [Int32] = []
+    /// The app accepted the quit request but was still open at the end,
+    /// usually because it is showing a save prompt.
+    public var appStillOpen = false
+    /// The parent an already-exited (zombie) target waits on to collect it.
+    public var zombieParentName: String?
 
     public var partiallySucceeded: Bool {
         !gracefulPIDs.isEmpty || !forcedPIDs.isEmpty
@@ -46,6 +53,17 @@ public struct KillReport: Equatable, Sendable {
         if !failures.isEmpty && !partiallySucceeded {
             return failures.joined(separator: "\n")
         }
+        let refused = signalDeniedPIDs.sorted().map(String.init).joined(separator: ", ")
+        let pidLabel = signalDeniedPIDs.count == 1 ? "PID" : "PIDs"
+        if !signalDeniedPIDs.isEmpty && !partiallySucceeded {
+            return "macOS refused to stop \(displayName) (\(pidLabel) \(refused)). It is protected by security software or a system policy; nothing else was tried."
+        }
+        let outcome = outcomeSummary
+        guard !signalDeniedPIDs.isEmpty else { return outcome }
+        return "\(outcome) macOS refused to stop \(pidLabel) \(refused); it is protected by security software or a system policy."
+    }
+
+    private var outcomeSummary: String {
         if !respawnedPIDs.isEmpty {
             let pids = respawnedPIDs.sorted().map(String.init).joined(separator: ", ")
             return "Stopped, but \(respawnedBy ?? "a supervisor") started it again (PID \(pids)). Stop \(respawnedBy ?? "the supervisor") instead."
@@ -60,9 +78,12 @@ public struct KillReport: Equatable, Sendable {
             return "Force-killed \(forcedPIDs.count) stubborn process\(forcedPIDs.count == 1 ? "" : "es")."
         }
         if !gracefulPIDs.isEmpty {
-            let locked = Set(deniedPIDs).count
+            let locked = Set(deniedPIDs).subtracting(signalDeniedPIDs).count
             let suffix = locked > 0 ? " \(locked) locked skipped." : ""
             return "Terminated \(gracefulPIDs.count) process\(gracefulPIDs.count == 1 ? "" : "es").\(suffix)"
+        }
+        if let zombieParentName {
+            return "\(displayName) had already exited; \(zombieParentName) still has to collect it."
         }
         if !deniedPIDs.isEmpty {
             return "Locked: \(deniedPIDs.count) protected process\(deniedPIDs.count == 1 ? "" : "es")."
@@ -97,7 +118,8 @@ public struct KillReport: Equatable, Sendable {
             "Verification modes: \(reactorReport.verificationModeCounts.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ").ifEmpty("none"))",
             "Signal waves: \(reactorReport.signalWaves.count), arena reuse \(reactorReport.arenaReuseCount)",
             "Calibrated reclaim: \(RadarFormat.bytes(calibratedReclaimBytes))",
-            "Force skipped: \(skipForceRequested ? "yes" : "no")",
+            "Force skipped: \(skipForceRequested ? "yes" : "no")\(appStillOpen ? ", app still open" : "")",
+            "Refused by macOS: \(signalDeniedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Respawned: \(respawnedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))\(respawnedBy.map { " by \($0)" } ?? "")",
             "Graceful: \(gracefulPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Forced: \(forcedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
