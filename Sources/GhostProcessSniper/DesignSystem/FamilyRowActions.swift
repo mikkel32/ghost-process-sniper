@@ -23,11 +23,10 @@ struct FamilySnoozeMenu: View {
 /// The context menu every family row shares: open, snooze, ignore, stop,
 /// and copy or reveal what it runs.
 private struct FamilyRowActionsModifier: ViewModifier {
-    let familyKey: String
-    let title: String
-    /// Sidebar-style rows also offer their one-line summary.
-    let summaryRow: CompactSidebarRowModel?
+    let row: CompactSidebarRowModel
     let session: RadarConsoleSession
+
+    private var familyKey: String { row.id }
 
     func body(content: Content) -> some View {
         content.contextMenu {
@@ -39,14 +38,14 @@ private struct FamilyRowActionsModifier: ViewModifier {
 
             Menu {
                 FamilySnoozeMenu { minutes in
-                    session.snooze(familyKey: familyKey, name: title, minutes: minutes)
+                    session.snooze(familyKey: familyKey, name: row.title, minutes: minutes)
                 }
             } label: {
                 Label("Snooze", systemImage: "moon")
             }
 
             Button {
-                session.ignore(familyKey: familyKey, name: title)
+                session.ignore(familyKey: familyKey, name: row.title)
             } label: {
                 Label("Ignore Family", systemImage: "eye.slash")
             }
@@ -72,12 +71,10 @@ private struct FamilyRowActionsModifier: ViewModifier {
             } label: {
                 Label("Copy Command Line", systemImage: "terminal")
             }
-            if let row = summaryRow {
-                Button {
-                    session.copyToPasteboard("\(row.title) — \(row.subtitle)\n\(row.metricText)", toast: "Copied \(row.title) summary")
-                } label: {
-                    Label("Copy Summary", systemImage: "doc.on.clipboard")
-                }
+            Button {
+                session.copyToPasteboard("\(row.title) — \(row.subtitle)\n\(row.metricText)", toast: "Copied \(row.title) summary")
+            } label: {
+                Label("Copy Summary", systemImage: "doc.on.clipboard")
             }
             Button {
                 session.revealInFinder(familyKey: familyKey)
@@ -90,10 +87,6 @@ private struct FamilyRowActionsModifier: ViewModifier {
 
 extension View {
     func familyRowActions(row: CompactSidebarRowModel, session: RadarConsoleSession) -> some View {
-        modifier(FamilyRowActionsModifier(familyKey: row.id, title: row.title, summaryRow: row, session: session))
-    }
-
-    func familyRowActions(familyKey: String, title: String, session: RadarConsoleSession) -> some View {
-        modifier(FamilyRowActionsModifier(familyKey: familyKey, title: title, summaryRow: nil, session: session))
+        modifier(FamilyRowActionsModifier(row: row, session: session))
     }
 }
