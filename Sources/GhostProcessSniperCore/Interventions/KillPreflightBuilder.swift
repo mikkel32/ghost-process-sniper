@@ -130,9 +130,13 @@ struct KillPreflightBuilder: Sendable {
         var strategy = policy.recommendation
         var strategyProfile = policy.profile
         var forecast = policy.forecast
-        // The floor's warnings are risk cards too; as factors they weigh on
-        // readiness like the assessor's own.
-        var decisionScore = policy.decisionScore.adding(protectionFloor.cautions.map {
+        // The floor's warnings are risk cards too, each replacing the
+        // assessor's card of its kind; as factors they weigh on readiness
+        // like the assessor's own.
+        let replaced = policy.risk.risks.filter { risk in protectionFloor.cautions.contains { $0.kind == risk.kind } }
+        var decisionScore = policy.decisionScore.removing { factor in
+            factor.source == .risk && replaced.contains { $0.title == factor.title && $0.detail == factor.detail }
+        }.adding(protectionFloor.cautions.map {
             KillDecisionFactor(kind: .whyWait, title: $0.title, detail: $0.detail, weight: $0.severity == .info ? -1 : -6, source: .risk)
         })
         if targets.contains(where: { $0.condition == .suspended }) {

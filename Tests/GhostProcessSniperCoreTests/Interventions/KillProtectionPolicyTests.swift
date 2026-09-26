@@ -95,6 +95,22 @@ final class KillProtectionPolicyTests: XCTestCase {
         XCTAssertTrue(preview.riskAssessment.risks.contains { $0.title == "macOS restarts it" })
     }
 
+    func testFloorWarningReplacesTheAssessorsFactorOfTheSameKind() async {
+        let table = FakeProcessTable()
+        let dock = KillProcessLite.fake(pid: 190, name: "Dock")
+        table.add(dock)
+
+        let preview = await table.killer().preview(
+            plan: .fixture(dock, paths: [190: "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock"]),
+            forceKillDelay: 1
+        )
+
+        let riskFactors = preview.decisionScore.factors.filter { $0.source == .risk }
+        XCTAssertEqual(riskFactors.map(\.title).sorted(), preview.riskAssessment.risks.map(\.title).sorted(),
+                       "the score weighs exactly the risk cards the sheet shows")
+        XCTAssertFalse(riskFactors.contains { $0.title == "Will restart" })
+    }
+
     func testTmuxServerWarnsEverySessionCloses() {
         let server = KillProcessLite.fake(pid: 200, parent: 1, name: "tmux")
         let panes = (201...203).map { KillProcessLite.fake(pid: Int32($0), parent: 200, name: "zsh") }

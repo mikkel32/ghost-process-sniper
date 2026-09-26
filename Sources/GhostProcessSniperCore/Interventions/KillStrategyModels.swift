@@ -106,6 +106,14 @@ public struct KillDecisionScore: Codable, Equatable, Sendable {
         return KillDecisionScore(value: value + extra.reduce(0) { $0 + $1.weight }, confidence: confidence, factors: factors + extra)
     }
 
+    /// The same score without some reasons, their weights taken back.
+    func removing(where isRemoved: (KillDecisionFactor) -> Bool) -> KillDecisionScore {
+        let removed = factors.filter(isRemoved)
+        guard !removed.isEmpty else { return self }
+        return KillDecisionScore(value: value - removed.reduce(0) { $0 + $1.weight }, confidence: confidence,
+                                 factors: factors.filter { !isRemoved($0) })
+    }
+
     /// Locked only by a blocking reason or nothing to stop; a real reason to
     /// wait asks for caution, a minor note does not.
     public func readiness(hasTargets: Bool) -> KillReadiness {
