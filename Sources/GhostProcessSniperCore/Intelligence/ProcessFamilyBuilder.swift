@@ -98,16 +98,20 @@ public struct ProcessFamilyBuilder: Sendable {
     ) -> ProcessFamilyBuildResult {
         let tree = ProcessTree(processes: processes, facts: staticFacts.facts(for: processes, make: makeStaticFacts))
         history.activity.recordProcesses(processes, now: now)
-        let ledger = history.activity
 
-        let duplicateSet = duplicateDetector.detect(
-            processes: processes,
-            classifications: tree.classifications,
-            byPID: tree.byPID,
-            now: now,
-            candidateKey: { tree.facts[$0.pid]?.duplicateKey },
-            lastActive: { ledger.activity(of: $0)?.lastActiveAt }
-        )
+        let duplicateSet: DuplicateClusterSet
+        do {
+            // Scoped, so this copy is gone before the ledger is written again.
+            let ledger = history.activity
+            duplicateSet = duplicateDetector.detect(
+                processes: processes,
+                classifications: tree.classifications,
+                byPID: tree.byPID,
+                now: now,
+                candidateKey: { tree.facts[$0.pid]?.duplicateKey },
+                lastActive: { ledger.activity(of: $0)?.lastActiveAt }
+            )
+        }
         let hardwareStart = Date()
         let hardwareProfiles = hardwareDetector.detect(
             processes: processes,
