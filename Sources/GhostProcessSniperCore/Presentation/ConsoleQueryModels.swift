@@ -5,9 +5,11 @@ public struct ConsoleDerivedSnapshotKey: Hashable, Sendable {
     public let searchText: String
     public let familyFilter: RadarFilter
     public let familySort: RadarSort
+    public let familySortAscending: Bool
     public let incidentText: String
     public let incidentFilter: RadarIncidentFilter
     public let incidentSort: RadarIncidentSort
+    public let incidentAscending: Bool
     public let incidentLimit: Int
     /// Live samples only matter while searching: results then follow every
     /// refresh, and an idle console does no projection work at all.
@@ -19,9 +21,11 @@ public struct ConsoleDerivedSnapshotKey: Hashable, Sendable {
         searchText = state.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         familyFilter = state.familyFilter
         familySort = state.familySort
+        familySortAscending = state.familySortAscending
         incidentText = state.incidentQuery.text.trimmingCharacters(in: .whitespacesAndNewlines)
         incidentFilter = state.incidentQuery.filter
         incidentSort = state.incidentQuery.sort
+        incidentAscending = state.incidentQuery.ascending
         incidentLimit = state.incidentQuery.limit
         sampleRevision = searchText.isEmpty ? 0 : request.sampleRevision
     }
@@ -35,6 +39,8 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
     public let incidentRows: [IncidentRowViewModel]
     public let duplicateRows: [DuplicateClusterViewModel]
     public let search: ConsoleSearchResults
+    /// Tracked families and untracked matches, ordered for the browser table.
+    public let browserRows: [ProcessBrowserRowModel]
 
     public static let empty = ConsoleDerivedSnapshot(
         key: ConsoleDerivedSnapshotKey(ConsoleProjectionRequest(source: .empty, incidents: [], state: .default)),
@@ -53,7 +59,8 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
         compactSidebarSections: [CompactSidebarSection],
         incidentRows: [IncidentRowViewModel],
         duplicateRows: [DuplicateClusterViewModel],
-        search: ConsoleSearchResults
+        search: ConsoleSearchResults,
+        browserRows: [ProcessBrowserRowModel] = []
     ) {
         self.key = key
         self.familyRows = familyRows
@@ -62,6 +69,7 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
         self.incidentRows = incidentRows
         self.duplicateRows = duplicateRows
         self.search = search
+        self.browserRows = browserRows
     }
 
     /// Projection without a live process sample: families are searched by
@@ -94,6 +102,11 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
         let duplicateRows = query.terms.isEmpty
             ? snapshot.duplicateRows
             : snapshot.duplicateRows.filter { query.matchesText([$0.title, $0.subtitle, $0.kindText, $0.reasonText]) }
+        // Rows arrive in priority order, so the first family per signature is the one to open.
+        var liveKeys: [String: String] = [:]
+        for row in snapshot.families where liveKeys[row.signature.id] == nil {
+            liveKeys[row.signature.id] = row.familyKey
+        }
         return ConsoleDerivedSnapshot(
             key: ConsoleDerivedSnapshotKey(request),
             familyRows: projection.rows,
@@ -101,9 +114,33 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
             compactSidebarSections: CompactConsoleSnapshot.sidebarSections(from: compactRows),
             incidentRows: state.incidentQuery
                 .apply(to: request.incidents)
-                .map(IncidentRowViewModel.init(incident:)),
+                .map { IncidentRowViewModel(incident: $0, liveFamilyKey: liveKeys[$0.signature.id]) },
             duplicateRows: duplicateRows,
-            search: projection.results
+            search: projection.results,
+            browserRows: browserRows(request, rows: projection.rows, results: projection.results)
+        )
+    }
+
+    private static func browserRows(
+        _ request: ConsoleProjectionRequest,
+        rows: [FamilyTriageViewModel],
+        results: ConsoleSearchResults
+    ) -> [ProcessBrowserRowModel] {
+        let families = Dictionary(request.families.map { ($0.familyKey, $0.root) }, uniquingKeysWith: { first, _ in first })
+        let tracked = rows.map { row in
+            let root = families[row.familyKey]
+            return ProcessBrowserRowModel(
+                family: row,
+                match: results.familyMatches[row.familyKey],
+                executablePath: root?.executablePath ?? row.signature.canonicalPath,
+                commandLine: root?.commandLine ?? row.subtitle
+            )
+        }
+        return ProcessBrowserRowModel.ordered(
+            tracked: tracked,
+            untracked: results.processRows.map(ProcessBrowserRowModel.init(process:)),
+            sort: request.state.familySort,
+            ascending: request.state.familySortAscending
         )
     }
 }

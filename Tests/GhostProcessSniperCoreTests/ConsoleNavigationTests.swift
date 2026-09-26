@@ -1,10 +1,11 @@
+import Foundation
 import XCTest
 import GhostProcessSniperCore
 
 final class ConsoleNavigationTests: XCTestCase {
     func testDestinationsRoundTripWithoutLosingFamilyKeys() {
         let destinations: [RadarFocusedSelection] = [
-            .overview, .processes, .duplicates, .incidents, .rules, .engine,
+            .overview, .processes, .duplicates, .incidents, .rules,
             .family("/usr/local/bin/node|project with spaces|ø")
         ]
         for destination in destinations {
@@ -18,8 +19,19 @@ final class ConsoleNavigationTests: XCTestCase {
         }
     }
 
-    func testExplicitEngineDestinationRemainsEngine() {
-        XCTAssertEqual(RadarFocusedSelection(storageValue: "engine"), .engine)
+    func testRetiredEngineDestinationLandsOnOverview() {
+        XCTAssertEqual(RadarFocusedSelection(storageValue: "engine"), .overview)
+        XCTAssertEqual(RadarConsoleState.default.focusedSelection, .overview)
+    }
+
+    func testSignatureSelectionIsRewrittenToTheLiveFamilyKey() {
+        let family = makeFamily(pid: 42)
+        let router = RadarCommandRouter()
+
+        XCTAssertEqual(router.canonicalSelection(.family(family.signature.id), families: [family]), .family(family.familyKey))
+        XCTAssertEqual(router.canonicalSelection(.family(family.familyKey), families: [family]), .family(family.familyKey))
+        XCTAssertEqual(router.canonicalSelection(.family("exited"), families: [family]), .family("exited"))
+        XCTAssertEqual(router.canonicalSelection(.incidents, families: [family]), .incidents)
     }
 
     func testBrowserDoesNotImplyASelectedProcess() {
@@ -51,5 +63,20 @@ final class ConsoleNavigationTests: XCTestCase {
     func testNavigationNormalizesLargeNegativeSteps() {
         let coordinator = RadarCommandCoordinator()
         XCTAssertEqual(coordinator.selection(after: .family("a"), orderedFamilyKeys: ["a", "b", "c"], direction: -4), .family("c"))
+    }
+
+    private func makeFamily(pid: Int32) -> ProcessFamily {
+        let root = ProcessMetrics(
+            identity: ProcessIdentity(pid: pid, startTimeSeconds: 100, startTimeMicroseconds: 0),
+            parentPID: 1, userID: 501, ownerName: "me", name: "node", executablePath: "/usr/local/bin/node",
+            commandLine: "node dev", residentMemoryBytes: 1, physicalFootprintBytes: 1, virtualMemoryBytes: 1,
+            cpuPercent: 0, totalProcessorSeconds: 0, threadCount: 1, isSystemProcess: false,
+            sampledAt: Date(timeIntervalSince1970: 1_000)
+        )
+        return ProcessFamily(
+            root: root, members: [root], totalResidentMemoryBytes: 1, totalPhysicalFootprintBytes: 1,
+            totalCPUPercent: 0, devConfidence: 0.5, commandHints: [], trend: .empty,
+            score: GhostScore(value: 0, level: .quiet, reasons: []), ownedIdentities: [root.identity], protectedPIDs: []
+        )
     }
 }

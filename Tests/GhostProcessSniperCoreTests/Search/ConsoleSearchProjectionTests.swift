@@ -59,6 +59,48 @@ final class ConsoleSearchProjectionTests: XCTestCase {
                       "positive memory velocity alone is not a leak")
     }
 
+    func testBrowserAscendingReversesMetricOrder() {
+        let big = makeFamily(metrics(400, "bigserver"), memory: 900_000_000)
+        let small = makeFamily(metrics(401, "smallserver"), memory: 10_000_000)
+        let descending = project("", families: [small, big], sort: .memory).browserRows.map(\.name)
+        let ascending = project("", families: [small, big], sort: .memory, ascending: true).browserRows.map(\.name)
+        XCTAssertEqual(descending, ["bigserver", "smallserver"])
+        XCTAssertEqual(ascending, ["smallserver", "bigserver"])
+        XCTAssertEqual(project("", families: [small, big], sort: .name, ascending: true).browserRows.map(\.name), ["bigserver", "smallserver"])
+        XCTAssertEqual(project("", families: [small, big], sort: .name).browserRows.map(\.name), ["smallserver", "bigserver"])
+    }
+
+    func testBrowserListsUntrackedRowsAfterTrackedOnesInSmartOrder() {
+        let rows = project("app", families: [npm]).browserRows
+        XCTAssertEqual(rows.first?.familyKey, npm.familyKey)
+        let lastTracked = rows.lastIndex { $0.isTracked } ?? -1
+        let firstUntracked = rows.firstIndex { !$0.isTracked } ?? -1
+        XCTAssertLessThan(lastTracked, firstUntracked)
+        XCTAssertTrue(rows.contains { $0.name == "Safari" && !$0.isTracked })
+    }
+
+    func testBrowserMetricSortRanksTrackedAndUntrackedTogether() {
+        let rows = project("app", families: [npm], sort: .memory).browserRows
+        XCTAssertEqual(rows.first?.name, "Safari", "the 400 MB untracked app outranks a 64 MB family")
+    }
+
+    func testBrowserRowIDsStayStableAcrossRefreshes() {
+        var cache = ConsoleDerivedSnapshotCache()
+        let first = cache.update(request("app", sampleRevision: 1)).browserRows.map(\.id)
+        let second = cache.update(request("app", sampleRevision: 2)).browserRows.map(\.id)
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(Set(first).count, first.count, "tracked and untracked ids never collide")
+        XCTAssertTrue(first.contains(ProcessBrowserRowModel.untrackedID(safari.identity)))
+    }
+
+    func testBrowserColumnsMapToSorts() {
+        XCTAssertEqual(RadarSort(browserColumn: \ProcessBrowserRowModel.memoryBytes), .memory)
+        XCTAssertEqual(RadarSort(browserColumn: \ProcessBrowserRowModel.cpuPercent), .cpu)
+        XCTAssertEqual(RadarSort(browserColumn: \ProcessBrowserRowModel.name), .name)
+        XCTAssertEqual(RadarSort(browserColumn: \ProcessBrowserRowModel.statusRank), .smart)
+        XCTAssertEqual(RadarSort(browserColumn: nil), .smart)
+    }
+
     // MARK: - Fixtures
 
     private var npm: ProcessFamily { makeFamily(root, members: [root, helper]) }
@@ -67,10 +109,11 @@ final class ConsoleSearchProjectionTests: XCTestCase {
         _ text: String,
         families: [ProcessFamily]? = nil,
         filter: RadarFilter = .all,
-        sort: RadarSort = .smart
+        sort: RadarSort = .smart,
+        ascending: Bool = false
     ) -> ConsoleDerivedSnapshot {
         var cache = ConsoleDerivedSnapshotCache()
-        return cache.update(request(text, families: families, filter: filter, sort: sort))
+        return cache.update(request(text, families: families, filter: filter, sort: sort, ascending: ascending))
     }
 
     private func request(
@@ -78,6 +121,7 @@ final class ConsoleSearchProjectionTests: XCTestCase {
         families: [ProcessFamily]? = nil,
         filter: RadarFilter = .all,
         sort: RadarSort = .smart,
+        ascending: Bool = false,
         sampleRevision: UInt64 = 1
     ) -> ConsoleProjectionRequest {
         let families = families ?? [npm]
@@ -85,6 +129,7 @@ final class ConsoleSearchProjectionTests: XCTestCase {
         state.searchText = text
         state.familyFilter = filter
         state.familySort = sort
+        state.familySortAscending = ascending
         return ConsoleProjectionRequest(
             source: snapshot(families),
             incidents: [],

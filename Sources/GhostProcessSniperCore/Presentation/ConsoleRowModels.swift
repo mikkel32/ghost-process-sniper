@@ -12,12 +12,29 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
     public let occurrenceText: String
     public let timeRangeText: String
     public let reasons: [String]
+    public let isActive: Bool
+    /// Sort keys for table columns.
+    public let score: Double
+    public let memoryBytes: UInt64
+    public let occurrenceCount: Int
+    /// The concrete family key of a running family with this incident's
+    /// signature; nil once it has exited.
+    public let liveFamilyKey: String?
 
     public init(incident: RadarIncident) {
+        self.init(incident: incident, liveFamilyKey: nil)
+    }
+
+    public init(incident: RadarIncident, liveFamilyKey: String?) {
         id = incident.id
         familyName = incident.familyName
-        stateText = incident.resolvedAt == nil ? "Active" : "Resolved"
+        isActive = incident.resolvedAt == nil
+        stateText = isActive ? "Active" : "Resolved"
         level = incident.level
+        score = incident.maxScore
+        memoryBytes = incident.memoryBytes
+        occurrenceCount = incident.occurrenceCount
+        self.liveFamilyKey = liveFamilyKey
         scoreText = "\(Int(incident.maxScore.rounded()))"
         memoryText = RadarFormat.bytes(incident.memoryBytes)
         cpuText = RadarFormat.percent(incident.cpuPercent)
@@ -29,10 +46,21 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
 }
 
 public struct RuleRowViewModel: Identifiable, Equatable, Sendable {
+    /// Which Rules section a rule belongs to: the user's own snoozes and
+    /// ignores come first so undoing one is easy to find.
+    public enum Kind: Equatable, Sendable {
+        case snooze
+        case ignore
+        case custom
+        case builtIn
+    }
+
     public let id: UUID
     public let name: String
     public let isEnabled: Bool
     public let isBuiltIn: Bool
+    public let kind: Kind
+    public let expiresAt: Date?
     public let actionText: String
     public let matchText: String
     public let matchCount: Int
@@ -42,6 +70,16 @@ public struct RuleRowViewModel: Identifiable, Equatable, Sendable {
         name = rule.name
         isEnabled = rule.isEnabled
         isBuiltIn = rule.isBuiltIn
+        kind = if rule.isBuiltIn {
+            .builtIn
+        } else {
+            switch rule.action {
+            case .snooze: .snooze
+            case .ignore: .ignore
+            default: .custom
+            }
+        }
+        expiresAt = rule.expiresAt
         actionText = rule.isBuiltIn ? "Built-in" : rule.action.label
         self.matchCount = matchCount
 
@@ -233,5 +271,19 @@ private enum RadarRuleMatcher {
             return false
         }
         return true
+    }
+}
+
+extension RadarIncidentSort {
+    /// The sort an Incidents table column header selects; anything else
+    /// (a cleared header) is most recent first.
+    public init(incidentColumn keyPath: PartialKeyPath<IncidentRowViewModel>?) {
+        self = switch keyPath {
+        case \IncidentRowViewModel.familyName: .name
+        case \IncidentRowViewModel.score: .severity
+        case \IncidentRowViewModel.memoryBytes: .memory
+        case \IncidentRowViewModel.occurrenceCount: .recurrence
+        default: .recent
+        }
     }
 }

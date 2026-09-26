@@ -9,7 +9,10 @@ public struct ProcessSearchRowModel: Identifiable, Equatable, Sendable {
     /// Why it matched, or what it runs when the name says it all.
     public let detail: String
     public let ownerName: String
+    public let memoryBytes: UInt64
     public let memoryText: String
+    /// Zero when the CPU could not be measured; the text shows a dash.
+    public let cpuPercent: Double
     public let cpuText: String
     public let commandLine: String
     public let executablePath: String
@@ -28,6 +31,8 @@ public struct ProcessSearchRowModel: Identifiable, Equatable, Sendable {
         ownerName = process.ownerName
         // Other users' processes cannot be measured without privileges;
         // a dash is honest where a zero would be a claim.
+        memoryBytes = process.memoryForScoringBytes
+        cpuPercent = process.cpuMeasurementStatus == .unavailable ? 0 : process.cpuPercent
         memoryText = process.memoryForScoringBytes > 0 ? RadarFormat.bytes(process.memoryForScoringBytes) : "\u{2014}"
         cpuText = process.cpuMeasurementStatus == .unavailable ? "\u{2014}" : RadarFormat.percent(process.cpuPercent)
         commandLine = process.commandLine
