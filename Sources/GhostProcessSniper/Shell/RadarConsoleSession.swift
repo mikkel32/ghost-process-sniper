@@ -18,7 +18,9 @@ final class RadarConsoleSession {
     var showQuickGuide = false
     private(set) var hasNavigationIntent = false
     private(set) var isRefreshing = false
-    private(set) var refreshCostHistory: [RefreshCostSample] = []
+    /// The last stop per family key, so a page whose family is gone can say
+    /// what happened instead of "no longer running".
+    private(set) var recentStops: [String: KillReport] = [:]
     private(set) var memoryPulse: [MemoryPulseSample] = []
     private(set) var thermalHistory = ThermalTraceHistory()
 
@@ -27,7 +29,7 @@ final class RadarConsoleSession {
     @ObservationIgnored private var queryTask: Task<Void, Never>?
     @ObservationIgnored private var requestedQueryKey: ConsoleDerivedSnapshotKey?
     @ObservationIgnored private var lastFocusedFamilySignatures: Set<String> = []
-    @ObservationIgnored private var nextRefreshCostSequence: UInt64 = 0
+    @ObservationIgnored private var recentStopOrder: [String] = []
 
     init(monitor: ProcessMonitor, killer: ProcessKiller) {
         self.monitor = monitor
@@ -38,19 +40,8 @@ final class RadarConsoleSession {
         commands.selectedFamily(selection: state.focusedSelection, families: monitor.families)
     }
 
-    var selectedDetail: FamilyDetailViewModel? {
-        guard let familyKey = state.focusedSelection.familyKey else {
-            return nil
-        }
-        return monitor.detailViewModel(signatureID: familyKey)
-    }
-
     var selectedPanel: FamilyDetailPanelModel? {
-        state.focusedSelection.familyKey.flatMap { monitor.consoleSnapshot.detailPanel(for: $0) }
-    }
-
-    var selectedCompactDetail: CompactFamilyDetailModel? {
-        selectedPanel.map(CompactFamilyDetailModel.init(panel:))
+        selectedFamily.flatMap { monitor.consoleSnapshot.detailPanel(for: $0.familyKey) }
     }
 
     var familyItems: [FamilyTriageViewModel] {
@@ -124,19 +115,6 @@ final class RadarConsoleSession {
     func recordEngineSample() {
         var updatedThermals = thermalHistory
         if updatedThermals.append(monitor.thermals, at: Date()) { thermalHistory = updatedThermals }
-        let milliseconds = monitor.performanceMetrics.lastRefresh.totalMilliseconds
-        if milliseconds > 0 {
-            nextRefreshCostSequence &+= 1
-            refreshCostHistory.append(
-                RefreshCostSample(
-                    id: nextRefreshCostSequence,
-                    milliseconds: milliseconds
-                )
-            )
-        }
-        if refreshCostHistory.count > 60 {
-            refreshCostHistory.removeFirst(refreshCostHistory.count - 60)
-        }
         // Pulse points every few seconds are plenty for a 5-minute strip and
         // keep the chart from rebuilding on every refresh tick.
         let now = Date()
@@ -227,8 +205,14 @@ final class RadarConsoleSession {
 
     func focus(_ selection: RadarFocusedSelection) {
         hasNavigationIntent = true
-        state.focusedSelection = selection
+        state.focusedSelection = canonicalSelection(selection)
         updateFocusedFamilies()
+    }
+
+    /// Family selections carry the concrete family key: prebuilt panels and
+    /// the sidebar highlight are keyed by it, not by a signature id.
+    func canonicalSelection(_ selection: RadarFocusedSelection) -> RadarFocusedSelection {
+        commands.canonicalSelection(selection, families: monitor.families)
     }
 
     func updateFocusedFamilies() {
@@ -246,8 +230,8 @@ final class RadarConsoleSession {
         monitor.focusFamilies(signatureIDs: focusedKeys)
     }
 
-    func showToast(_ message: String, systemImage: String = "checkmark.circle") {
-        toast = RadarToast(message: message, systemImage: systemImage)
+    func showToast(_ message: String, systemImage: String = "checkmark.circle", action: RadarToast.Action? = nil) {
+        toast = RadarToast(message: message, systemImage: systemImage, action: action)
     }
 
     func requestSearchFocus() {
@@ -277,7 +261,10 @@ final class RadarConsoleSession {
         familyQueryResetToken += 1
         state.searchText = ""
         state.familyFilter = filter
-        if let sort { state.familySort = sort }
+        if let sort {
+            state.familySort = sort
+            state.familySortAscending = sort.isNaturallyAscending
+        }
         focus(.processes)
     }
 
@@ -415,7 +402,7 @@ final class RadarConsoleSession {
         control: KillOperationControl? = nil,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
     ) async -> KillReport {
-        await monitor.confirmKill(
+        let report = await monitor.confirmKill(
             family: pending.family,
             killer: killer,
             approvedPlan: pending.plan,
@@ -424,6 +411,17 @@ final class RadarConsoleSession {
             control: control,
             eventSink: eventSink
         )
+        rememberStop(report, familyKey: pending.family.familyKey)
+        return report
+    }
+
+    private func rememberStop(_ report: KillReport, familyKey: String) {
+        recentStopOrder.removeAll { $0 == familyKey }
+        recentStopOrder.append(familyKey)
+        recentStops[familyKey] = report
+        while recentStopOrder.count > 20 {
+            recentStops[recentStopOrder.removeFirst()] = nil
+        }
     }
 }
 
@@ -434,6 +432,7 @@ final class RadarConsoleViewState {
     var searchText: String
     var familyFilter: RadarFilter
     var familySort: RadarSort
+    var familySortAscending: Bool
     var incidentQuery: IncidentQuery
     var showInspector: Bool
 
@@ -442,6 +441,7 @@ final class RadarConsoleViewState {
         searchText = state.searchText
         familyFilter = state.familyFilter
         familySort = state.familySort
+        familySortAscending = state.familySortAscending
         incidentQuery = state.incidentQuery
         showInspector = state.showInspector
     }
@@ -452,6 +452,7 @@ final class RadarConsoleViewState {
             searchText: searchText,
             familyFilter: familyFilter,
             familySort: familySort,
+            familySortAscending: familySortAscending,
             incidentQuery: incidentQuery,
             showInspector: showInspector
         )
@@ -468,9 +469,20 @@ struct PendingKill: Identifiable {
 }
 
 struct RadarToast: Identifiable, Equatable {
+    /// One button on the toast, such as Undo.
+    struct Action {
+        let title: String
+        let perform: @MainActor () -> Void
+    }
+
     let id = UUID()
     let message: String
     let systemImage: String
+    var action: Action? = nil
+
+    static func == (lhs: RadarToast, rhs: RadarToast) -> Bool {
+        lhs.id == rhs.id
+    }
 }
 
 struct MemoryPulseSample: Identifiable, Equatable {
@@ -482,7 +494,3 @@ struct MemoryPulseSample: Identifiable, Equatable {
     }
 }
 
-struct RefreshCostSample: Identifiable, Equatable {
-    let id: UInt64
-    let milliseconds: Double
-}

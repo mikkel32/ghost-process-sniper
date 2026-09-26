@@ -44,11 +44,12 @@ struct RadarConsoleView: View {
         .animation(reduceMotion ? nil : .spring(duration: 0.32), value: session.toast)
         .onChange(of: session.toast) { _, toast in
             toastDismissTask?.cancel()
-            guard toast != nil else {
+            guard let toast else {
                 return
             }
             toastDismissTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 2_600_000_000)
+                // A toast with Undo stays long enough to reach the button.
+                try? await Task.sleep(nanoseconds: toast.action == nil ? 2_600_000_000 : 6_000_000_000)
                 guard !Task.isCancelled else {
                     return
                 }
@@ -211,14 +212,14 @@ struct RadarConsoleView: View {
         switch session.state.focusedSelection {
         case .overview, .processes, .family, .duplicates:
             true
-        case .incidents, .rules, .engine:
+        case .incidents, .rules:
             false
         }
     }
 
     private func restoreSceneState() {
         if !session.hasNavigationIntent {
-            session.state.focusedSelection = RadarFocusedSelection(storageValue: storedSelection)
+            session.state.focusedSelection = session.canonicalSelection(RadarFocusedSelection(storageValue: storedSelection))
         }
         session.state.searchText = storedSearchText
         session.state.familyFilter = RadarFilter(rawValue: storedFamilyFilter) ?? .all

@@ -442,24 +442,6 @@ struct ScoreComponentView: View {
     }
 }
 
-struct EngineHealthStrip: View {
-    let metrics: RadarPerformanceMetrics
-    let health: SamplerHealth
-    let storeHealth: StoreHealth
-
-    var body: some View {
-        HStack(spacing: 8) {
-            RadarChip(title: "Refresh", value: "\(Int(metrics.lastRefresh.totalMilliseconds.rounded())) ms", systemImage: "timer")
-            RadarChip(title: "Next", value: String(format: "%.1fs", metrics.nextRefreshInterval), systemImage: "clock.arrow.2.circlepath")
-            RadarChip(title: "Processes", value: "\(health.processCount)", systemImage: "list.bullet.rectangle")
-            RadarChip(title: "Scanner", value: metrics.scannerHealth.didHitDeadline ? "deferred" : "within budget", systemImage: "speedometer")
-            RadarChip(title: "Backlog", value: "\(storeHealth.backlogCount + storeHealth.pendingActionCount)", systemImage: "externaldrive")
-        }
-        .padding(6)
-        .radarSurface(tint: .teal, cornerRadius: 16)
-    }
-}
-
 struct CompactEngineHealthStrip: View {
     let status: EngineStatusSnapshot
 
@@ -481,88 +463,23 @@ struct RadarToastView: View {
     let toast: RadarToast
 
     var body: some View {
-        Label(toast.message, systemImage: toast.systemImage)
-            .font(.callout.weight(.medium))
-            .lineLimit(2)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(RadarTheme.elevatedPanel, in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.16), lineWidth: 0.75))
-            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-            .padding(.bottom, 16)
-            .accessibilityAddTraits(.updatesFrequently)
-    }
-}
-
-private let snoozeChoices: [(label: String, minutes: TimeInterval)] = [
-    ("15 Minutes", 15),
-    ("1 Hour", 60),
-    ("4 Hours", 240),
-    ("Until Tomorrow", 24 * 60)
-]
-
-struct FamilySnoozeMenu: View {
-    let snooze: (TimeInterval) -> Void
-
-    var body: some View {
-        ForEach(snoozeChoices, id: \.minutes) { choice in
-            Button(choice.label) {
-                snooze(choice.minutes)
+        HStack(spacing: 12) {
+            Label(toast.message, systemImage: toast.systemImage)
+                .lineLimit(2)
+            if let action = toast.action {
+                Button(action.title, action: action.perform)
+                    .buttonStyle(.link)
             }
         }
-    }
-}
-
-private struct FamilyRowActionsModifier: ViewModifier {
-    let row: CompactSidebarRowModel
-    let session: RadarConsoleSession
-
-    func body(content: Content) -> some View {
-        content.contextMenu {
-            Button {
-                session.focus(.family(row.id))
-            } label: {
-                Label("Show Details", systemImage: "sidebar.right")
-            }
-
-            Menu {
-                FamilySnoozeMenu { minutes in
-                    session.snooze(familyKey: row.id, name: row.title, minutes: minutes)
-                }
-            } label: {
-                Label("Snooze", systemImage: "moon")
-            }
-
-            Button {
-                session.ignore(familyKey: row.id, name: row.title)
-            } label: {
-                Label("Ignore Family", systemImage: "eye.slash")
-            }
-
-            Divider()
-
-            Button(role: .destructive) {
-                session.prepareKill(familyKey: row.id)
-            } label: {
-                Label("Kill Preview…", systemImage: "scope")
-            }
-
-            Divider()
-
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString("\(row.title) — \(row.subtitle)\n\(row.metricText)", forType: .string)
-                session.showToast("Copied \(row.title) summary", systemImage: "doc.on.clipboard")
-            } label: {
-                Label("Copy Summary", systemImage: "doc.on.clipboard")
-            }
-        }
-    }
-}
-
-extension View {
-    func familyRowActions(row: CompactSidebarRowModel, session: RadarConsoleSession) -> some View {
-        modifier(FamilyRowActionsModifier(row: row, session: session))
+        .font(.callout.weight(.medium))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(RadarTheme.elevatedPanel, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.16), lineWidth: 0.75))
+        .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+        .padding(.bottom, 16)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.updatesFrequently)
     }
 }
 
