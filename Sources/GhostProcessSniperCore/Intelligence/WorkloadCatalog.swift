@@ -268,7 +268,7 @@ public enum WorkloadCatalog {
         "simulator", "simdiskimaged",
     ]
 
-    /// KillRiskAssessor's data-store names.
+    /// Data-store names; KillRiskAssessor gives these a clean shutdown too.
     static let dataStores: Set<String> = [
         "postgres", "postmaster", "mysqld", "mariadbd", "mongod", "mongos", "redis-server", "valkey-server",
         "keydb-server", "etcd", "influxd", "clickhouse", "clickhouse-server", "cockroach", "couchdb", "neo4j",
@@ -276,7 +276,7 @@ public enum WorkloadCatalog {
         "arangod", "dgraph", "questdb", "tidb-server", "memcached", "elasticsearch", "opensearch",
     ]
 
-    /// KillRiskAssessor's container and VM runtimes.
+    /// Container and VM runtimes; KillRiskAssessor gives these a clean shutdown too.
     static let containerRuntimes: Set<String> = [
         "com.docker.backend", "com.docker.virtualization", "com.docker.vmnetd", "com.docker.build", "docker desktop",
         "colima", "limactl", "qemu-system-aarch64", "qemu-system-x86_64", "vfkit", "gvproxy", "orbstack",
@@ -285,7 +285,7 @@ public enum WorkloadCatalog {
     ]
     static let containerBundles: Set<String> = ["docker", "orbstack", "podman desktop", "rancher desktop"]
 
-    /// KillRiskAssessor's model runners.
+    /// Local model runners, shared with KillRiskAssessor.
     static let modelRunners: Set<String> = [
         "ollama", "llama-server", "llama-cli", "koboldcpp", "lm studio", "lms", "llamafile", "whisper-server",
         "localai", "vllm", "text-generation-launcher", "mlx_lm.server", "mlx_lm", "lmstudio", "llama.cpp",
@@ -312,7 +312,7 @@ public enum WorkloadCatalog {
         "buck2", "cmake", "ibtool", "actool", "lld", "swift-api-digester",
     ]
 
-    /// KillRiskAssessor's dev-server markers.
+    /// Dev-server markers, shared with KillRiskAssessor.
     static let devServerMarkers = [
         "vite", "next dev", "next-server", "nuxt", "astro dev", "webpack serve", "webpack-dev-server",
         "react-scripts start", "rails s", "rails server", "puma", "unicorn", "uvicorn", "gunicorn",

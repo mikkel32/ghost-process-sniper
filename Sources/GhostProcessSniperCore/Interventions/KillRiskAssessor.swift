@@ -388,19 +388,17 @@ private struct Fingerprint {
         return editors.contains { app == $0 || app.hasPrefix($0 + " ") }
     }
 
-    // Workloads
+    // Workloads: the radar's catalog names them, so a VM the radar calls a
+    // container runtime is never force-stopped as a plain process.
 
     var isContainerRuntime: Bool {
-        named(["com.docker.backend", "com.docker.virtualization", "com.docker.vmnetd", "docker desktop", "colima",
-               "limactl", "qemu-system-aarch64", "qemu-system-x86_64", "vfkit", "gvproxy", "orbstack", "podman"])
+        named(WorkloadCatalog.containerRuntimes)
+            || identities.contains { $0.hasPrefix("com.docker.") || $0.hasPrefix("qemu-system-") }
             || path.includes("/docker.app/contents/macos/") || path.includes("/orbstack.app/contents/macos/")
     }
 
     var isDataStore: Bool {
-        if named(["postgres", "postmaster", "mysqld", "mariadbd", "mongod", "mongos", "redis-server", "valkey-server",
-                  "keydb-server", "etcd", "influxd", "clickhouse", "clickhouse-server", "cockroach", "couchdb", "neo4j",
-                  "minio", "meilisearch", "typesense-server", "qdrant", "surreal", "nats-server", "rabbitmq-server",
-                  "arangod", "dgraph", "questdb", "tidb-server"]) {
+        if named(WorkloadCatalog.dataStores) {
             return true
         }
         if binary == "beam.smp" { return mentions(["rabbit", "couchdb"]) }
@@ -472,20 +470,20 @@ private struct Fingerprint {
         }
     }
 
+    private static let extraDevServerMarkers = [
+        "python -m http.server", "python3 -m http.server", "streamlit run", "fastapi dev", "manage.py runserver",
+        "jupyter", "jupyter-lab", "jupyter-notebook", "jupyter-server",
+    ]
+
+    /// Single-word markers match whole words, so "vite" misses "invites"
+    /// and "parcel" misses a Parcel.app helper; phrases match as text.
     var isDevServer: Bool {
-        mentions(["vite", "next dev", "next-server", "nuxt", "astro dev", "webpack serve", "webpack-dev-server",
-                  "react-scripts start", "rails s", "rails server", "puma", "unicorn", "uvicorn", "gunicorn",
-                  "hypercorn", "flask run", "runserver", "php -s", "artisan serve", "hugo server", "jekyll serve",
-                  "http-server", "live-server", "nodemon", "tsx watch", "ts-node-dev", "storybook", "expo start",
-                  "remix dev", "vite-node", "parcel", "gatsby develop", "docusaurus start", "wrangler dev",
-                  "netlify dev", "vercel dev", "dotnet watch", "phx.server", "bun --watch",
-                  "bun run dev", "deno task dev", "npm run dev", "pnpm dev", "yarn dev", "npm start", "ng serve",
-                  "python -m http.server", "python3 -m http.server", "jupyter", "streamlit run", "fastapi dev",
-                  "manage.py runserver"])
+        let tokens = WorkloadTokens(name: name, path: rawPath, command: command)
+        return tokens.mentions(WorkloadCatalog.devServerMarkers) || tokens.mentions(Self.extraDevServerMarkers)
     }
 
     var isModelRunner: Bool {
-        named(["ollama", "llama-server", "llama-cli", "koboldcpp", "lm studio", "lms", "llamafile", "whisper-server"])
+        named(WorkloadCatalog.modelRunners)
             || mentions(["mlx_lm.server", "vllm", "text-generation-launcher", "lm studio.app"])
     }
 
