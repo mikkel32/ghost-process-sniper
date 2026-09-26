@@ -130,7 +130,7 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 - The MetricKit subscriber, which only logged payload counts.
 - The invented stop odds and their calibrator, dead family-detail pipelines, an invisible thermal advice engine, and other unused sampling, configuration and kill-engine code.
 - Write-only database tables (samples, forecasts, recommendation history, predictive alerts, actions).
-- Dated session notes in `Docs/`, replaced by the [Thermals](Docs/Thermals.md) reference and the [Performance](Docs/Performance.md) guide.
+- Dated performance, thermal, motion, precision and UI-refresh session notes in `Docs/`; what still holds now lives in the [Thermals](Docs/Thermals.md) reference and the [Performance](Docs/Performance.md) guide. The Cleanup status note stays, trimmed to what still holds.
 - Unused views, models, and APIs left over from earlier designs, and a second, divergent copy of the family filter logic.
 
 ## [1.0.0] — 2026-09-26
