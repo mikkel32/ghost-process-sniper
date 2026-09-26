@@ -2931,7 +2931,7 @@ private func interventionPolicyEngineSimulatesStrategies() throws {
         childCount: 0,
         isBackgroundOrOrphan: false
     )
-    let plan = KillPlan(rootIdentity: target.identity, targetIdentities: [target.identity], protectedPIDs: [], displayName: "vite", familyMetadata: metadata)
+    let plan = KillPlan(rootIdentity: target.identity, targetIdentities: [target.identity], protectedPIDs: [], displayName: "vite", familyMetadata: metadata, workload: viteWorkload(pid: 174))
     let evaluation = engine.evaluate(
         plan: plan,
         targets: [target],
@@ -2989,6 +2989,7 @@ private func interventionPolicyEngineAppliesCalibration() throws {
         protectedPIDs: [],
         displayName: "node",
         familyMetadata: metadata,
+        workload: viteWorkload(pid: 179),
         strategyCalibrations: [.gentleDevServer: calibration]
     )
 
@@ -3035,7 +3036,8 @@ private func processKillerRecommendsGentleDevServerStrategy() async throws {
             targetIdentities: [target.identity],
             protectedPIDs: [],
             displayName: "vite",
-            familyMetadata: metadata
+            familyMetadata: metadata,
+            workload: viteWorkload(pid: 184)
         ),
         forceKillDelay: 0
     )
@@ -3700,6 +3702,16 @@ private func process(pid: Int32, parentPID: Int32, userID: UInt32, start: UInt64
         commandLine: "node server.js",
         memory: 128,
         cpu: 0
+    )
+}
+
+/// What the risk assessor needs to recognize a dev server: its real argv.
+private func viteWorkload(pid: Int32) -> KillWorkloadProfile {
+    KillWorkloadProfile(
+        processes: [KillWorkloadProcess(pid: pid, parentPID: 1, name: "node", executablePath: "/usr/local/bin/node",
+                                        commandLine: "node /app/node_modules/.bin/vite --port 5173", isRoot: true)],
+        ancestors: [],
+        parentIsLaunchd: true
     )
 }
 

@@ -399,7 +399,9 @@ private struct Fingerprint {
                   "http-server", "live-server", "nodemon", "tsx watch", "ts-node-dev", "storybook", "expo start",
                   "remix dev", "vite-node", "parcel", "gatsby develop", "docusaurus start", "wrangler dev",
                   "netlify dev", "vercel dev", "dotnet watch", "phx.server", "bun --watch",
-                  "bun run dev", "deno task dev", "npm run dev", "pnpm dev", "yarn dev", "npm start", "ng serve"])
+                  "bun run dev", "deno task dev", "npm run dev", "pnpm dev", "yarn dev", "npm start", "ng serve",
+                  "python -m http.server", "python3 -m http.server", "jupyter", "streamlit run", "fastapi dev",
+                  "manage.py runserver"])
     }
 
     var isModelRunner: Bool {
