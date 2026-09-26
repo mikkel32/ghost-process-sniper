@@ -97,6 +97,30 @@ final class PortCensusTests: XCTestCase {
         XCTAssertEqual(cache.entry(for: identity)?.portsRefreshedAt, now.addingTimeInterval(30))
     }
 
+    /// Docker's backend can publish a dozen ports; search and the stop's
+    /// freed-port list must see the high ones too.
+    func testEveryListeningPortIsKeptForSearchAndTheStop() throws {
+        let ports: Set<Int> = [3000, 3001, 5432, 6379, 8000, 8001, 8025, 8080, 9000, 9200]
+        var cache = ForensicsCache()
+        let identity = ProcessIdentity(pid: 7, startTimeSeconds: 1, startTimeMicroseconds: 0)
+        let merged = cache.mergePorts(ports, for: identity, at: now)
+        XCTAssertEqual(merged.listeningPorts, ports.sorted())
+
+        let subject = SearchSubject(
+            root: SearchableProcess(pid: 7, name: "com.docker.backend", commandLine: "com.docker.backend",
+                                    executablePath: "", ownerName: "dev", listeningPorts: merged.listeningPorts),
+            measurements: SearchMeasurements(cpuPercent: 1, memoryBytes: 1, gpuPercent: 0, threads: 1), flags: [])
+        let outcome = ProcessSearchEngine.search(ProcessSearchQuery("port:9200"), families: [], processes: [subject])
+        XCTAssertEqual(outcome.processes.count, 1)
+
+        let risk = KillRiskAssessor().assess(KillWorkloadProfile(
+            processes: [KillWorkloadProcess(pid: 7, parentPID: 1, name: "node", executablePath: "/usr/local/bin/node",
+                                            commandLine: "node server.js", listeningPorts: merged.listeningPorts, isRoot: true)],
+            ancestors: [], parentIsLaunchd: false))
+        XCTAssertEqual(risk.freedPorts.count, 10)
+        XCTAssertEqual(risk.risks.first { $0.kind == .freesPorts }?.title, "Frees 10 ports")
+    }
+
     func testPortsOnlyEntryIsNotANegativeCacheHit() {
         var cache = ForensicsCache()
         let identity = ProcessIdentity(pid: 5, startTimeSeconds: 1, startTimeMicroseconds: 0)

@@ -106,7 +106,7 @@ public struct ForensicsCache: Sendable {
     /// facts and its age, and returns what the process should now show.
     @discardableResult
     mutating func mergePorts(_ ports: Set<Int>, for identity: ProcessIdentity, at date: Date) -> ProcessForensics {
-        let listening = ListeningSocketReader.displayPorts(ports)
+        let listening = ListeningSocketReader.storedPorts(ports)
         if let entry = entries[identity], !entry.isPortsOnly {
             let old = entry.forensics
             let merged = ProcessForensics(currentDirectory: old.currentDirectory, rootDirectory: old.rootDirectory,

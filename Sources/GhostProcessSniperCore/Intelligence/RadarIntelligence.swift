@@ -328,7 +328,8 @@ public struct RadarIntelligence: Sendable {
         // The kept copy may be the one in a terminal or the busiest, not the newest.
         let started = { (identity: ProcessIdentity) in (identity.startTimeSeconds, identity.startTimeMicroseconds) }
         let age = redundant.allSatisfy { started($0) < started(keep) } ? "older" : "other"
-        let portText = ports.isEmpty ? "" : " (port\(ports.count == 1 ? "" : "s") \(ports.map(String.init).joined(separator: ", ")))"
+        let listed = ports.prefix(4).map(String.init).joined(separator: ", ") + (ports.count > 4 ? " +\(ports.count - 4)" : "")
+        let portText = ports.isEmpty ? "" : " (port\(ports.count == 1 ? "" : "s") \(listed))"
         return [
             RadarActionSuggestion(
                 id: RadarActionSuggestion.stableID(scope: "duplicate|\(cluster.key.id)", type: .suggestKill),

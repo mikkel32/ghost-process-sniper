@@ -135,7 +135,8 @@ public struct KillRiskAssessor: Sendable {
         } ?? false
         let rootSignal = rootPrint.isDataStore && !underSameServer ? rootPrint.databaseShutdownSignal : nil
         let supervisor = findSupervisor(workload, rootPrint: rootPrint, processes: processes)
-        let ports = Array(Set(workload.processes.flatMap(\.listeningPorts))).sorted().prefix(8).map { $0 }
+        // Every port, so the stop verifies each one; titles shorten the list.
+        let ports = Array(Set(workload.processes.flatMap(\.listeningPorts))).sorted()
 
         var risks: [KillRisk] = []
         var grace: TimeInterval?

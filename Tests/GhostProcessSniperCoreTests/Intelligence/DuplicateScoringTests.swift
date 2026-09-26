@@ -66,6 +66,18 @@ final class DuplicateScoringTests: XCTestCase {
         XCTAssertEqual(build.members.count, 21)
     }
 
+    func testStopTitleShortensALongPortList() throws {
+        let vite = "/Users/dev/web/node_modules/.bin/vite"
+        let older = node(910, "\(vite) --port 3000", startedAgo: 7_200, ports: [3000, 3001, 3002, 3003, 9200, 9300])
+        let newest = node(911, "\(vite) --port 5175", startedAgo: 60, ports: [5175])
+        let kept = try XCTUnwrap(build([older, newest]).families.first { $0.root.identity == newest.identity })
+        let enriched = RadarIntelligence().enrich(
+            family: kept, context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []),
+            settings: .smart, now: Fixture.now)
+        let stop = try XCTUnwrap(enriched.suggestions.first { $0.targetIdentities != nil })
+        XCTAssertEqual(stop.title, "Stop 1 older copy (ports 3000, 3001, 3002, 3003 +2)")
+    }
+
     func testWorkerPoolIsNotADuplicate() throws {
         let jest = node(800, "/Users/dev/web/node_modules/.bin/jest --watch")
         let workers = (0..<6).map { node(801 + Int32($0), parent: 800, "/Users/dev/web/node_modules/jest-worker/build/workers/processChild.js") }

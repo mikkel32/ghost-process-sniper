@@ -18,9 +18,11 @@ enum ListeningSocketReader {
         return port > 0 ? port : nil
     }
 
-    /// The ports forensics keep for display and search.
-    static func displayPorts(_ ports: Set<Int>) -> [Int] {
-        Array(ports.sorted().prefix(8))
+    /// The ports forensics keep: every one, sorted, so `port:` search and
+    /// the stop's freed-port check see high ports too. Views shorten the
+    /// list; the bound only guards against a runaway listener.
+    static func storedPorts(_ ports: Set<Int>) -> [Int] {
+        Array(ports.sorted().prefix(256))
     }
 
     static func descriptors(pid: Int32) -> [proc_fdinfo]? {
