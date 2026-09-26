@@ -157,10 +157,7 @@ public struct SamplingPlan: Equatable, Sendable {
     public var scannerBudget: ScannerBudget
     public var candidateSet: CandidateSet
     public var probePolicy: ProcessProbePolicy
-    public var lanePriorities: [ScanLane]
     public var metricsEnrichmentBudget: Int
-    public var unknownProcessStride: Int
-    public var trueCheapScanEnabled: Bool
 
     public static func balanced(now: Date = Date()) -> SamplingPlan {
         let budget = ScannerBudget.budget(for: .balanced)
@@ -176,12 +173,11 @@ public struct SamplingPlan: Equatable, Sendable {
             reason: "balanced",
             scannerBudget: budget,
             probePolicy: .balanced,
-            metricsEnrichmentBudget: budget.maxTelemetryRefreshes * 2,
-            unknownProcessStride: 8,
-            trueCheapScanEnabled: true
+            metricsEnrichmentBudget: budget.maxTelemetryRefreshes * 2
         )
     }
 
+    /// `lanePriorities` is ignored (nothing ever read it); it stays only so existing callers compile.
     public init(
         sampledAt: Date,
         performanceMode: RadarPerformanceMode,
@@ -195,10 +191,8 @@ public struct SamplingPlan: Equatable, Sendable {
         scannerBudget: ScannerBudget? = nil,
         candidateSet: CandidateSet = .empty,
         probePolicy: ProcessProbePolicy = .balanced,
-        lanePriorities: [ScanLane] = [.cheapMetrics, .telemetryCache, .telemetryRefresh, .forensicsQueue],
-        metricsEnrichmentBudget: Int? = nil,
-        unknownProcessStride: Int = 8,
-        trueCheapScanEnabled: Bool = true
+        lanePriorities: [ScanLane] = [],
+        metricsEnrichmentBudget: Int? = nil
     ) {
         self.sampledAt = sampledAt
         self.performanceMode = performanceMode
@@ -212,116 +206,7 @@ public struct SamplingPlan: Equatable, Sendable {
         self.scannerBudget = scannerBudget ?? ScannerBudget.budget(for: performanceMode)
         self.candidateSet = candidateSet
         self.probePolicy = probePolicy
-        self.lanePriorities = lanePriorities
         self.metricsEnrichmentBudget = metricsEnrichmentBudget ?? max(4, (scannerBudget ?? ScannerBudget.budget(for: performanceMode)).maxTelemetryRefreshes * 2)
-        self.unknownProcessStride = max(1, unknownProcessStride)
-        self.trueCheapScanEnabled = trueCheapScanEnabled
-    }
-}
-
-public struct SmoothnessMetrics: Equatable, Sendable {
-    public let mainActorPublishMilliseconds: Double
-    public let coalescedRefreshCount: Int
-    public let refreshInFlight: Bool
-    public let uiCacheHitCount: Int
-    public let scannerWorkerCount: Int
-    public let skippedOptionalWorkCount: Int
-    public let hitchCount: Int
-    public let worstHitchMilliseconds: Double
-    public let latestSpikePhase: String
-    public let uiPublishSkippedCount: Int
-    public let contentRevision: SnapshotContentRevision
-    public let statusUpdateMilliseconds: Double
-    public let scannerTaskCount: Int
-    public let tinyQueueSequentialCount: Int
-    public let diagnosticsOnlyPublishCount: Int
-    public let contentPublishSkippedCount: Int
-    public let samplerAllocationReuseCount: Int
-    public let taskInfoReadCount: Int
-    public let reusedProcessRecordCount: Int
-    public let duplicateClusterCount: Int
-    public let promotedDuplicateCandidateCount: Int
-    public let duplicateDetectorMilliseconds: Double
-    public let hardwareOffenderCount: Int
-    public let hardwareDetectorMilliseconds: Double
-
-    public static let empty = SmoothnessMetrics(
-        mainActorPublishMilliseconds: 0,
-        coalescedRefreshCount: 0,
-        refreshInFlight: false,
-        uiCacheHitCount: 0,
-        scannerWorkerCount: 0,
-        skippedOptionalWorkCount: 0,
-        hitchCount: 0,
-        worstHitchMilliseconds: 0,
-        latestSpikePhase: "none",
-        uiPublishSkippedCount: 0,
-        contentRevision: .zero,
-        statusUpdateMilliseconds: 0,
-        scannerTaskCount: 0,
-        tinyQueueSequentialCount: 0,
-        diagnosticsOnlyPublishCount: 0,
-        contentPublishSkippedCount: 0,
-        samplerAllocationReuseCount: 0,
-        taskInfoReadCount: 0,
-        reusedProcessRecordCount: 0,
-        duplicateClusterCount: 0,
-        promotedDuplicateCandidateCount: 0,
-        duplicateDetectorMilliseconds: 0,
-        hardwareOffenderCount: 0,
-        hardwareDetectorMilliseconds: 0
-    )
-
-    public init(
-        mainActorPublishMilliseconds: Double,
-        coalescedRefreshCount: Int,
-        refreshInFlight: Bool,
-        uiCacheHitCount: Int,
-        scannerWorkerCount: Int,
-        skippedOptionalWorkCount: Int,
-        hitchCount: Int = 0,
-        worstHitchMilliseconds: Double = 0,
-        latestSpikePhase: String = "none",
-        uiPublishSkippedCount: Int = 0,
-        contentRevision: SnapshotContentRevision = .zero,
-        statusUpdateMilliseconds: Double = 0,
-        scannerTaskCount: Int = 0,
-        tinyQueueSequentialCount: Int = 0,
-        diagnosticsOnlyPublishCount: Int = 0,
-        contentPublishSkippedCount: Int = 0,
-        samplerAllocationReuseCount: Int = 0,
-        taskInfoReadCount: Int = 0,
-        reusedProcessRecordCount: Int = 0,
-        duplicateClusterCount: Int = 0,
-        promotedDuplicateCandidateCount: Int = 0,
-        duplicateDetectorMilliseconds: Double = 0,
-        hardwareOffenderCount: Int = 0,
-        hardwareDetectorMilliseconds: Double = 0
-    ) {
-        self.mainActorPublishMilliseconds = mainActorPublishMilliseconds
-        self.coalescedRefreshCount = coalescedRefreshCount
-        self.refreshInFlight = refreshInFlight
-        self.uiCacheHitCount = uiCacheHitCount
-        self.scannerWorkerCount = scannerWorkerCount
-        self.skippedOptionalWorkCount = skippedOptionalWorkCount
-        self.hitchCount = hitchCount
-        self.worstHitchMilliseconds = worstHitchMilliseconds
-        self.latestSpikePhase = latestSpikePhase
-        self.uiPublishSkippedCount = uiPublishSkippedCount
-        self.contentRevision = contentRevision
-        self.statusUpdateMilliseconds = statusUpdateMilliseconds
-        self.scannerTaskCount = scannerTaskCount
-        self.tinyQueueSequentialCount = tinyQueueSequentialCount
-        self.diagnosticsOnlyPublishCount = diagnosticsOnlyPublishCount
-        self.contentPublishSkippedCount = contentPublishSkippedCount
-        self.samplerAllocationReuseCount = samplerAllocationReuseCount
-        self.taskInfoReadCount = taskInfoReadCount
-        self.reusedProcessRecordCount = reusedProcessRecordCount
-        self.duplicateClusterCount = duplicateClusterCount
-        self.promotedDuplicateCandidateCount = promotedDuplicateCandidateCount
-        self.duplicateDetectorMilliseconds = duplicateDetectorMilliseconds
-        self.hardwareOffenderCount = hardwareOffenderCount
-        self.hardwareDetectorMilliseconds = hardwareDetectorMilliseconds
     }
 }
 
@@ -640,35 +525,6 @@ public struct RadarPerformanceMetrics: Equatable, Sendable {
         self.hardwareOffenderCount = hardwareOffenderCount
         self.hardwareDetectorMilliseconds = hardwareDetectorMilliseconds
         self.smoothnessReport = smoothnessReport
-    }
-
-    public var smoothness: SmoothnessMetrics {
-        SmoothnessMetrics(
-            mainActorPublishMilliseconds: mainActorPublishMilliseconds,
-            coalescedRefreshCount: coalescedRefreshCount,
-            refreshInFlight: refreshInFlight,
-            uiCacheHitCount: uiCacheHitCount,
-            scannerWorkerCount: scannerWorkerCount,
-            skippedOptionalWorkCount: skippedOptionalWorkCount,
-            hitchCount: hitchCount,
-            worstHitchMilliseconds: worstHitchMilliseconds,
-            latestSpikePhase: latestSpikePhase,
-            uiPublishSkippedCount: uiPublishSkippedCount,
-            contentRevision: contentRevision,
-            statusUpdateMilliseconds: statusUpdateMilliseconds,
-            scannerTaskCount: scannerTaskCount,
-            tinyQueueSequentialCount: tinyQueueSequentialCount,
-            diagnosticsOnlyPublishCount: diagnosticsOnlyPublishCount,
-            contentPublishSkippedCount: contentPublishSkippedCount,
-            samplerAllocationReuseCount: samplerAllocationReuseCount,
-            taskInfoReadCount: taskInfoReadCount,
-            reusedProcessRecordCount: reusedProcessRecordCount,
-            duplicateClusterCount: duplicateClusterCount,
-            promotedDuplicateCandidateCount: promotedDuplicateCandidateCount,
-            duplicateDetectorMilliseconds: duplicateDetectorMilliseconds,
-            hardwareOffenderCount: hardwareOffenderCount,
-            hardwareDetectorMilliseconds: hardwareDetectorMilliseconds
-        )
     }
 
     public func updatingSmoothness(

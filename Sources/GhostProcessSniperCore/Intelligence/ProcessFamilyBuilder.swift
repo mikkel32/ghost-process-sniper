@@ -226,10 +226,6 @@ public struct ProcessFamilyBuilder: Sendable {
         )
     }
 
-    private func shouldInclude(_ process: ProcessMetrics, confidence: Double, settings: ThresholdSettings) -> Bool {
-        shouldInclude(process, confidence: confidence, hardwareProfile: nil, settings: settings)
-    }
-
     private func shouldInclude(
         _ process: ProcessMetrics,
         confidence: Double,

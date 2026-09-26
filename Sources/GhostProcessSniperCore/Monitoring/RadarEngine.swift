@@ -13,13 +13,6 @@ public struct ProcessTelemetryCache: Sendable {
 
     public init() {}
 
-    public func entry(for identity: ProcessIdentity, now: Date, maxAge: TimeInterval) -> Entry? {
-        guard let entry = entries[identity], now.timeIntervalSince(entry.refreshedAt) <= maxAge else {
-            return nil
-        }
-        return entry
-    }
-
     public func entry(for identity: ProcessIdentity) -> Entry? {
         entries[identity]
     }
@@ -73,13 +66,11 @@ public struct ForensicsCache: Sendable {
     }
 }
 
+/// Identities whose coarse metrics changed since the previous tick, or that are new.
 public struct RadarSnapshotDiff: Equatable, Sendable {
-    public let added: Set<ProcessIdentity>
-    public let removed: Set<ProcessIdentity>
-    public let changed: Set<ProcessIdentity>
-    public let unchanged: Set<ProcessIdentity>
+    public let changedOrAdded: Set<ProcessIdentity>
 
-    public static let empty = RadarSnapshotDiff(added: [], removed: [], changed: [], unchanged: [])
+    public static let empty = RadarSnapshotDiff(changedOrAdded: [])
 }
 
 public struct RadarSnapshotDiffer: Sendable {
@@ -89,42 +80,21 @@ public struct RadarSnapshotDiffer: Sendable {
 
     public mutating func update(with processes: [ProcessMetrics]) -> RadarSnapshotDiff {
         var current: [ProcessIdentity: UInt64] = [:]
-        var added = Set<ProcessIdentity>()
-        var changed = Set<ProcessIdentity>()
-        var unchanged = Set<ProcessIdentity>()
+        var changedOrAdded = Set<ProcessIdentity>()
         current.reserveCapacity(processes.count)
-        added.reserveCapacity(max(0, processes.count - previousFingerprints.count))
-        changed.reserveCapacity(processes.count / 4)
-        unchanged.reserveCapacity(processes.count)
+        changedOrAdded.reserveCapacity(processes.count / 4)
 
         for process in processes {
             let identity = process.identity
             let currentFingerprint = fingerprint(process)
             current[identity] = currentFingerprint
-            if let previous = previousFingerprints[identity] {
-                if currentFingerprint == previous {
-                    unchanged.insert(identity)
-                } else {
-                    changed.insert(identity)
-                }
-            } else {
-                added.insert(identity)
+            if previousFingerprints[identity] != currentFingerprint {
+                changedOrAdded.insert(identity)
             }
         }
 
-        var removed = Set<ProcessIdentity>()
-        removed.reserveCapacity(max(0, previousFingerprints.count - current.count))
-        for identity in previousFingerprints.keys where current[identity] == nil {
-            removed.insert(identity)
-        }
-
         previousFingerprints = current
-        return RadarSnapshotDiff(
-            added: added,
-            removed: removed,
-            changed: changed,
-            unchanged: unchanged
-        )
+        return RadarSnapshotDiff(changedOrAdded: changedOrAdded)
     }
 
     private func fingerprint(_ process: ProcessMetrics) -> UInt64 {
@@ -135,17 +105,8 @@ public struct RadarSnapshotDiffer: Sendable {
         hasher.combine(process.physicalFootprintBytes / 4_194_304)
         hasher.combine(Int(process.cpuPercent.rounded()))
         hasher.combine(process.threadCount)
-        hasher.combine(process.commandLine)
         return UInt64(bitPattern: Int64(hasher.finalize()))
     }
-}
-
-public struct StoreWriteBuffer: Equatable, Sendable {
-    public var pendingModelCount: Int
-    public var pendingActionCount: Int
-    public var lastFlushDate: Date?
-
-    public static let empty = StoreWriteBuffer(pendingModelCount: 0, pendingActionCount: 0, lastFlushDate: nil)
 }
 
 public struct StoreHealth: Equatable, Sendable {
@@ -265,15 +226,9 @@ public struct RadarScheduler: Sendable {
             pids: demand.candidatePIDs,
             reason: demand.reason
         )
-        let stride: Int = switch mode {
-        case .batterySaver: 10
-        case .balanced: 6
-        case .realtime: 3
-        }
         let probePolicy = ProcessProbePolicy(
             richMetricIdentities: candidates.identities,
             richMetricPIDs: candidates.pids,
-            quietRichMetricStride: stride,
             allowsRichMetrics: pressure != .critical
         )
 
@@ -296,9 +251,7 @@ public struct RadarScheduler: Sendable {
             scannerBudget: scannerBudget,
             candidateSet: candidates,
             probePolicy: probePolicy,
-            metricsEnrichmentBudget: max(scannerBudget.maxTelemetryRefreshes, demand.hotFamilyCount * 4 + demand.focusedFamilyCount * 4),
-            unknownProcessStride: stride,
-            trueCheapScanEnabled: true
+            metricsEnrichmentBudget: max(scannerBudget.maxTelemetryRefreshes, demand.hotFamilyCount * 4 + demand.focusedFamilyCount * 4)
         )
         lastPlan = plan
         return plan
@@ -530,9 +483,7 @@ public struct RadarPipeline: Sendable {
     private mutating func versionedFamily(_ family: ProcessFamily, diff: RadarSnapshotDiff, now: Date) -> ProcessFamily {
         let signatureID = family.signature.id
         let familyKey = family.familyKey
-        let hasMetricChange = family.members.contains { member in
-            diff.added.contains(member.identity) || diff.changed.contains(member.identity)
-        }
+        let hasMetricChange = family.members.contains { diff.changedOrAdded.contains($0.identity) }
         if hasMetricChange {
             metricsVersions[familyKey, default: 0] += 1
         }

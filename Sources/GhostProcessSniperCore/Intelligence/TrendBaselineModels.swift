@@ -172,7 +172,6 @@ public struct FamilyBaselineLearner: Sendable {
 }
 
 public struct TrendWindow: Sendable {
-    private var samples: [ProcessIdentity: [TrendSample]] = [:]
     private var signatureSamples: [String: [TrendSample]] = [:]
     private let retention: TimeInterval
     private let maxSamples: Int
@@ -182,21 +181,6 @@ public struct TrendWindow: Sendable {
     public init(retention: TimeInterval = 180, maxSamples: Int = 90) {
         self.retention = retention
         self.maxSamples = maxSamples
-    }
-
-    public mutating func update(
-        identity: ProcessIdentity,
-        memoryBytes: UInt64,
-        cpuPercent: Double,
-        at date: Date
-    ) -> TrendMetrics {
-        var values = samples[identity, default: []]
-        if let last = values.last, date <= last.date { return metrics(for: values) }
-        values.append(TrendSample(date: date, memoryBytes: memoryBytes, cpuPercent: cpuPercent))
-        prune(&values, keeping: date)
-        samples[identity] = values
-        cleanupIfNeeded(keeping: date)
-        return metrics(for: values)
     }
 
     public mutating func update(
@@ -238,9 +222,6 @@ public struct TrendWindow: Sendable {
     }
 
     private mutating func cleanup(keeping date: Date) {
-        samples = samples.filter { _, values in
-            values.contains { date.timeIntervalSince($0.date) <= retention }
-        }
         signatureSamples = signatureSamples.filter { _, values in
             values.contains { date.timeIntervalSince($0.date) <= retention }
         }

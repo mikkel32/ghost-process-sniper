@@ -149,59 +149,17 @@ public struct ProcessLiteRecord: Equatable, Sendable {
         self.openFileCount = openFileCount
         self.sampledAt = sampledAt
     }
-
-    public var fingerprint: UInt64 {
-        var hasher = Hasher()
-        hasher.combine(parentPID)
-        hasher.combine(userID)
-        hasher.combine(processGroupID)
-        hasher.combine(status)
-        hasher.combine(flags)
-        hasher.combine(openFileCount)
-        return UInt64(bitPattern: Int64(hasher.finalize()))
-    }
-}
-
-public struct ScannerAllocationStats: Equatable, Sendable {
-    public let pidBufferCopyCount: Int
-    public let scratchpadReuseCount: Int
-    public let reusedRecordCount: Int
-
-    public static let empty = ScannerAllocationStats(
-        pidBufferCopyCount: 0,
-        scratchpadReuseCount: 0,
-        reusedRecordCount: 0
-    )
-
-    public init(pidBufferCopyCount: Int, scratchpadReuseCount: Int, reusedRecordCount: Int) {
-        self.pidBufferCopyCount = pidBufferCopyCount
-        self.scratchpadReuseCount = scratchpadReuseCount
-        self.reusedRecordCount = reusedRecordCount
-    }
 }
 
 public struct ProcessRecord: Equatable, Sendable {
     public let identity: ProcessIdentity
     public var process: ProcessMetrics
-    public var metricsFingerprint: UInt64
     public var telemetryRefreshedAt: Date
-    public var lastSeenAt: Date
-    public var classification: DevClassification?
 
-    public init(
-        identity: ProcessIdentity,
-        process: ProcessMetrics,
-        metricsFingerprint: UInt64,
-        telemetryRefreshedAt: Date,
-        lastSeenAt: Date,
-        classification: DevClassification? = nil
-    ) {
+    public init(identity: ProcessIdentity, process: ProcessMetrics, telemetryRefreshedAt: Date) {
         self.identity = identity
         self.process = process
-        self.metricsFingerprint = metricsFingerprint
         self.telemetryRefreshedAt = telemetryRefreshedAt
-        self.lastSeenAt = lastSeenAt
-        self.classification = classification
     }
 }
 
@@ -214,14 +172,6 @@ public struct ProcessScanCache: Sendable {
         records[identity]
     }
 
-    public func contains(_ identity: ProcessIdentity) -> Bool {
-        records[identity] != nil
-    }
-
-    public func metricsFingerprint(for identity: ProcessIdentity) -> UInt64? {
-        records[identity]?.metricsFingerprint
-    }
-
     public mutating func update(_ record: ProcessRecord) {
         records[record.identity] = record
     }
@@ -232,7 +182,6 @@ public struct ProcessScanCache: Sendable {
 
     public func shouldRefreshTelemetry(
         identity: ProcessIdentity,
-        probeFingerprint: UInt64,
         now: Date,
         maxAge: TimeInterval,
         grace: TimeInterval,
@@ -242,7 +191,6 @@ public struct ProcessScanCache: Sendable {
         guard let record = records[identity] else {
             return true
         }
-        let _ = probeFingerprint
         if force {
             return true
         }
@@ -270,56 +218,25 @@ public struct CandidateSet: Equatable, Sendable {
     }
 }
 
-public struct ForensicsWorkQueue: Equatable, Sendable {
-    private var identities: [ProcessIdentity]
-
-    public init(identities: [ProcessIdentity]) {
-        var seen = Set<ProcessIdentity>()
-        self.identities = identities.filter { seen.insert($0).inserted }
-    }
-
-    public mutating func pop() -> ProcessIdentity? {
-        identities.isEmpty ? nil : identities.removeFirst()
-    }
-
-    public var isEmpty: Bool {
-        identities.isEmpty
-    }
-}
-
 public struct ProcessProbePolicy: Equatable, Sendable {
     public let richMetricIdentities: Set<ProcessIdentity>
     public let richMetricPIDs: Set<Int32>
-    public let quietRichMetricStride: Int
     public let allowsRichMetrics: Bool
 
     public static let balanced = ProcessProbePolicy(
         richMetricIdentities: [],
         richMetricPIDs: [],
-        quietRichMetricStride: 6,
         allowsRichMetrics: true
     )
 
     public init(
         richMetricIdentities: Set<ProcessIdentity>,
         richMetricPIDs: Set<Int32>,
-        quietRichMetricStride: Int,
         allowsRichMetrics: Bool
     ) {
         self.richMetricIdentities = richMetricIdentities
         self.richMetricPIDs = richMetricPIDs
-        self.quietRichMetricStride = max(1, quietRichMetricStride)
         self.allowsRichMetrics = allowsRichMetrics
-    }
-
-    public func shouldReadRichMetrics(identity: ProcessIdentity, pid: Int32, ordinal: Int, isPriority: Bool) -> Bool {
-        guard allowsRichMetrics else {
-            return false
-        }
-        if isPriority || richMetricIdentities.contains(identity) || richMetricPIDs.contains(pid) {
-            return true
-        }
-        return ordinal % quietRichMetricStride == 0
     }
 }
 

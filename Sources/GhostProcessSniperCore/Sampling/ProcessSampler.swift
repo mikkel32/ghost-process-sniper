@@ -28,7 +28,6 @@ struct RawProcessSample: Sendable {
     let taskInfo: proc_taskallinfo?
     let usage: rusage_info_v4?
     let preliminaryPriority: Bool
-    let shouldReadRichMetrics: Bool
 }
 
 struct ParallelProbeResult: Sendable {
@@ -92,9 +91,7 @@ public actor NativeProcessSampler: ProcessSampling {
         let pidCount = try listPIDCount(counters: &counters)
         let pass = probePass
         probePass &+= 1
-        let stride = max(1, max(plan.unknownProcessStride, plan.probePolicy.quietRichMetricStride))
-        let richBudget = plan.metricsEnrichmentBudget > 0 ? plan.metricsEnrichmentBudget :
-            (plan.trueCheapScanEnabled ? max(1, (pidCount + stride - 1) / stride) : pidCount)
+        let richBudget = plan.metricsEnrichmentBudget
 
         let plannedWorkerCount = Self.workerCount(for: pidCount, mode: plan.performanceMode)
         let workerCount = pidCount < 2_000 ? min(plannedWorkerCount, 1) : plannedWorkerCount
@@ -232,16 +229,6 @@ public actor NativeProcessSampler: ProcessSampling {
                 isSystemProcess = liteRecord.isSystemProcess
             }
 
-            var hasher = Hasher()
-            hasher.combine(liteRecord.parentPID)
-            hasher.combine(liteRecord.userID)
-            hasher.combine(residentMemoryBytes / 8_388_608)
-            hasher.combine(physicalFootprintBytes / 8_388_608)
-            hasher.combine(Int(cpu.rounded()))
-            hasher.combine(threadCount)
-            hasher.combine(isSystemProcess)
-            let probeFingerprint = UInt64(bitPattern: Int64(hasher.finalize()))
-
             let isPriority = preliminaryPriority
 
             var sampleItem = ActiveProcessSample(
@@ -255,7 +242,6 @@ public actor NativeProcessSampler: ProcessSampling {
                 virtualMemoryBytes: virtualMemoryBytes,
                 threadCount: threadCount,
                 isSystemProcess: isSystemProcess,
-                probeFingerprint: probeFingerprint,
                 totalProcessorSeconds: totalProcessorSeconds,
                 cpu: cpu,
                 isPriority: isPriority,
@@ -266,7 +252,6 @@ public actor NativeProcessSampler: ProcessSampling {
             // TELEMETRY CACHE CHECK
             if !scanCache.shouldRefreshTelemetry(
                 identity: identity,
-                probeFingerprint: probeFingerprint,
                 now: now,
                 maxAge: plan.commandRefreshInterval,
                 grace: plan.scannerBudget.staleTelemetryGrace,
@@ -468,7 +453,6 @@ public actor NativeProcessSampler: ProcessSampling {
 
         for sampleItem in activeSamples {
             let identity = sampleItem.identity
-            let probeFingerprint = sampleItem.probeFingerprint
             let totalProcessorSeconds = sampleItem.totalProcessorSeconds
             let cpu = sampleItem.cpu
             let gpu = gpuSnapshot.percentByPID[sampleItem.identity.pid] ?? 0
@@ -504,14 +488,7 @@ public actor NativeProcessSampler: ProcessSampling {
                 gpuMeasurementStatus: gpuMeasurementStatus
             )
 
-            let record = ProcessRecord(
-                identity: identity,
-                process: process,
-                metricsFingerprint: probeFingerprint,
-                telemetryRefreshedAt: telemetry.refreshedAt,
-                lastSeenAt: now
-            )
-            scanCache.update(record)
+            scanCache.update(ProcessRecord(identity: identity, process: process, telemetryRefreshedAt: telemetry.refreshedAt))
             processes.append(process)
         }
 

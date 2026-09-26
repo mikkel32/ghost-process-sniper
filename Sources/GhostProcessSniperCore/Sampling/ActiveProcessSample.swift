@@ -12,7 +12,6 @@ struct ActiveProcessSample {
     let virtualMemoryBytes: UInt64
     let threadCount: Int
     let isSystemProcess: Bool
-    let probeFingerprint: UInt64
     let totalProcessorSeconds: TimeInterval
     let cpu: Double
     let isPriority: Bool

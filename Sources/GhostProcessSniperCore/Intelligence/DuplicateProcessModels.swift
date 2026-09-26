@@ -129,12 +129,6 @@ public struct DuplicateClusterSet: Equatable, Sendable {
     public var visibleClusters: [DuplicateProcessCluster] {
         clusters.filter { !$0.isInternalToSingleFamily }
     }
-
-    public func cluster(containing identity: ProcessIdentity) -> DuplicateProcessCluster? {
-        clusters.first { cluster in
-            cluster.members.contains { $0.identity == identity }
-        }
-    }
 }
 
 public struct DuplicateClusterDetector: Sendable {

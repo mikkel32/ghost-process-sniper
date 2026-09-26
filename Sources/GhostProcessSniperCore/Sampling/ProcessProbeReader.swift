@@ -44,7 +44,7 @@ enum ProcessProbeReader {
                 flags: info.pbi_flags, openFileCount: Int(info.pbi_nfiles), sampledAt: plan.sampledAt)
             priorities.append(requested ? 2 : hinted ? 1 : 0)
             samples.append(RawProcessSample(pid: pid, liteRecord: lite, taskInfo: nil, usage: nil,
-                preliminaryPriority: requested || hinted, shouldReadRichMetrics: false))
+                preliminaryPriority: requested || hinted))
         }
 
         let selected = RichProbeSelector.indices(priorities: priorities,
@@ -73,7 +73,7 @@ enum ProcessProbeReader {
             }
             samples[index] = RawProcessSample(pid: sample.pid, liteRecord: sample.liteRecord,
                 taskInfo: task, usage: result == 0 ? usageInfo : nil,
-                preliminaryPriority: sample.preliminaryPriority, shouldReadRichMetrics: true)
+                preliminaryPriority: sample.preliminaryPriority)
         }
         return ParallelProbeResult(samples: samples, cheapMetricsCount: samples.count,
             richMetricsCount: taskReads, skippedCount: skipped, expensiveCallCount: expensiveCalls,

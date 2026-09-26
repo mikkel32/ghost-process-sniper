@@ -201,9 +201,7 @@ private func nativeSamplerUsesBSDFirstCheapGraph() async throws {
         allowsOptionalForensics: false,
         maxForensicsPerRefresh: 0,
         reason: "bsd-first-check",
-        metricsEnrichmentBudget: 4,
-        unknownProcessStride: 32,
-        trueCheapScanEnabled: true
+        metricsEnrichmentBudget: 4
     )
     let first = try await sampler.sample(plan: plan)
     var secondPlan = plan
@@ -789,9 +787,8 @@ private func ruleMatchPreviewCountsLiveFamilies() throws {
 
 private func trendWindowComputesLeakVelocity() throws {
     var trend = TrendWindow()
-    let identity = ProcessIdentity(pid: 200, startTimeSeconds: 10, startTimeMicroseconds: 0)
-    _ = trend.update(identity: identity, memoryBytes: 100 * 1_048_576, cpuPercent: 5, at: Date(timeIntervalSince1970: 1_000))
-    let metrics = trend.update(identity: identity, memoryBytes: 260 * 1_048_576, cpuPercent: 25, at: Date(timeIntervalSince1970: 1_060))
+    _ = trend.update(signatureID: "trend-200", memoryBytes: 100 * 1_048_576, cpuPercent: 5, at: Date(timeIntervalSince1970: 1_000))
+    let metrics = trend.update(signatureID: "trend-200", memoryBytes: 260 * 1_048_576, cpuPercent: 25, at: Date(timeIntervalSince1970: 1_060))
 
     try check(Int(metrics.memoryVelocityMegabytesPerMinute.rounded()) == 160, "trend should compute MB/min leak velocity")
     try check(Int(metrics.cpuSlopePerMinute.rounded()) == 20, "trend should compute CPU slope")
@@ -931,12 +928,11 @@ private func riskForecasterDetectsLeakAcceleration() throws {
 
 private func trendWindowRegressionResistsEndpointSpikes() throws {
     var trend = TrendWindow()
-    let identity = ProcessIdentity(pid: 300, startTimeSeconds: 10, startTimeMicroseconds: 0)
     let base = Date(timeIntervalSince1970: 2_000)
     for (index, megabytes) in [100, 100, 100, 100].enumerated() {
-        _ = trend.update(identity: identity, memoryBytes: UInt64(megabytes) * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(Double(index) * 30))
+        _ = trend.update(signatureID: "trend-300", memoryBytes: UInt64(megabytes) * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(Double(index) * 30))
     }
-    let metrics = trend.update(identity: identity, memoryBytes: 400 * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(120))
+    let metrics = trend.update(signatureID: "trend-300", memoryBytes: 400 * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(120))
 
     // Endpoint math would claim 150 MB/min from one spiky sample; the
     // regression stays lower and flags the poor fit.
@@ -945,10 +941,9 @@ private func trendWindowRegressionResistsEndpointSpikes() throws {
     try check(metrics.sampleCount == 5, "trend metrics should expose the window sample count")
 
     var cleanTrend = TrendWindow()
-    let cleanIdentity = ProcessIdentity(pid: 301, startTimeSeconds: 10, startTimeMicroseconds: 0)
     var cleanMetrics = TrendMetrics.empty
     for (index, megabytes) in [100, 150, 200, 250, 300].enumerated() {
-        cleanMetrics = cleanTrend.update(identity: cleanIdentity, memoryBytes: UInt64(megabytes) * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(Double(index) * 30))
+        cleanMetrics = cleanTrend.update(signatureID: "trend-301", memoryBytes: UInt64(megabytes) * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(Double(index) * 30))
     }
     try check(Int(cleanMetrics.memoryVelocityMegabytesPerMinute.rounded()) == 100, "regression should recover the true slope of a clean leak")
     try check(cleanMetrics.memoryFitQuality > 0.95, "clean linear leak should earn high fit quality")
@@ -1249,33 +1244,20 @@ private func scannerDeadlineAndCachesBehave() throws {
     let record = ProcessRecord(
         identity: process.identity,
         process: process,
-        metricsFingerprint: 10,
-        telemetryRefreshedAt: Date(timeIntervalSince1970: 1_000),
-        lastSeenAt: Date(timeIntervalSince1970: 1_000)
+        telemetryRefreshedAt: Date(timeIntervalSince1970: 1_000)
     )
     var cache = ProcessScanCache()
     cache.update(record)
     try check(!cache.shouldRefreshTelemetry(
         identity: process.identity,
-        probeFingerprint: 10,
         now: Date(timeIntervalSince1970: 1_005),
         maxAge: 10,
         grace: 10,
         isPriority: false,
         force: false
     ), "unchanged quiet process should reuse cached telemetry")
-    try check(!cache.shouldRefreshTelemetry(
-        identity: process.identity,
-        probeFingerprint: 11,
-        now: Date(timeIntervalSince1970: 1_005),
-        maxAge: 10,
-        grace: 10,
-        isPriority: false,
-        force: false
-    ), "changed cheap metrics should not force command/path telemetry inside the cache window")
     try check(cache.shouldRefreshTelemetry(
         identity: process.identity,
-        probeFingerprint: 10,
         now: Date(timeIntervalSince1970: 1_030),
         maxAge: 10,
         grace: 10,
@@ -1284,7 +1266,6 @@ private func scannerDeadlineAndCachesBehave() throws {
     ), "quiet telemetry should refresh after max age plus grace")
     try check(cache.shouldRefreshTelemetry(
         identity: process.identity,
-        probeFingerprint: 10,
         now: Date(timeIntervalSince1970: 1_012),
         maxAge: 10,
         grace: 10,
@@ -1297,26 +1278,11 @@ private func scannerDeadlineAndCachesBehave() throws {
     forensics.update(partial, for: process.identity, at: Date(timeIntervalSince1970: 2_000))
     try check(forensics.negativeEntry(for: process.identity, now: Date(timeIntervalSince1970: 2_090), maxAge: 120)?.forensics == partial, "partial forensics should be negative-cached")
 
-    var queue = ForensicsWorkQueue(identities: [process.identity, process.identity])
-    try check(queue.pop() == process.identity, "forensics queue should return priority identity once")
-    try check(queue.isEmpty, "forensics queue should de-duplicate identities")
-
     var cpu = CPUUsageTracker<ProcessIdentity>()
     _ = cpu.percent(key: process.identity, totalProcessorSeconds: 1, wallClock: Date(timeIntervalSince1970: 1))
     cpu.prune(keeping: [])
     let missing = cpu.percent(key: process.identity, totalProcessorSeconds: 2, wallClock: Date(timeIntervalSince1970: 2))
     try check(missing == nil, "CPU tracker pruning should drop old identity state")
-
-    let policy = ProcessProbePolicy(
-        richMetricIdentities: [process.identity],
-        richMetricPIDs: [],
-        quietRichMetricStride: 5,
-        allowsRichMetrics: true
-    )
-    try check(policy.shouldReadRichMetrics(identity: process.identity, pid: process.pid, ordinal: 1, isPriority: false), "focused identity should be promoted to rich metrics")
-    try check(!policy.shouldReadRichMetrics(identity: ProcessIdentity(pid: 216, startTimeSeconds: 1, startTimeMicroseconds: 0), pid: 216, ordinal: 1, isPriority: false), "stable quiet identities should skip rich metrics between strides")
-    try check(policy.shouldReadRichMetrics(identity: ProcessIdentity(pid: 217, startTimeSeconds: 1, startTimeMicroseconds: 0), pid: 217, ordinal: 5, isPriority: false), "quiet identities should receive sparse rich probes by stride")
-    try check(!ProcessProbePolicy(richMetricIdentities: [process.identity], richMetricPIDs: [], quietRichMetricStride: 1, allowsRichMetrics: false).shouldReadRichMetrics(identity: process.identity, pid: process.pid, ordinal: 0, isPriority: true), "pressure policy should disable rich probes")
 }
 
 private func scannerHealthFeedsDiagnostics() throws {
@@ -1434,15 +1400,6 @@ private func samplerExecutionPlanScalesAndCounts() throws {
     try check(NativeProcessSampler.recommendedWorkerCount(for: 2_000, mode: .balanced) <= 5, "balanced scans should cap workers")
     try check(NativeProcessSampler.recommendedWorkerCount(for: 30_000, mode: .batterySaver) <= 3, "battery saver should cap worker fanout")
     try check(ScannerBudget.budget(for: .balanced).maxTelemetryRefreshes <= 16, "balanced scanner should cap command/path refresh bursts")
-
-    let plan = SamplerExecutionPlan(
-        workerCount: 1,
-        telemetryJobCount: 2,
-        forensicsJobCount: 0,
-        scannerTaskCount: 0,
-        tinyQueueSequentialCount: 1
-    )
-    try check(plan.tinyQueueSequentialCount == 1 && plan.scannerTaskCount == 0, "tiny queues should run sequentially instead of spawning tasks")
 }
 
 private func radarPublishPayloadSkipsUnchangedContentRebuild() throws {
@@ -1646,8 +1603,8 @@ private func radarPipelineDiffsAndHoldsLevels() throws {
     let first = pipeline.run(processes: hotProcesses, settings: settings, context: context, now: Date(timeIntervalSince1970: 10_000))
     let second = pipeline.run(processes: quietProcesses, settings: settings, context: context, now: Date(timeIntervalSince1970: 10_005))
 
-    try check(first.diff.added.count == 1, "pipeline should detect newly seen process identity")
-    try check(second.diff.changed.count == 1, "pipeline should detect metric changes")
+    try check(first.diff.changedOrAdded.count == 1, "pipeline should detect newly seen process identity")
+    try check(second.diff.changedOrAdded.count == 1, "pipeline should detect metric changes")
     try check(second.families.first?.score.level ?? .quiet >= .watch, "hysteresis should avoid immediate hot-to-quiet flicker")
 }
 
@@ -2050,14 +2007,14 @@ private func radarIntelligenceEscalatesBaselineAnomalies() throws {
     )
 
     let enriched = intelligence.enrich(
-        families: [freshMeasurements(family, at: Date(timeIntervalSince1970: 5_000))],
+        family: freshMeasurements(family, at: Date(timeIntervalSince1970: 5_000)),
         context: context,
         settings: .aggressive,
         now: Date(timeIntervalSince1970: 5_000)
     )
 
-    try check(enriched.first?.score.level ?? .quiet >= .hot, "baseline anomaly should escalate level")
-    try check(enriched.first?.score.reasons.contains(where: { $0.contains("usual memory") }) == true, "baseline reason should explain memory anomaly")
+    try check(enriched.score.level >= .hot, "baseline anomaly should escalate level")
+    try check(enriched.score.reasons.contains(where: { $0.contains("usual memory") }), "baseline reason should explain memory anomaly")
 }
 
 private func culpritAnalysisExplainsLikelyCause() throws {

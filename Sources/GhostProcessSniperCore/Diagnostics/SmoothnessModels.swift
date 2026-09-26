@@ -201,33 +201,3 @@ public final class MainActorHitchMonitor {
         spikes.report
     }
 }
-
-public struct SamplerExecutionPlan: Equatable, Sendable {
-    public let workerCount: Int
-    public let telemetryJobCount: Int
-    public let forensicsJobCount: Int
-    public let scannerTaskCount: Int
-    public let tinyQueueSequentialCount: Int
-
-    public static let empty = SamplerExecutionPlan(
-        workerCount: 0,
-        telemetryJobCount: 0,
-        forensicsJobCount: 0,
-        scannerTaskCount: 0,
-        tinyQueueSequentialCount: 0
-    )
-
-    public init(
-        workerCount: Int,
-        telemetryJobCount: Int,
-        forensicsJobCount: Int,
-        scannerTaskCount: Int,
-        tinyQueueSequentialCount: Int
-    ) {
-        self.workerCount = workerCount
-        self.telemetryJobCount = telemetryJobCount
-        self.forensicsJobCount = forensicsJobCount
-        self.scannerTaskCount = scannerTaskCount
-        self.tinyQueueSequentialCount = tinyQueueSequentialCount
-    }
-}
