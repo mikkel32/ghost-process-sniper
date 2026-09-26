@@ -14,7 +14,7 @@ final class LaunchOriginTests: XCTestCase {
 
         XCTAssertNotEqual(family.forecast.state, .stale)
         XCTAssertFalse(family.score.components.contains { $0.title == "background dev process" })
-        XCTAssertFalse(LaunchOrigin.isDetachedFromLauncher(code))
+        XCTAssertTrue(LaunchOrigin.isAppMainBinary(path: code.executablePath, name: code.name))
     }
 
     func testIdleDetachedDevServerIsStale() {

@@ -25,14 +25,6 @@ public enum LaunchOrigin {
         return isHomebrewService(path: path) || commandLine.lowercased().contains("homebrew.mxcl")
     }
 
-    /// Parented by launchd without being an app or a launchd-managed service:
-    /// the shell or tool that started it is gone.
-    public static func isDetachedFromLauncher(_ process: ProcessMetrics) -> Bool {
-        process.parentPID == 1 &&
-            !isAppMainBinary(path: process.executablePath, name: process.name) &&
-            !isLaunchdManaged(path: process.executablePath, commandLine: process.commandLine)
-    }
-
     // `brew services` runs formulae from their opt links:
     // /opt/homebrew/opt/<formula>/bin/<tool> or /usr/local/opt/<formula>/bin/<tool>.
     private static func isHomebrewService(path: String) -> Bool {
