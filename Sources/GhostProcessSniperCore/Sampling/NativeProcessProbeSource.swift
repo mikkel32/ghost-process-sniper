@@ -143,7 +143,7 @@ struct NativeProcessProbeSource: ProcessProbeSource {
             rootDirectory: vnode?.rootDirectory,
             openFileCount: descriptors?.count,
             socketCount: sockets?.socketCount,
-            listeningPorts: ListeningSocketReader.displayPorts(sockets?.listeningPorts ?? []),
+            listeningPorts: ListeningSocketReader.storedPorts(sockets?.listeningPorts ?? []),
             isPartial: vnode == nil || descriptors == nil,
             notes: notes
         )

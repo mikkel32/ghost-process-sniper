@@ -3,7 +3,8 @@ import XCTest
 
 final class ForecastSemanticsTests: XCTestCase {
     private typealias Fixture = IntelligenceFixture
-    private let forecaster = FamilyRiskForecaster()
+    /// Two cores keep the automatic CPU limit at the profile's own 90%.
+    private let forecaster = FamilyRiskForecaster(processorCount: 2)
 
     func testCPUBreachDoesNotProduceALeakVerdict() {
         let memory: [Double] = [400, 405, 410, 415, 420, 425]

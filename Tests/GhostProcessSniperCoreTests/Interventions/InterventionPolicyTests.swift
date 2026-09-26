@@ -112,4 +112,11 @@ final class InterventionPolicyTests: XCTestCase {
         XCTAssertEqual(score.adding([KillDecisionFactor(kind: .whyKill, title: "Likely reclaim", detail: "", weight: 30)]).value, 10)
         XCTAssertEqual(KillDecisionScore(value: 130, confidence: 2, factors: []).value, 100)
     }
+
+    func testContainerVMIsShutDownCarefully() {
+        let evaluation = PolicyFixture.evaluate(command: "/opt/homebrew/bin/krunkit --cpus 4", name: "krunkit",
+                                                path: "/opt/homebrew/bin/krunkit")
+        XCTAssertEqual(evaluation.recommendation.strategy, .carefulShutdown)
+        XCTAssertTrue(evaluation.risk.forceNeedsConfirmation)
+    }
 }

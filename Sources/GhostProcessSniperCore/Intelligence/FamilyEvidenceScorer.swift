@@ -16,11 +16,13 @@ struct FamilyEvidenceScorer: Sendable {
         forgotten: ForgottenAssessment,
         zombieChildCount: Int,
         cpuBehavior: CPUBehavior = .none,
+        cpuLimit: Double? = nil,
         settings: ThresholdSettings,
         now: Date
     ) -> GhostScore {
         let memoryRatio = Double(footprint) / Double(max(settings.memoryBytes, 1))
-        let cpuRatio = cpu / max(settings.cpuPercent, 1)
+        let cpuLimit = max(cpuLimit ?? settings.cpuPercent, 1)
+        let cpuRatio = cpu / cpuLimit
         let gpuRatio = gpu / 80
         // Only history-proven growth scores as a leak: two close samples can
         // turn one allocation into thousands of MB/min.
@@ -63,7 +65,7 @@ struct FamilyEvidenceScorer: Sendable {
                 slot: "cpu",
                 kind: .cpu,
                 title: cpuRatio >= 1 ? "CPU above threshold" : "CPU activity",
-                detail: "\(RadarFormat.fixed0(cpu))% is \(RadarFormat.fixed1(cpuRatio))x the \(RadarFormat.fixed0(settings.cpuPercent))% limit",
+                detail: "\(RadarFormat.fixed0(cpu))% is \(RadarFormat.fixed1(cpuRatio))x the \(RadarFormat.fixed0(cpuLimit))% limit",
                 impact: cpuImpact,
                 level: componentLevel(cpuRatio, critical: 1.15)
             ),
@@ -216,7 +218,7 @@ struct FamilyEvidenceScorer: Sendable {
         var heat = GhostHeatModel.initial(
             memoryRatio: memoryRatio,
             cpuRatio: cpuRatio,
-            cpuThreshold: settings.cpuPercent,
+            cpuThreshold: cpuLimit,
             gpuRatio: gpuRatio,
             leakRatio: leakRatio,
             trend: trend,

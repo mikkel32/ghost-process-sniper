@@ -196,4 +196,42 @@ final class MemberTrendStoreTests: XCTestCase {
         }
         XCTAssertLessThanOrEqual(store.seriesCount, MemberTrendStore.seriesCap)
     }
+
+    /// A flat root watched for forty minutes must not lend its span to a
+    /// child that has been growing for ten: the slow-leak rule needs twenty
+    /// minutes of the growth itself.
+    func testYoungChildWarmUpIsNotASlowLeak() throws {
+        let childStart = 800
+        let cadence: TimeInterval = 3
+        var checkedYoung = 0
+        var lateWhyNow: String?
+        _ = run(ticks: childStart + 500, cadence: cadence, world: { tick, date in
+            var world = [self.member(100, megabytes: 500, at: date)]
+            if tick >= childStart {
+                let minutes = Double(tick - childStart) * cadence / 60
+                world.append(self.member(101, parent: 100, name: "esbuild",
+                                         path: "/Users/dev/web/node_modules/@esbuild/darwin-arm64/bin/esbuild",
+                                         command: "/Users/dev/web/node_modules/@esbuild/darwin-arm64/bin/esbuild --service=0.21.5",
+                                         megabytes: 40 + minutes * 8, at: date))
+            }
+            return world
+        }, inspect: { tick, _, families in
+            guard tick >= childStart, let vite = families.first(where: { $0.root.pid == 100 }) else { return }
+            let childMinutes = Double(tick - childStart) * cadence / 60
+            if childMinutes < 20 {
+                checkedYoung += 1
+                XCTAssertFalse(vite.longTermTrend.isSlowLeak(physicalMemoryBytes: 16 << 30), "child minute \(childMinutes)")
+                XCTAssertNotEqual(vite.forecast.state, .leaking, "child minute \(childMinutes): \(vite.forecast.whyNow)")
+                XCTAssertFalse(vite.suggestions.contains { $0.title.hasPrefix("Stop only") }, "child minute \(childMinutes)")
+            } else if childMinutes >= 24 {
+                lateWhyNow = vite.forecast.whyNow
+            }
+        })
+        XCTAssertGreaterThan(checkedYoung, 300)
+        let whyNow = try XCTUnwrap(lateWhyNow)
+        XCTAssertTrue(whyNow.contains("memory has crept up"), whyNow)
+        let span = try XCTUnwrap(whyNow.range(of: #"for (\d+) min"#, options: .regularExpression).map { whyNow[$0] })
+        let minutes = try XCTUnwrap(Int(span.dropFirst(4).dropLast(4)))
+        XCTAssertTrue((20...25).contains(minutes), whyNow)
+    }
 }

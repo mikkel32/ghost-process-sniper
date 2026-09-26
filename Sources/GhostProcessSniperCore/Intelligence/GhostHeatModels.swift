@@ -140,9 +140,12 @@ public enum GhostHeatModel {
         heat = min(100, heat)
 
         // Builds and tests are expected to peg the CPU: only the ledger's
-        // fifteen-minute rule makes their CPU sustained.
+        // fifteen-minute rule makes their CPU sustained. Anything else needs
+        // the ledger or 90 s of window, as the forecaster's runaway rule
+        // does; four samples over 15 s prove nothing about minutes.
         let isBurst = cpuBehavior.kind == .expectedBurst
-        let windowSustained = trend.hasSustainedHistory && sustainedCPUFraction >= 0.6 && cpuRatio >= 1
+        let windowSustained = trend.hasSustainedHistory && sustainedCPUFraction >= 0.6 && cpuRatio >= 1 &&
+            trend.observedSeconds >= 90
         let sustainedCPU = isBurst ? cpuBehavior.isSustained : (windowSustained || cpuBehavior.isSustained)
         let pattern = trend.resolvedPattern
         let sustainedLeak = trend.hasSustainedHistory && leakRatio >= 1 && pattern.indicatesAccumulation &&
@@ -159,8 +162,9 @@ public enum GhostHeatModel {
         let extremeInstantSignal = memoryRatio >= 1.5 || (cpuRatio >= 2.5 && !isBurst) || gpuRatio >= 1.25
         let sustainedCount = (sustainedCPU ? 1 : 0) + (sustainedLeak ? 1 : 0)
         // Hardware detection reads the same numbers; it only qualifies Hot
-        // when those numbers are themselves near the family's limits.
-        let hardwareCorroborates = hardwareLevel >= .hot && (memoryRatio >= 0.85 || cpuRatio >= 0.75)
+        // when those numbers are themselves near the family's limits. Its
+        // CPU thresholds are one process's, so CPU must reach the family's.
+        let hardwareCorroborates = hardwareLevel >= .hot && (memoryRatio >= 0.85 || cpuRatio >= 1)
 
         var evidence: [String] = []
         if sustainedCPU {

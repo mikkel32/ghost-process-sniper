@@ -10,7 +10,7 @@ import XCTest
 /// directory to write the lines for a diff.
 final class PipelineGoldenTests: XCTestCase {
     private static let signatureDigest = "574dbf7d8fe1adb5"
-    private static let componentDigest = "81222adcc2981d55"
+    private static let componentDigest = "8ac4a2b896a085d4"
 
     func testSignatureIDsAndMembershipAreUnchanged() throws {
         let lines = Self.families().map { "\($0.signature.id) \($0.members.map(\.pid).sorted())" }

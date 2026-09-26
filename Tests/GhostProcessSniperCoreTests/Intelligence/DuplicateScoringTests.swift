@@ -27,6 +27,57 @@ final class DuplicateScoringTests: XCTestCase {
             from: processes, settings: .smart, trendWindow: &window, now: Fixture.now)
     }
 
+    /// make runs every recipe through a non-interactive `sh -c`; ten
+    /// compilers under those shells are one build, not ten launches.
+    func testMakeRecipeShellsAreOnePool() throws {
+        func proc(_ pid: Int32, _ parent: Int32, _ name: String, _ path: String, _ command: String, cpu: Double = 0) -> ProcessMetrics {
+            Fixture.process(pid: pid, parent: parent, name: name, path: path, command: command, megabytes: 150, cpu: cpu)
+        }
+        var world = [
+            proc(600, 1, "Terminal", "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+                 "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"),
+            proc(601, 600, "login", "/usr/bin/login", "login -pf dev"),
+            proc(602, 601, "-zsh", "/bin/zsh", "-zsh"),
+            proc(603, 602, "make", "/usr/bin/make", "make -j10", cpu: 1),
+        ]
+        for index in 0..<10 {
+            let shell = Int32(610 + index * 2)
+            let command = "c++ -O2 -c src/file\(index).cpp -o build/file\(index).o"
+            world.append(proc(shell, 603, "sh", "/bin/sh", "/bin/sh -c \(command)"))
+            world.append(proc(shell + 1, shell, "c++", "/usr/bin/c++", command, cpu: 95))
+        }
+        var pipeline = RadarPipeline(
+            builder: ProcessFamilyBuilder(currentUserID: 501, processorCount: 10),
+            intelligence: RadarIntelligence(forecaster: FamilyRiskForecaster(processorCount: 10))
+        )
+        let context = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: RadarRule.builtIns(settings: .smart))
+        var output: RadarPipelineOutput?
+        for tick in 0..<6 {
+            output = pipeline.run(processes: world, settings: .smart, context: context, now: Fixture.now.addingTimeInterval(Double(tick) * 3))
+        }
+        let result = try XCTUnwrap(output)
+        XCTAssertFalse(result.duplicateClusters.contains { $0.countsAsIndependentCopies }, "\(result.duplicateClusters.map(\.reason))")
+        for family in result.families {
+            XCTAssertFalse(family.score.reasons.contains { $0.contains("independent copies") }, family.displayName)
+            XCTAssertFalse(family.suggestions.contains { $0.title.contains("other copies") || $0.title.contains("older copies") },
+                           "\(family.displayName): \(family.suggestions.map(\.title))")
+        }
+        let build = try XCTUnwrap(result.families.first { $0.root.pid == 603 })
+        XCTAssertEqual(build.members.count, 21)
+    }
+
+    func testStopTitleShortensALongPortList() throws {
+        let vite = "/Users/dev/web/node_modules/.bin/vite"
+        let older = node(910, "\(vite) --port 3000", startedAgo: 7_200, ports: [3000, 3001, 3002, 3003, 9200, 9300])
+        let newest = node(911, "\(vite) --port 5175", startedAgo: 60, ports: [5175])
+        let kept = try XCTUnwrap(build([older, newest]).families.first { $0.root.identity == newest.identity })
+        let enriched = RadarIntelligence().enrich(
+            family: kept, context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []),
+            settings: .smart, now: Fixture.now)
+        let stop = try XCTUnwrap(enriched.suggestions.first { $0.targetIdentities != nil })
+        XCTAssertEqual(stop.title, "Stop 1 older copy (ports 3000, 3001, 3002, 3003 +2)")
+    }
+
     func testWorkerPoolIsNotADuplicate() throws {
         let jest = node(800, "/Users/dev/web/node_modules/.bin/jest --watch")
         let workers = (0..<6).map { node(801 + Int32($0), parent: 800, "/Users/dev/web/node_modules/jest-worker/build/workers/processChild.js") }

@@ -327,6 +327,7 @@ public struct ProcessFamilyBuilder: Sendable {
         } else {
             trend = trendWindow.metrics(for: trendKey) ?? .empty
         }
+        let cpuLimit = CPUBehaviorAnalyzer.familyCPULimit(settings: settings, processorCount: processorCount)
         let score = evidenceScorer.score(
             root: root,
             members: members,
@@ -341,7 +342,8 @@ public struct ProcessFamilyBuilder: Sendable {
             zombieChildCount: zombieChildren,
             cpuBehavior: CPUBehaviorAnalyzer.analyze(activity: activity, classification: familyClassification,
                                                      memberCount: live.count, baseline: nil,
-                                                     processorCount: processorCount, cpuThreshold: settings.cpuPercent),
+                                                     processorCount: processorCount, cpuThreshold: cpuLimit),
+            cpuLimit: cpuLimit,
             settings: settings,
             now: now
         )

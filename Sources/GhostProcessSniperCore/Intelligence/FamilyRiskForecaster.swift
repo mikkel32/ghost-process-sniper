@@ -152,22 +152,23 @@ public struct FamilyRiskForecaster: Sendable {
     // saturated Mac, a normally idle service burning CPU, or a limit held
     // for minutes (or across a 90 s window) is the evidence.
     private func cpuEvidence(family: ProcessFamily, settings: ThresholdSettings) -> CPUEvidence {
+        let limit = CPUBehaviorAnalyzer.familyCPULimit(settings: settings, processorCount: processorCount)
         let behavior = CPUBehaviorAnalyzer.analyze(
             activity: family.cpuActivity,
             classification: family.classification,
             memberCount: family.members.count,
             baseline: family.baseline,
             processorCount: processorCount,
-            cpuThreshold: settings.cpuPercent
+            cpuThreshold: limit
         )
-        let isBreached = family.totalCPUPercent >= settings.cpuPercent
+        let isBreached = family.totalCPUPercent >= limit
         if behavior.kind == .expectedBurst {
             return CPUEvidence(isRunaway: behavior.isRunaway, isSustained: behavior.isSustained, isBreached: isBreached, behavior: behavior)
         }
         let cpuSamples = family.trend.samples.map(\.cpuPercent)
         var windowSustained = false
         if cpuSamples.count >= 4, family.trend.hasSustainedHistory, isBreached {
-            let hotFraction = Double(cpuSamples.filter { $0 >= settings.cpuPercent }.count) / Double(cpuSamples.count)
+            let hotFraction = Double(cpuSamples.filter { $0 >= limit }.count) / Double(cpuSamples.count)
             windowSustained = hotFraction >= 0.6
         }
         return CPUEvidence(
@@ -429,7 +430,8 @@ public struct FamilyRiskForecaster: Sendable {
         } else if cpuEvidence.isSustained {
             parts.append(cpuEvidence.behavior.isSustained ? cpuEvidence.behavior.reason : "CPU held above threshold for most of the window")
         } else if cpuEvidence.isBreached {
-            parts.append("CPU above its \(Int(settings.cpuPercent.rounded()))% limit now")
+            let limit = CPUBehaviorAnalyzer.familyCPULimit(settings: settings, processorCount: processorCount)
+            parts.append("CPU above its \(Int(limit.rounded()))% limit now")
         }
         if horizon == .breached, etaKind == .memoryLimit {
             parts.append("above its memory limit")

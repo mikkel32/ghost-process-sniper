@@ -95,14 +95,19 @@ public struct DuplicateClusterDetector: Sendable {
     }
 
     /// One copy per independent start. A copy is the topmost member of a
-    /// chain of matching processes. Copies started by launchd or a shell are
-    /// independent; siblings under any other process are one tool's pool.
+    /// chain of matching processes. Copies started by launchd or an
+    /// interactive shell are independent; siblings under any other process,
+    /// or under the recipe shells it runs, are one tool's pool.
     static func copyRoots(of members: [ProcessMetrics], byPID: [Int32: ProcessMetrics]) -> [ProcessMetrics] {
         let memberPIDs = Set(members.map(\.pid))
         var independent: [ProcessMetrics] = []
         var pools: [Int32: ProcessMetrics] = [:]
         for member in members where !memberPIDs.contains(member.parentPID) {
-            guard let launcher = byPID[member.parentPID], member.parentPID > 1, !isShell(launcher) else {
+            var launcher = byPID[member.parentPID]
+            if let shell = launcher, ShellRole.isRecipeShell(shell, launcher: byPID[shell.parentPID]) {
+                launcher = byPID[shell.parentPID]
+            }
+            guard let launcher, member.parentPID > 1, launcher.pid > 1, !isShell(launcher) else {
                 independent.append(member)
                 continue
             }

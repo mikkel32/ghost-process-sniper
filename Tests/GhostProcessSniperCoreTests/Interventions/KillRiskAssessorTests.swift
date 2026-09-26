@@ -223,6 +223,38 @@ final class KillRiskAssessorTests: XCTestCase {
 
     // MARK: - Fixtures
 
+    func testContainerVMsGetTimeAndAreNeverForcedWithoutAsking() {
+        let krunkit = assess(root: process(60, "krunkit", path: "/opt/homebrew/bin/krunkit", command: "/opt/homebrew/bin/krunkit --cpus 4"))
+        XCTAssertEqual(krunkit.kind, .containerRuntime)
+        XCTAssertTrue(krunkit.forceNeedsConfirmation)
+        XCTAssertEqual(krunkit.graceSeconds, 15)
+    }
+
+    /// The radar and the stop share one catalog: whatever the radar calls a
+    /// container runtime or data store, the stop treats as one.
+    func testStopKindsMatchTheRadarCatalog() {
+        for (index, name) in WorkloadCatalog.containerRuntimes.sorted().enumerated() {
+            let root = process(Int32(1_000 + index), name, path: "/opt/homebrew/bin/\(name)")
+            XCTAssertEqual(assess(root: root).kind, .containerRuntime, name)
+        }
+        for (index, name) in WorkloadCatalog.dataStores.sorted().enumerated() {
+            let root = process(Int32(2_000 + index), name, path: "/opt/homebrew/bin/\(name)")
+            XCTAssertEqual(assess(root: root).kind, .dataStore, name)
+        }
+        for (index, name) in WorkloadCatalog.modelRunners.sorted().enumerated() {
+            let root = process(Int32(3_000 + index), name, path: "/opt/homebrew/bin/\(name)")
+            XCTAssertEqual(assess(root: root).kind, .modelRunner, name)
+        }
+    }
+
+    func testDevServerMarkersMatchWholeWords() {
+        let helper = "/Applications/Parcel.app/Contents/Frameworks/Parcel Helper.app/Contents/MacOS/Parcel Helper"
+        XCTAssertNotEqual(assess(root: process(70, "Parcel Helper", path: helper)).kind, .devServer)
+        XCTAssertNotEqual(assess(root: process(71, "node", command: "node /Users/dev/invites/server.js")).kind, .devServer)
+        XCTAssertEqual(assess(root: process(72, "node", command: "node /Users/dev/web/node_modules/.bin/parcel serve")).kind, .devServer)
+        XCTAssertEqual(assess(root: process(73, "python3", command: "python3 -m http.server 8000")).kind, .devServer)
+    }
+
     private func assess(root: KillWorkloadProcess, ancestors: [KillWorkloadAncestor] = [], parentIsLaunchd: Bool = false) -> KillRiskAssessment {
         let rooted = KillWorkloadProcess(pid: root.pid, parentPID: root.parentPID, name: root.name,
                                          executablePath: root.executablePath, commandLine: root.commandLine,

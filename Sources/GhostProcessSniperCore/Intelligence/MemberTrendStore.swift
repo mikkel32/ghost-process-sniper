@@ -271,16 +271,18 @@ public struct MemberTrendStore: Sendable {
     }
 
     /// The family's long-term trend: the members watched ten minutes or
-    /// more, summed, with R² weighted by each one's growth.
+    /// more, summed, with R² and span weighted by each one's growth. A flat
+    /// member watched for an hour says nothing about how long the growth
+    /// has lasted, so it must not lend its span to a young growing child.
     private mutating func longTermSum(members: [ProcessMetrics]) -> LongTermTrend {
-        var slope = 0.0, floor = 0.0, span = 0.0, weightedFit = 0.0, weight = 0.0
+        var slope = 0.0, floor = 0.0, weightedSpan = 0.0, weightedFit = 0.0, weight = 0.0
         for member in members {
             guard let trend = longTerm(of: member.identity), trend.spanMinutes >= Self.longTermMinutes else { continue }
             slope += trend.slopeMegabytesPerMinute
             floor += trend.floorSlopeMegabytesPerMinute
-            span = max(span, trend.spanMinutes)
             if trend.slopeMegabytesPerMinute > 0 {
                 weightedFit += trend.rSquared * trend.slopeMegabytesPerMinute
+                weightedSpan += trend.spanMinutes * trend.slopeMegabytesPerMinute
                 weight += trend.slopeMegabytesPerMinute
             }
         }
@@ -288,7 +290,7 @@ public struct MemberTrendStore: Sendable {
             slopeMegabytesPerMinute: slope,
             floorSlopeMegabytesPerMinute: floor,
             rSquared: weight > 0 ? weightedFit / weight : 0,
-            spanMinutes: span
+            spanMinutes: weight > 0 ? weightedSpan / weight : 0
         )
     }
 
