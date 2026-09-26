@@ -44,8 +44,7 @@ public final class ProcessMonitor {
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
-    // Written only by the surface setters in ProcessMonitor+Surfaces.swift.
-    @ObservationIgnored var popoverVisible = false
+    @ObservationIgnored private var popoverVisible = false
     @ObservationIgnored var consoleVisible = false
     @ObservationIgnored private var focusedSignatureIDs: Set<String> = []
     @ObservationIgnored private var averageRefreshMilliseconds = 0.0
@@ -259,6 +258,10 @@ public final class ProcessMonitor {
         let updated = performanceMetrics.updatingSmoothness(statusUpdateMilliseconds: milliseconds)
         performanceMetrics = updated
         publishedState = publishedState.updating(performanceMetrics: updated)
+    }
+
+    public func setPopoverVisible(_ visible: Bool) {
+        popoverVisible = visible
     }
 
     @discardableResult
@@ -674,5 +677,4 @@ public final class ProcessMonitor {
             hardwareDetectorMilliseconds: hardwareDetectorMilliseconds
         )
     }
-
 }
