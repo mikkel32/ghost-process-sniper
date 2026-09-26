@@ -53,7 +53,13 @@ public struct FamilyScoringCache: Sendable {
             hasher.combine(Int((share.contribution * 20).rounded()))
             hasher.combine(share.corroboratesPressure)
         }
-        hasher.combine(context.hostOutlook.map { Int($0.etaSeconds / 60) })
+        // The host-wide ETA moves nearly every tick under pressure; only this
+        // family's own time to critical pressure reaches its forecast.
+        hasher.combine(context.hostOutlook != nil)
+        if context.hostOutlook != nil {
+            let growth = PressureAttribution.credibleGrowth(of: family, physicalMemoryBytes: context.systemPressure.totalBytes)
+            hasher.combine(PressureAttribution.familyETASeconds(velocity: growth, pressure: context.systemPressure).map { Int($0 / 60) })
+        }
         hasher.combine(family.signature.id)
         hasher.combine(family.members.map(\.identity))
         hasher.combine(family.coverage.isScorable)

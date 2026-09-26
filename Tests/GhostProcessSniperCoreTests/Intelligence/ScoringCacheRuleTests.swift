@@ -26,6 +26,33 @@ final class ScoringCacheRuleTests: XCTestCase {
         XCTAssertNil(cache.cachedFamily(for: family, context: context(snooze), now: expiry))
     }
 
+    func testHostOutlookHashesOnlyTheFamilysOwnETA() {
+        let gib: UInt64 = 1 << 30
+        func context(availableGiB: UInt64, hostETA: TimeInterval) -> RadarContext {
+            RadarContext(
+                baselines: [:], recentIncidentCounts: [:], rules: [],
+                systemPressure: SystemMemoryPressure(level: .elevated, usedFraction: 0.85, totalBytes: 16 * gib,
+                                                     availableBytes: availableGiB * gib, compressedBytes: 2 * gib),
+                hostOutlook: HostMemoryOutlook(etaSeconds: hostETA, growthMegabytesPerMinute: 80, topContributors: [],
+                                               topContributorName: nil)
+            )
+        }
+        let steady = FamilyScoringCache.fingerprint(family: family, context: context(availableGiB: 4, hostETA: 1_800), now: Fixture.now)
+        XCTAssertEqual(steady, FamilyScoringCache.fingerprint(family: family, context: context(availableGiB: 4, hostETA: 1_500),
+                                                              now: Fixture.now))
+        XCTAssertNotEqual(steady, FamilyScoringCache.fingerprint(family: family, context: RadarContext(
+            baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: context(availableGiB: 4, hostETA: 0).systemPressure
+        ), now: Fixture.now))
+
+        let growing = Fixture.family(Fixture.process(pid: 44_001, command: "node vite", megabytes: 900),
+                                     trend: Fixture.trend(megabytes: (0..<40).map { 500 + Double($0) * 10 }))
+        XCTAssertGreaterThan(PressureAttribution.credibleGrowth(of: growing, physicalMemoryBytes: 16 * gib), 0)
+        XCTAssertNotEqual(
+            FamilyScoringCache.fingerprint(family: growing, context: context(availableGiB: 4, hostETA: 1_800), now: Fixture.now),
+            FamilyScoringCache.fingerprint(family: growing, context: context(availableGiB: 3, hostETA: 1_800), now: Fixture.now)
+        )
+    }
+
     func testPipelineDropsASnoozeAsSoonAsItExpires() throws {
         // Late enough that the history has settled and the cache would hit.
         let expiry = Fixture.now.addingTimeInterval(25)
