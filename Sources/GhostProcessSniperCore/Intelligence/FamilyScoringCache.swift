@@ -46,7 +46,7 @@ public struct FamilyScoringCache: Sendable {
         hasher.combine(context.systemPressure.level)
         hasher.combine(family.signature.id)
         hasher.combine(family.members.map(\.identity))
-        hasher.combine(family.hasRecentMeasurements(at: family.root.sampledAt))
+        hasher.combine(family.coverage.isScorable)
         hasher.combine(family.trend.hasSustainedHistory)
         hasher.combine(min(4, family.trend.sampleCount))
         hasher.combine(Int((family.trend.memoryFitQuality * 10).rounded()))

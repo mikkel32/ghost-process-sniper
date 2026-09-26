@@ -33,6 +33,8 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public let classification: DevClassification?
     public let duplicateCluster: DuplicateProcessCluster?
     public let hardwareSignals: [HardwareOffenderSignal]
+    /// Measurement coverage at build time.
+    public let coverage: FamilyMeasurementCoverage
 
     public var displayName: String { root.name }
     public var childCount: Int { max(0, members.count - 1) }
@@ -64,7 +66,8 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         lastScoredAt: Date? = nil,
         classification: DevClassification? = nil,
         duplicateCluster: DuplicateProcessCluster? = nil,
-        hardwareSignals: [HardwareOffenderSignal] = []
+        hardwareSignals: [HardwareOffenderSignal] = [],
+        coverage: FamilyMeasurementCoverage? = nil
     ) {
         self.root = root
         self.members = members
@@ -92,6 +95,7 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.classification = classification
         self.duplicateCluster = duplicateCluster
         self.hardwareSignals = hardwareSignals
+        self.coverage = coverage ?? FamilyMeasurementCoverage(members: members, root: root, at: lastScoredAt ?? root.sampledAt)
     }
 
     public func killPlan(
@@ -152,7 +156,8 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
             lastScoredAt: lastScoredAt ?? self.lastScoredAt,
             classification: classification ?? self.classification,
             duplicateCluster: duplicateCluster ?? self.duplicateCluster,
-            hardwareSignals: hardwareSignals ?? self.hardwareSignals
+            hardwareSignals: hardwareSignals ?? self.hardwareSignals,
+            coverage: coverage
         )
     }
 

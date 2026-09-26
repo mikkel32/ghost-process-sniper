@@ -6,6 +6,7 @@ public struct RadarScheduler: Sendable {
     private var systemPressure: SystemPressureLevel = .nominal
     private var effectivePerformanceMode: RadarPerformanceMode = .balanced
     private var cadenceStep: UInt64 = 0
+    private var planCount: UInt64 = 0
 
     public init() {}
 
@@ -22,7 +23,8 @@ public struct RadarScheduler: Sendable {
         now: Date
     ) -> SamplingPlan {
         let pressure = updateSystemPressure()
-        let demand = FamilySamplingDemand(families: families, focusedKeys: focusedSignatureIDs)
+        planCount &+= 1
+        let demand = FamilySamplingDemand(families: families, focusedKeys: focusedSignatureIDs, pass: planCount)
         let mode = settings.resolvedPerformanceMode(
             summaryLevel: demand.highestLevel,
             popoverVisible: popoverVisible,

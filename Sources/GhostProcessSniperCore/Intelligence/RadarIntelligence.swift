@@ -156,13 +156,7 @@ public struct RadarIntelligence: Sendable {
         now: Date
     ) -> ProcessFamily {
         guard family.hasRecentMeasurements(at: now) else {
-            return family.enriched(
-                score: GhostScore(value: 0, level: .quiet, reasons: ["Measurements incomplete or stale"], heat: .quiet),
-                suggestions: [],
-                alertState: .normal,
-                forecast: .quiet,
-                lastScoredAt: now
-            )
+            return unscorable(family: family, context: context, now: now)
         }
         let candidateBaseline = context.baselines[family.signature.id]
         let baseline = candidateBaseline?.isMeasurementTrusted == true ? candidateBaseline : nil
@@ -239,6 +233,20 @@ public struct RadarIntelligence: Sendable {
             now: now
         )
         return resolvedFamily.enriched(alertState: resolvedAlert)
+    }
+
+    // Without a current reading nothing is scored, but ignore and snooze
+    // rules still hold: a muted family must not lose its Muted state.
+    private func unscorable(family: ProcessFamily, context: RadarContext, now: Date) -> ProcessFamily {
+        let suppression = suppressionSuggestions(from: ruleEngine.suggestions(for: family, rules: context.rules, now: now))
+        let blank = GhostScore(value: 0, level: .quiet, reasons: ["Measurements incomplete or stale"], heat: .quiet)
+        let waiting = family.enriched(
+            score: adjustedScoreForSuppression(blank, suggestions: suppression),
+            suggestions: suppression,
+            forecast: .quiet,
+            lastScoredAt: now
+        )
+        return waiting.enriched(alertState: ruleEngine.alertState(for: waiting, suggestions: suppression, now: now))
     }
 
     private func scoreWithForecast(

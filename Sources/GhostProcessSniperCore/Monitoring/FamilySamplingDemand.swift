@@ -17,7 +17,24 @@ struct FamilySamplingDemand: Sendable {
         return focusedFamilyCount > 0 ? "focused-family" : "steady-state"
     }
 
-    init(families: [ProcessFamily], focusedKeys: Set<String>) {
+    /// How many incomplete families get rich reads per pass; `pass` rotates
+    /// through the rest so none starves.
+    static let incompleteFamiliesPerPass = 4
+
+    init(families: [ProcessFamily], focusedKeys: Set<String>, pass: UInt64 = 0) {
+        // A quiet family whose members lack current readings can never earn
+        // Watch, so it would never be sampled richly: break that loop for
+        // dev families.
+        let incomplete = families.filter { !$0.coverage.isScorable && $0.devConfidence >= 0.35 }
+        if !incomplete.isEmpty {
+            let perPass = Self.incompleteFamiliesPerPass
+            let start = Int((pass % UInt64(incomplete.count)) * UInt64(perPass) % UInt64(incomplete.count))
+            for offset in 0..<min(perPass, incomplete.count) {
+                let family = incomplete[(start + offset) % incomplete.count]
+                candidatePIDs.insert(family.root.pid)
+                candidateIdentities.formUnion(family.members.lazy.map(\.identity))
+            }
+        }
         for family in families {
             let escalates = family.forecastIsCredibleEscalation
             highestLevel = max(highestLevel,

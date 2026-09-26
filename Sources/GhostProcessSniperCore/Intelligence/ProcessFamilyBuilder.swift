@@ -276,10 +276,14 @@ public struct ProcessFamilyBuilder: Sendable {
             return nil
         }
 
+        // Memory carries each member's last-known value; CPU and GPU count
+        // only current readings, because a helper cached at 300% during a
+        // build would otherwise read as a phantom runaway.
+        let coverage = FamilyMeasurementCoverage(members: members, root: root, at: now)
         let resident = members.reduce(UInt64(0)) { $0 + $1.residentMemoryBytes }
         let footprint = members.reduce(UInt64(0)) { $0 + $1.memoryForScoringBytes }
-        let cpu = members.reduce(0) { $0 + $1.cpuPercent }
-        let gpu = members.reduce(0) { $0 + $1.gpuUsagePercent }
+        let cpu = members.reduce(0) { isCurrent($1.cpuMeasurementDate, at: now) ? $0 + $1.cpuPercent : $0 }
+        let gpu = members.reduce(0) { isCurrent($1.gpuMeasurementDate, at: now) ? $0 + $1.gpuUsagePercent : $0 }
         let hardwareSignals = hardwareSignals(for: members, profiles: hardwareProfiles)
         let familyConfidence = members.map { confidence[$0.pid, default: 0] }.max() ?? 0
         let familyClassification = members
@@ -293,11 +297,8 @@ public struct ProcessFamilyBuilder: Sendable {
         // one synthetic leak curve.
         let topology = members.map { "\($0.pid):\($0.identity.startTimeSeconds).\($0.identity.startTimeMicroseconds)" }.sorted().joined(separator: ",")
         let runtimeTrendKey = "\(signature.id)|members:\(topology)"
-        let measurementDates = members.compactMap(\.measurementDate)
-        let oldestMeasurement = measurementDates.min()
-        let hasCompleteSample = measurementDates.count == members.count && !members.isEmpty
         let trend: TrendMetrics
-        if hasCompleteSample, let measuredAt = oldestMeasurement, now.timeIntervalSince(measuredAt) <= 15, now >= measuredAt {
+        if coverage.memoryCoverage >= 0.9, let measuredAt = coverage.newestFreshMeasurement {
             trend = trendWindow.update(signatureID: runtimeTrendKey, memoryBytes: footprint, cpuPercent: cpu, at: measuredAt)
         } else {
             trend = .empty
@@ -340,8 +341,13 @@ public struct ProcessFamilyBuilder: Sendable {
             signature: signature,
             classification: familyClassification,
             duplicateCluster: duplicateCluster,
-            hardwareSignals: hardwareSignals
+            hardwareSignals: hardwareSignals,
+            coverage: coverage
         )
+    }
+
+    private func isCurrent(_ measuredAt: Date?, at now: Date) -> Bool {
+        measuredAt.map { (0...FamilyMeasurementCoverage.maximumAge).contains(now.timeIntervalSince($0)) } ?? false
     }
 
     private func bestDuplicateCluster(

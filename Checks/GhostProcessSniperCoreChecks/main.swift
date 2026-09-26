@@ -479,7 +479,8 @@ private func familyBuilderSurfacesGPUHardwareSignals() throws {
         commandLine: "SmallRenderer --canvas",
         memory: 96_000_000,
         cpu: 8,
-        gpu: 64
+        gpu: 64,
+        sampledAt: Date(timeIntervalSince1970: 2_450)
     )
 
     let families = builder.buildFamilies(
