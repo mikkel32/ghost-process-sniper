@@ -115,6 +115,27 @@ final class LaunchdAwareKillTests: XCTestCase {
         XCTAssertEqual(report.respawnedBy, "homebrew.mxcl.postgresql@16")
     }
 
+    func testForceFollowUpStillNamesTheJobThatRestartsIt() async {
+        let table = FakeProcessTable()
+        let postgres = KillProcessLite.fake(pid: 812, name: "postgres")
+        let restarted = KillProcessLite.fake(pid: 830, name: "postgres", start: UInt64(Date().timeIntervalSince1970) + 60)
+        table.add(postgres, .ignoresTermination)
+        let launchctl = FakeLaunchctl(list: listing)
+        let killer = killer(table, launchctl)
+        let held = await killer.kill(plan: plan(postgres), forceKillDelay: 1, skipForce: true)
+        guard let followUp = plan(postgres).forcingSurvivors(of: held) else { return XCTFail("postgres should survive the held stop") }
+        // SIGKILL cannot be scripted in the fake; launchd's restart is
+        // already waiting when the respawn probe looks.
+        table.add(restarted)
+
+        let report = await killer.kill(plan: followUp, forceKillDelay: 1)
+
+        XCTAssertEqual(table.signals(to: 812).last, SIGKILL)
+        XCTAssertEqual(report.respawnedPIDs, [830])
+        XCTAssertEqual(report.respawnedBy, "homebrew.mxcl.postgresql@16", "the forced stop is undone by the same KeepAlive job")
+        XCTAssertEqual(launchctl.invocations, [["list"]], "the follow-up reuses the held stop's answer")
+    }
+
     func testAppsAreNotLookedUpInLaunchd() async {
         let table = FakeProcessTable()
         let app = KillProcessLite.fake(pid: 900, name: "Notes")
