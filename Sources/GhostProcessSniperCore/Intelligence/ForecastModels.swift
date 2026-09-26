@@ -173,6 +173,8 @@ public struct RiskForecast: Codable, Equatable, Sendable {
     public let baseline: AnomalyBaseline
     public let generatedAt: Date
     public let etaKind: ForecastETAKind
+    /// What the CPU minutes say, when the family has any.
+    public let cpuBehavior: CPUBehavior?
 
     public static let quiet = RiskForecast(
         state: .quiet,
@@ -211,7 +213,8 @@ public struct RiskForecast: Codable, Equatable, Sendable {
         staleLikelihood: Double,
         baseline: AnomalyBaseline,
         generatedAt: Date,
-        etaKind: ForecastETAKind? = nil
+        etaKind: ForecastETAKind? = nil,
+        cpuBehavior: CPUBehavior? = nil
     ) {
         self.state = state
         self.horizon = horizon
@@ -228,6 +231,7 @@ public struct RiskForecast: Codable, Equatable, Sendable {
         self.baseline = baseline
         self.generatedAt = generatedAt
         self.etaKind = etaKind ?? (etaSeconds == nil ? .none : .memoryLimit)
+        self.cpuBehavior = cpuBehavior
     }
 
     /// A low-confidence forecast is useful as directional context, but should

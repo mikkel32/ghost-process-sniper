@@ -43,14 +43,17 @@ public struct ProcessFamilyBuilder: Sendable {
     private let hardwareDetector: HardwareOffenderDetector
     private let evidenceScorer = FamilyEvidenceScorer()
     private let directories: DirectoryExistenceCache
+    private let processorCount: Int
 
     public init(
         classifier: DevProcessClassifier = DevProcessClassifier(),
         currentUserID: UInt32 = UInt32(geteuid()),
+        processorCount: Int = ProcessInfo.processInfo.activeProcessorCount,
         directoryExists: @escaping @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     ) {
         self.classifier = classifier
         self.currentUserID = currentUserID
+        self.processorCount = max(1, processorCount)
         self.directories = DirectoryExistenceCache(check: directoryExists)
         self.duplicateDetector = DuplicateClusterDetector(classifier: classifier, currentUserID: currentUserID)
         self.hardwareDetector = HardwareOffenderDetector(currentUserID: currentUserID)
@@ -312,6 +315,9 @@ public struct ProcessFamilyBuilder: Sendable {
             trend: trend,
             forgotten: forgotten,
             zombieChildCount: zombieChildren,
+            cpuBehavior: CPUBehaviorAnalyzer.analyze(activity: activity, classification: familyClassification,
+                                                     memberCount: live.count, baseline: nil,
+                                                     processorCount: processorCount, cpuThreshold: settings.cpuPercent),
             settings: settings,
             now: now
         )

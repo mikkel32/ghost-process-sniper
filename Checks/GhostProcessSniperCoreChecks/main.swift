@@ -1174,6 +1174,14 @@ private func riskForecasterRequiresSustainedCPUEvidence() throws {
         trend: cpuTrend([90, 90, 90, 90, 4]), score: GhostScore(value: 8, level: .quiet, reasons: []))
     let recoveredForecast = forecastWithFreshMeasurements(family: recovered, settings: .aggressive, now: now)
     try check(recoveredForecast.state == .quiet, "old high CPU must not keep a currently recovered process runaway")
+
+    // A compile pegging every core is expected work, not a runaway.
+    let build = forecastFamily(pid: 236, parentPID: 999, memory: 200 * 1_048_576, cpu: 700,
+        trend: cpuTrend([650, 700, 720, 690, 700]), score: GhostScore(value: 8, level: .quiet, reasons: []),
+        classification: DevClassification(kind: .swiftBuild, confidence: 0.95, reason: "Swift build toolchain", traits: .buildOrTest))
+    let buildForecast = forecastWithFreshMeasurements(family: build, settings: .aggressive, now: now)
+    try check(buildForecast.state != .runaway, "a build at 700% should not be runaway before fifteen minutes")
+    try check(buildForecast.recommendedAction.title == "Let it finish", "a build should be left to finish")
 }
 
 private func startupGraceDelaysLeakCalls() throws {
@@ -3760,7 +3768,8 @@ private func forecastFamily(
     score: GhostScore,
     baseline: FamilyBaseline? = nil,
     recentIncidentCount: Int = 0,
-    cpuActivity: FamilyCPUActivity = .empty
+    cpuActivity: FamilyCPUActivity = .empty,
+    classification: DevClassification? = nil
 ) -> ProcessFamily {
     let root = sample(
         pid: pid,
@@ -3786,6 +3795,7 @@ private func forecastFamily(
         protectedPIDs: [],
         baseline: baseline,
         recentIncidentCount: recentIncidentCount,
+        classification: classification,
         cpuActivity: cpuActivity
     )
 }

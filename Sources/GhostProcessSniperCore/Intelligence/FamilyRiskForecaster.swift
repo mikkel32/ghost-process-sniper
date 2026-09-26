@@ -1,7 +1,12 @@
 import Foundation
 
 public struct FamilyRiskForecaster: Sendable {
-    public init() {}
+    private let processorCount: Int
+
+    /// Tests pass a fixed core count; the Mac's own is the default.
+    public init(processorCount: Int = ProcessInfo.processInfo.activeProcessorCount) {
+        self.processorCount = max(1, processorCount)
+    }
 
     public func forecast(
         family: ProcessFamily,
@@ -78,7 +83,8 @@ public struct FamilyRiskForecaster: Sendable {
                 family: family,
                 state: state,
                 horizon: horizon,
-                confidence: confidence
+                confidence: confidence,
+                cpu: cpuEvidence.behavior
             ),
             projectedMemoryBytes: projectedMemory,
             projectedCPUPercent: projectedCPU,
@@ -87,7 +93,8 @@ public struct FamilyRiskForecaster: Sendable {
             staleLikelihood: staleLikelihood,
             baseline: baseline,
             generatedAt: now,
-            etaKind: etaKind
+            etaKind: etaKind,
+            cpuBehavior: cpuEvidence.behavior.kind == .none && !cpuEvidence.behavior.isSustained ? nil : cpuEvidence.behavior
         )
     }
 
@@ -106,30 +113,38 @@ public struct FamilyRiskForecaster: Sendable {
         let isRunaway: Bool
         let isSustained: Bool
         let isBreached: Bool
+        let behavior: CPUBehavior
     }
 
-    // One CPU spike is a compile or an indexing burst; a runaway verdict
-    // needs the window mostly hot, or an instantaneous reading at twice the
-    // threshold. With too few samples, reserve "runaway" for an extreme
-    // instantaneous reading; ordinary compile/index bursts stay as Heat.
+    // An instantaneous extreme is Hot at most; runaway needs persistence.
+    // Builds and tests never run away on CPU until the ledger has watched
+    // them hold their level for fifteen minutes. Otherwise a busy loop, a
+    // saturated Mac, a normally idle service burning CPU, or a limit held
+    // for minutes (or across a 90 s window) is the evidence.
     private func cpuEvidence(family: ProcessFamily, settings: ThresholdSettings) -> CPUEvidence {
-        let cpuSamples = family.trend.samples.map(\.cpuPercent)
+        let behavior = CPUBehaviorAnalyzer.analyze(
+            activity: family.cpuActivity,
+            classification: family.classification,
+            memberCount: family.members.count,
+            baseline: family.baseline,
+            processorCount: processorCount,
+            cpuThreshold: settings.cpuPercent
+        )
         let isBreached = family.totalCPUPercent >= settings.cpuPercent
-        guard cpuSamples.count >= 4, family.trend.hasSustainedHistory else {
-            return CPUEvidence(
-                isRunaway: family.totalCPUPercent >= settings.cpuPercent * 2,
-                isSustained: false,
-                isBreached: isBreached
-            )
+        if behavior.kind == .expectedBurst {
+            return CPUEvidence(isRunaway: behavior.isRunaway, isSustained: behavior.isSustained, isBreached: isBreached, behavior: behavior)
         }
-        let hotFraction = Double(cpuSamples.filter { $0 >= settings.cpuPercent }.count) / Double(cpuSamples.count)
-        if hotFraction >= 0.6, isBreached {
-            return CPUEvidence(isRunaway: true, isSustained: true, isBreached: true)
+        let cpuSamples = family.trend.samples.map(\.cpuPercent)
+        var windowSustained = false
+        if cpuSamples.count >= 4, family.trend.hasSustainedHistory, isBreached {
+            let hotFraction = Double(cpuSamples.filter { $0 >= settings.cpuPercent }.count) / Double(cpuSamples.count)
+            windowSustained = hotFraction >= 0.6
         }
         return CPUEvidence(
-            isRunaway: family.totalCPUPercent >= settings.cpuPercent * 2,
-            isSustained: false,
-            isBreached: isBreached
+            isRunaway: behavior.isRunaway || (windowSustained && family.trend.observedSeconds >= 90),
+            isSustained: behavior.isSustained || windowSustained,
+            isBreached: isBreached,
+            behavior: behavior
         )
     }
 
@@ -175,7 +190,7 @@ public struct FamilyRiskForecaster: Sendable {
         if staleLikelihood >= 0.65, family.isIdleAcrossWindow {
             return .stale
         }
-        if horizon == .soon || horizon == .breached || cpuEvidence.isBreached ||
+        if horizon == .soon || horizon == .breached || cpuEvidence.isBreached || cpuEvidence.isSustained ||
             memoryVelocity >= settings.leakVelocityMegabytesPerMinute * 0.35 || family.score.level >= .watch {
             // A family that is actively releasing memory with no threshold in
             // sight is recovering, not warming.
@@ -368,8 +383,12 @@ public struct FamilyRiskForecaster: Sendable {
         settings: ThresholdSettings
     ) -> String {
         var parts: [String] = []
-        if cpuEvidence.isSustained {
-            parts.append("CPU held above threshold for most of the window")
+        let behavior = cpuEvidence.behavior
+        if behavior.kind != .none, !behavior.reason.isEmpty,
+           behavior.kind != .expectedBurst || cpuEvidence.isBreached || behavior.minutes > 0 {
+            parts.append(cpuEvidence.behavior.reason)
+        } else if cpuEvidence.isSustained {
+            parts.append(cpuEvidence.behavior.isSustained ? cpuEvidence.behavior.reason : "CPU held above threshold for most of the window")
         } else if cpuEvidence.isBreached {
             parts.append("CPU above its \(Int(settings.cpuPercent.rounded()))% limit now")
         }
@@ -419,8 +438,17 @@ public struct FamilyRiskForecaster: Sendable {
         family: ProcessFamily,
         state: ForecastState,
         horizon: ForecastHorizon,
-        confidence: Double
+        confidence: Double,
+        cpu: CPUBehavior
     ) -> TriageRecommendation {
+        if cpu.kind == .expectedBurst, !cpu.isRunaway, state != .critical, state != .leaking {
+            return TriageRecommendation(
+                title: "Let it finish",
+                detail: "Build and test work uses a lot of CPU for a while and ends by itself.",
+                action: .highlight,
+                confidence: confidence
+            )
+        }
         switch state {
         case .critical, .runaway:
             return TriageRecommendation(

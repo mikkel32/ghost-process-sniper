@@ -60,6 +60,9 @@ public struct FamilyScoringCache: Sendable {
         hasher.combine(family.hardwareSignals.map(\.reason))
         hasher.combine(Int((family.forgottenAssessment.likelihood * 20).rounded()))
         hasher.combine(family.zombieChildCount)
+        // CPU behavior and idleness are judged per ledger minute.
+        hasher.combine(family.cpuActivity.buckets.last?.start)
+        hasher.combine(family.cpuActivity.buckets.count)
         if let cluster = family.duplicateCluster, cluster.countsAsIndependentCopies {
             hasher.combine(cluster.copyPlanHash)
         }

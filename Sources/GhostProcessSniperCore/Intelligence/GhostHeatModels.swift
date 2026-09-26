@@ -105,7 +105,8 @@ public enum GhostHeatModel {
         gpuRatio: Double,
         leakRatio: Double,
         trend: TrendMetrics,
-        hardwareLevel: GhostLevel
+        hardwareLevel: GhostLevel,
+        cpuBehavior: CPUBehavior = .none
     ) -> GhostHeat {
         // The real limit, never one inferred from the last trend sample: that
         // sample is stale whenever a cached reading skipped the append.
@@ -138,7 +139,11 @@ public enum GhostHeatModel {
         if hardwareLevel == .critical { heat = max(68, heat) }
         heat = min(100, heat)
 
-        let sustainedCPU = trend.hasSustainedHistory && sustainedCPUFraction >= 0.6 && cpuRatio >= 1
+        // Builds and tests are expected to peg the CPU: only the ledger's
+        // fifteen-minute rule makes their CPU sustained.
+        let isBurst = cpuBehavior.kind == .expectedBurst
+        let windowSustained = trend.hasSustainedHistory && sustainedCPUFraction >= 0.6 && cpuRatio >= 1
+        let sustainedCPU = isBurst ? cpuBehavior.isSustained : (windowSustained || cpuBehavior.isSustained)
         let pattern = trend.resolvedPattern
         let sustainedLeak = trend.hasSustainedHistory && leakRatio >= 1 && pattern.indicatesAccumulation &&
             (trend.memoryFitQuality >= 0.5 || pattern.pattern == .risingFloor)
@@ -151,15 +156,20 @@ public enum GhostHeatModel {
         // then let persistence/corroboration decide whether it ever becomes
         // Critical. This keeps a 2.4x memory breach visible without reviving
         // the old score==severity behavior.
-        let extremeInstantSignal = memoryRatio >= 1.5 || cpuRatio >= 2.5 || gpuRatio >= 1.25
+        let extremeInstantSignal = memoryRatio >= 1.5 || (cpuRatio >= 2.5 && !isBurst) || gpuRatio >= 1.25
         let sustainedCount = (sustainedCPU ? 1 : 0) + (sustainedLeak ? 1 : 0)
         // Hardware detection reads the same numbers; it only qualifies Hot
         // when those numbers are themselves near the family's limits.
         let hardwareCorroborates = hardwareLevel >= .hot && (memoryRatio >= 0.85 || cpuRatio >= 0.75)
 
         var evidence: [String] = []
-        if sustainedCPU { evidence.append(GhostHeat.sustainedCPUEvidence) }
-        else if cpuRatio >= 1 { evidence.append(GhostHeat.instantCPUEvidence) }
+        if sustainedCPU {
+            evidence.append(GhostHeat.sustainedCPUEvidence)
+            if cpuBehavior.isSustained, let first = cpuBehavior.reason.first {
+                evidence.append(String(first).uppercased() + cpuBehavior.reason.dropFirst())
+            }
+        }
+        else if cpuRatio >= 1 { evidence.append(isBurst ? "Build or test work is using CPU as expected" : GhostHeat.instantCPUEvidence) }
         if sustainedLeak { evidence.append("Memory growth is sustained with a trusted trend") }
         else if leakRatio >= 1 { evidence.append("Memory is rising, but the trend still needs confirmation") }
         if memoryRatio >= 1 { evidence.append(GhostHeat.memoryAboveLimitEvidence) }
@@ -180,10 +190,15 @@ public enum GhostHeatModel {
             (sustainedCPU && cpuRatio >= 2) ||
             (sustainedLeak && leakRatio >= 1.65) ||
             (sustainedCount >= 1 && corroboratingAxes >= 2)
+        // Most of every core for minutes slows the whole Mac: at least Hot.
+        if cpuBehavior.kind == .machineSaturation {
+            heat = max(heat, 58)
+        }
         let level: GhostLevel
         if heat >= 80, criticalEvidence, confidence >= 0.58 {
             level = .critical
-        } else if heat >= 58, (extremeInstantSignal || corroboratingAxes >= 2 || instantCorroboration || sustainedCount > 0 || hardwareCorroborates) {
+        } else if heat >= 58, (extremeInstantSignal || corroboratingAxes >= 2 || instantCorroboration || sustainedCount > 0 ||
+                                hardwareCorroborates || cpuBehavior.kind == .machineSaturation) {
             level = .hot
         } else if heat >= 30 || hardwareLevel >= .watch || memoryRatio >= 0.8 || cpuRatio >= 0.8 || leakRatio >= 0.6 || gpuRatio >= 0.4 {
             level = .watch
@@ -212,6 +227,16 @@ public enum GhostHeatModel {
         var evidence = base.evidence
         var contextVotes = base.corroborationCount
         var confidence = base.confidence
+        var sustained = base.sustainedSignalCount
+
+        // Only the baseline can say a service normally idles, so this
+        // ledger-proven persistence is judged here, not in the builder.
+        if let behavior = forecast.cpuBehavior, behavior.kind == .idleServiceBurning {
+            heat += 12
+            evidence.append(behavior.reason.prefix(1).uppercased() + behavior.reason.dropFirst())
+            confidence += 0.08
+            sustained += 1
+        }
 
         if let baseline, baseline.isMeasurementTrusted {
             let memoryMultiple = baseline.memoryMultiple(for: family.totalPhysicalFootprintBytes)
@@ -252,7 +277,7 @@ public enum GhostHeatModel {
         }
 
         let forecastIsHeatTrusted = forecast.confidence >= 0.55 && family.trend.hasSustainedHistory &&
-            (base.sustainedSignalCount > 0 || family.trend.credibleMemoryVelocity > 0)
+            (sustained > 0 || family.trend.credibleMemoryVelocity > 0)
         if forecastIsHeatTrusted {
             switch forecast.state {
             case .quiet:
@@ -277,7 +302,7 @@ public enum GhostHeatModel {
 
         // Levels weigh persistence and context together; only the history
         // gates distinguish them.
-        let corroboration = base.sustainedSignalCount + contextVotes
+        let corroboration = sustained + contextVotes
         let criticalForecast = forecastIsHeatTrusted && forecast.confidence >= 0.62 && forecast.state >= .runaway
         let refinedLevel: GhostLevel
         if heat >= 80, confidence >= 0.62, (corroboration >= 2 || criticalForecast || pressure.level == .critical) {
@@ -297,7 +322,7 @@ public enum GhostHeatModel {
             level: level,
             confidence: confidence,
             evidence: evidence,
-            sustainedSignalCount: base.sustainedSignalCount,
+            sustainedSignalCount: sustained,
             corroborationCount: contextVotes
         )
     }

@@ -15,6 +15,7 @@ struct FamilyEvidenceScorer: Sendable {
         trend: TrendMetrics,
         forgotten: ForgottenAssessment,
         zombieChildCount: Int,
+        cpuBehavior: CPUBehavior = .none,
         settings: ThresholdSettings,
         now: Date
     ) -> GhostScore {
@@ -219,7 +220,8 @@ struct FamilyEvidenceScorer: Sendable {
             gpuRatio: gpuRatio,
             leakRatio: leakRatio,
             trend: trend,
-            hardwareLevel: hardwareLevel
+            hardwareLevel: hardwareLevel,
+            cpuBehavior: cpuBehavior
         )
         if let copies, heat.level == .quiet {
             heat = GhostHeat(
