@@ -159,7 +159,6 @@ public struct ProcessFamilyBuilder: Sendable {
                     byPID: byPID,
                     children: children,
                     facts: facts,
-                    classifications: classifications,
                     confidence: confidence,
                     rootIdentities: rootIdentities,
                     duplicateClusterByIdentity: duplicateClusterByIdentity,
@@ -170,14 +169,15 @@ public struct ProcessFamilyBuilder: Sendable {
                 )
             }
         // Unordered: RadarPipeline ranks families after scoring.
-        let resolvedClusters = DuplicateFamilyResolver.resolve(duplicateSet.clusters, families: builtFamilies)
+        let linkedFamilies = Self.linkingParentFamilies(builtFamilies, byPID: byPID)
+        let resolvedClusters = DuplicateFamilyResolver.resolve(duplicateSet.clusters, families: linkedFamilies)
         var resolvedClusterByIdentity: [ProcessIdentity: DuplicateProcessCluster] = [:]
         for cluster in resolvedClusters {
             for member in cluster.members {
                 resolvedClusterByIdentity[member.identity] = cluster
             }
         }
-        let families = builtFamilies
+        let families = linkedFamilies
             .map { family -> ProcessFamily in
                 let cluster = bestDuplicateCluster(for: family.members, clustersByIdentity: resolvedClusterByIdentity)
                 return family.enriched(duplicateCluster: cluster)
@@ -190,6 +190,24 @@ public struct ProcessFamilyBuilder: Sendable {
             hardwareOffenderCount: hardwareProfiles.count,
             hardwareDetectorMilliseconds: hardwareDetectorMilliseconds
         )
+    }
+
+    /// Marks each family whose root was launched by a member of another
+    /// family, e.g. a language server started by an editor.
+    static func linkingParentFamilies(_ families: [ProcessFamily], byPID: [Int32: ProcessMetrics]) -> [ProcessFamily] {
+        var owner: [ProcessIdentity: String] = [:]
+        owner.reserveCapacity(families.reduce(0) { $0 + $1.members.count })
+        for family in families {
+            for member in family.members {
+                owner[member.identity] = family.familyKey
+            }
+        }
+        return families.map { family in
+            guard let parent = byPID[family.root.parentPID], let key = owner[parent.identity], key != family.familyKey else {
+                return family
+            }
+            return family.linked(toParentFamily: key)
+        }
     }
 
     public func summary(for families: [ProcessFamily]) -> RadarSummary {
@@ -214,7 +232,8 @@ public struct ProcessFamilyBuilder: Sendable {
     }
 
     private func makeStaticFacts(for process: ProcessMetrics) -> ProcessStaticFacts {
-        let classification = classifier.classification(for: process)
+        let tokens = WorkloadTokens(process)
+        let classification = classifier.classification(for: tokens)
         return ProcessStaticFacts(
             classification: classification,
             signature: ProcessSignature.from(root: process),
@@ -222,6 +241,7 @@ public struct ProcessFamilyBuilder: Sendable {
             appBundlePrefix: ProcessStaticFacts.appBundlePrefix(of: process.executablePath),
             parentDirectory: ProcessStaticFacts.parentDirectory(of: process.executablePath),
             isHelperNamed: process.name.lowercased().contains("helper"),
+            isAppMainBinary: tokens.isAppMainBinary,
             isHardwareEligible: hardwareDetector.isEligibleForGenericHardwareDetection(process),
             duplicateKey: duplicateDetector.candidateKey(for: process, classification: classification)
         )
@@ -260,11 +280,14 @@ public struct ProcessFamilyBuilder: Sendable {
         facts: [Int32: ProcessStaticFacts],
         confidence: [Int32: Double]
     ) -> Bool {
+        let childFacts = facts[child.pid]
+        let parentFacts = facts[parent.pid]
+        if isOwnWorkload(childFacts), isWorkloadHost(parentFacts) {
+            return false
+        }
         if confidence[parent.pid, default: 0] >= 0.35 {
             return true
         }
-        let childFacts = facts[child.pid]
-        let parentFacts = facts[parent.pid]
         if sameAppBundle(childFacts, parentFacts) {
             return true
         }
@@ -274,12 +297,31 @@ public struct ProcessFamilyBuilder: Sendable {
         return false
     }
 
+    /// Servers, kernels and test or build workers an editor launches are
+    /// their own families: a leaking language server must not surface as the
+    /// editor, nor make the editor its only stop. Kinds, not sizes, draw the
+    /// line, so membership never flips between ticks.
+    private func isOwnWorkload(_ facts: ProcessStaticFacts?) -> Bool {
+        guard let classification = facts?.classification else { return false }
+        return classification.kind.isServiceKind ||
+            !classification.traits.isDisjoint(with: [.devServer, .notebookKernel])
+    }
+
+    private func isWorkloadHost(_ facts: ProcessStaticFacts?) -> Bool {
+        guard let facts else { return false }
+        switch facts.classification.kind {
+        case .editorApp, .ideService, .electronApp:
+            return true
+        default:
+            return facts.isAppMainBinary
+        }
+    }
+
     private func makeFamily(
         root: ProcessMetrics,
         byPID: [Int32: ProcessMetrics],
         children: [Int32: [ProcessMetrics]],
         facts: [Int32: ProcessStaticFacts],
-        classifications: [Int32: DevClassification],
         confidence: [Int32: Double],
         rootIdentities: Set<ProcessIdentity>,
         duplicateClusterByIdentity: [ProcessIdentity: DuplicateProcessCluster],
@@ -310,9 +352,7 @@ public struct ProcessFamilyBuilder: Sendable {
         let gpu = members.reduce(0) { isCurrent($1.gpuMeasurementDate, at: now) ? $0 + $1.gpuUsagePercent : $0 }
         let hardwareSignals = hardwareSignals(for: members, profiles: hardwareProfiles)
         let familyConfidence = members.map { confidence[$0.pid, default: 0] }.max() ?? 0
-        let familyClassification = members
-            .compactMap { classifications[$0.pid] }
-            .max { $0.groupingPriority < $1.groupingPriority }
+        let familyClassification = familyClassification(root: root, members: members, facts: facts, footprint: footprint, cpu: cpu, now: now)
         let duplicateCluster = bestDuplicateCluster(for: members, clustersByIdentity: duplicateClusterByIdentity)
         let signature = facts[root.pid]?.signature ?? ProcessSignature.from(root: root)
         // Baselines intentionally learn by logical signature, but live trend
@@ -368,6 +408,30 @@ public struct ProcessFamilyBuilder: Sendable {
             hardwareSignals: hardwareSignals,
             coverage: coverage
         )
+    }
+
+    /// The root says what a family is. A member that holds most of the
+    /// family's footprint and CPU this tick names it instead; that changes
+    /// only the label, never membership.
+    private func familyClassification(
+        root: ProcessMetrics,
+        members: [ProcessMetrics],
+        facts: [Int32: ProcessStaticFacts],
+        footprint: UInt64,
+        cpu: Double,
+        now: Date
+    ) -> DevClassification? {
+        let rootClassification = facts[root.pid]?.classification
+        guard members.count > 1, footprint > 0 else { return rootClassification }
+        for member in members where member.identity != root.identity {
+            let memoryShare = Double(member.memoryForScoringBytes) / Double(footprint)
+            let memberCPU = isCurrent(member.cpuMeasurementDate, at: now) ? member.cpuPercent : 0
+            let cpuShare = cpu >= 1 ? memberCPU / cpu : 1
+            if memoryShare >= 0.6, cpuShare >= 0.6, let dominant = facts[member.pid]?.classification {
+                return dominant
+            }
+        }
+        return rootClassification
     }
 
     private func isCurrent(_ measuredAt: Date?, at now: Date) -> Bool {

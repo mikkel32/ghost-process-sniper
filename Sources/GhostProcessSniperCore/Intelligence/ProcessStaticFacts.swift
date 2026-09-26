@@ -12,6 +12,7 @@ struct ProcessStaticFacts: Sendable {
     /// The executable's directory; empty when the path is empty or relative.
     let parentDirectory: String
     let isHelperNamed: Bool
+    let isAppMainBinary: Bool
     let isHardwareEligible: Bool
     /// Nil when the process is not a duplicate candidate at all.
     let duplicateKey: DuplicateClusterKey?

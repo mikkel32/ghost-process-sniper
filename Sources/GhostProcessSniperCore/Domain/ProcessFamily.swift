@@ -34,6 +34,9 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public private(set) var hardwareSignals: [HardwareOffenderSignal]
     /// Measurement coverage at build time.
     public let coverage: FamilyMeasurementCoverage
+    /// The family whose member launched this family's root, e.g. the editor
+    /// behind a language server. Nil for independent families.
+    public private(set) var parentFamilyKey: String?
 
     public var displayName: String { root.name }
     public var childCount: Int { max(0, members.count - 1) }
@@ -66,7 +69,8 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         classification: DevClassification? = nil,
         duplicateCluster: DuplicateProcessCluster? = nil,
         hardwareSignals: [HardwareOffenderSignal] = [],
-        coverage: FamilyMeasurementCoverage? = nil
+        coverage: FamilyMeasurementCoverage? = nil,
+        parentFamilyKey: String? = nil
     ) {
         self.root = root
         self.members = members
@@ -97,6 +101,19 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.duplicateCluster = duplicateCluster
         self.hardwareSignals = hardwareSignals
         self.coverage = coverage ?? FamilyMeasurementCoverage(members: members, root: root, at: lastScoredAt ?? root.sampledAt)
+        self.parentFamilyKey = parentFamilyKey
+    }
+
+    func linked(toParentFamily key: String) -> ProcessFamily {
+        var copy = self
+        copy.parentFamilyKey = key
+        return copy
+    }
+
+    /// Families launched by this one (see parentFamilyKey), for a stop that
+    /// should take an editor's servers with it.
+    public func childFamilies(in families: [ProcessFamily]) -> [ProcessFamily] {
+        families.filter { $0.parentFamilyKey == familyKey }
     }
 
     public func killPlan(
