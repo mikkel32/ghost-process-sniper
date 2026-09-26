@@ -70,8 +70,12 @@ public struct RuleRowViewModel: Identifiable, Equatable, Sendable {
         name = rule.name
         isEnabled = rule.isEnabled
         isBuiltIn = rule.isBuiltIn
+        // Only a family's own snooze or ignore can be undone by deleting it;
+        // a composed rule that snoozes by command stays a toggleable custom rule.
         kind = if rule.isBuiltIn {
             .builtIn
+        } else if rule.match.signatureID == nil {
+            .custom
         } else {
             switch rule.action {
             case .snooze: .snooze

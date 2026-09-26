@@ -155,20 +155,7 @@ public struct IncidentQuery: Equatable, Sendable {
 
     public func apply(to incidents: [RadarIncident]) -> [RadarIncident] {
         let query = ProcessSearchQuery(text)
-        let filtered = incidents.filter { matches($0, query: query) }
-        let sorted: [RadarIncident]
-        if sort == .recurrence {
-            let recurrenceCounts = Dictionary(grouping: filtered, by: { $0.signature.id })
-                .mapValues(\.count)
-            sorted = filtered.sorted { lhs, rhs in
-                let lhsCount = recurrenceCounts[lhs.signature.id, default: 0]
-                let rhsCount = recurrenceCounts[rhs.signature.id, default: 0]
-                if lhsCount != rhsCount { return lhsCount > rhsCount }
-                return lhs.lastSeenAt > rhs.lastSeenAt
-            }
-        } else {
-            sorted = filtered.sorted(by: sortComparator)
-        }
+        let sorted = incidents.filter { matches($0, query: query) }.sorted(by: sortComparator)
         // Comparators order names ascending and everything else descending.
         let isAscending = sort == .name
         let ordered: [RadarIncident] = ascending == isAscending ? sorted : sorted.reversed()
@@ -185,6 +172,8 @@ public struct IncidentQuery: Equatable, Sendable {
         case .memory:
             return lhs.memoryBytes == rhs.memoryBytes ? lhs.maxScore > rhs.maxScore : lhs.memoryBytes > rhs.memoryBytes
         case .recurrence:
+            // The hits each row shows, so the Hits column orders by what it displays.
+            if lhs.occurrenceCount != rhs.occurrenceCount { return lhs.occurrenceCount > rhs.occurrenceCount }
             return lhs.lastSeenAt > rhs.lastSeenAt
         case .name:
             return lhs.familyName.localizedStandardCompare(rhs.familyName) == .orderedAscending

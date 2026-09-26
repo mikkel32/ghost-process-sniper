@@ -11,6 +11,9 @@ final class ConsoleRowModelTests: XCTestCase {
                                action: .snooze, expiresAt: now.addingTimeInterval(3_600))
         let ignore = RadarRule(name: "Ignore node", match: RadarRuleMatch(signatureID: signature.id, minimumLevel: .quiet), action: .ignore)
         let custom = RadarRule(name: "Notify: vite", match: RadarRuleMatch(commandContains: "vite", minimumLevel: .watch), action: .notify)
+        // The composer can build a snooze that matches a command, not a family.
+        let composedSnooze = RadarRule(name: "Snooze: vite", match: RadarRuleMatch(commandContains: "vite", minimumLevel: .watch),
+                                       action: .snooze)
         let builtIn = RadarRule.builtIns(settings: .smart).first!
 
         XCTAssertEqual(RuleRowViewModel(rule: snooze).kind, .snooze)
@@ -18,6 +21,7 @@ final class ConsoleRowModelTests: XCTestCase {
         XCTAssertEqual(RuleRowViewModel(rule: ignore).kind, .ignore)
         XCTAssertNil(RuleRowViewModel(rule: ignore).expiresAt)
         XCTAssertEqual(RuleRowViewModel(rule: custom).kind, .custom)
+        XCTAssertEqual(RuleRowViewModel(rule: composedSnooze).kind, .custom)
         XCTAssertEqual(RuleRowViewModel(rule: builtIn).kind, .builtIn)
     }
 
@@ -43,6 +47,18 @@ final class ConsoleRowModelTests: XCTestCase {
         XCTAssertEqual(names(.name, ascending: true), ["alpha", "beta", "gamma"])
         XCTAssertEqual(names(.name, ascending: false), ["gamma", "beta", "alpha"])
         XCTAssertEqual(names(.recent, ascending: false), ["beta", "gamma", "alpha"])
+    }
+
+    func testRecurrenceSortOrdersByTheHitsShown() {
+        var few = incident("few", memory: 100, seenAt: 3)
+        few.occurrenceCount = 2
+        var many = incident("many", memory: 100, seenAt: 1)
+        many.occurrenceCount = 9
+        var once = incident("once", memory: 100, seenAt: 2)
+        once.occurrenceCount = 1
+        let incidents = [few, many, once]
+        XCTAssertEqual(IncidentQuery(sort: .recurrence).apply(to: incidents).map(\.familyName), ["many", "few", "once"])
+        XCTAssertEqual(IncidentQuery(sort: .recurrence, ascending: true).apply(to: incidents).map(\.familyName), ["once", "few", "many"])
     }
 
     func testIncidentRowsKnowWhetherTheirFamilyStillRuns() {
