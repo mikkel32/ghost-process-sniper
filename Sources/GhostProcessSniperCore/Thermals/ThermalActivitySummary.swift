@@ -165,9 +165,10 @@ public struct ThermalActivitySummary: Equatable, Sendable {
             let measuredAt = max(cpuDate ?? .distantPast, gpuDate ?? .distantPast)
             let appPath = applicationPath(sample.executablePath)
             let key = appPath ?? sample.familyKey
-            let name = appPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? sample.name
-            var group = groups[key] ?? Accumulator(name: name, applicationPath: appPath,
-                familyKey: sample.familyKey, canInspectFamily: sample.canInspectFamily, measuredAt: measuredAt)
+            // Runs for every sampled process on each refresh; name a group only once.
+            var group = groups[key] ?? Accumulator(name: appPath.map(PathText.displayName) ?? sample.name,
+                applicationPath: appPath, familyKey: sample.familyKey,
+                canInspectFamily: sample.canInspectFamily, measuredAt: measuredAt)
             group.cpu += cpuDate == nil ? 0 : sample.cpuPercent
             group.gpu += gpuDate == nil ? 0 : sample.gpuPercent
             group.count += 1
