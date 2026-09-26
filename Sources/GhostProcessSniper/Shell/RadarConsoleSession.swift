@@ -262,8 +262,7 @@ final class RadarConsoleSession {
         state.searchText = ""
         state.familyFilter = filter
         if let sort {
-            state.familySort = sort
-            state.familySortAscending = sort.isNaturallyAscending
+            state.familySortInNaturalDirection = sort
         }
         focus(.processes)
     }
@@ -435,6 +434,16 @@ final class RadarConsoleViewState {
     var familySortAscending: Bool
     var incidentQuery: IncidentQuery
     var showInspector: Bool
+
+    /// Menus, links and restored scenes pick a sort in its usual
+    /// direction; only the table headers choose the other one.
+    var familySortInNaturalDirection: RadarSort {
+        get { familySort }
+        set {
+            familySort = newValue
+            familySortAscending = newValue.isNaturallyAscending
+        }
+    }
 
     init(_ state: RadarConsoleState = .default) {
         focusedSelection = state.focusedSelection

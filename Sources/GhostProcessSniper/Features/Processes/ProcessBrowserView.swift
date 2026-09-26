@@ -108,9 +108,7 @@ struct ProcessBrowserView: View {
         Picker("Sort", selection: Binding(
             get: { session.state.familySort },
             set: { sort in
-                // The menu picks each sort in its usual direction.
-                session.state.familySortAscending = sort.isNaturallyAscending
-                session.state.familySort = sort
+                session.state.familySortInNaturalDirection = sort
                 session.scheduleQueryUpdate()
             }
         )) {

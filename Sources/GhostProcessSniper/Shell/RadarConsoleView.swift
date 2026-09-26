@@ -141,6 +141,9 @@ struct RadarConsoleView: View {
             storedFamilySort = value.rawValue
             session.updateFocusedFamilies()
         }
+        .onChange(of: session.state.familySortAscending) { _, _ in
+            session.scheduleQueryUpdate()
+        }
         .onChange(of: session.state.incidentQuery.filter) { _, value in
             storedIncidentFilter = value.rawValue
             session.scheduleQueryUpdate()
@@ -223,7 +226,7 @@ struct RadarConsoleView: View {
         }
         session.state.searchText = storedSearchText
         session.state.familyFilter = RadarFilter(rawValue: storedFamilyFilter) ?? .all
-        session.state.familySort = RadarSort(rawValue: storedFamilySort) ?? .smart
+        session.state.familySortInNaturalDirection = RadarSort(rawValue: storedFamilySort) ?? .smart
         session.state.incidentQuery.text = storedIncidentText
         session.state.incidentQuery.filter = RadarIncidentFilter(rawValue: storedIncidentFilter) ?? .all
         session.state.incidentQuery.sort = RadarIncidentSort(rawValue: storedIncidentSort) ?? .recent

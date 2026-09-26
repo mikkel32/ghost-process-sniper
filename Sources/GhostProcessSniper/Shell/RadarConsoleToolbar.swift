@@ -60,7 +60,7 @@ struct RadarConsoleToolbar: ToolbarContent {
 
                     Divider()
 
-                    Picker("Sort", selection: $session.state.familySort) {
+                    Picker("Sort", selection: $session.state.familySortInNaturalDirection) {
                         ForEach(RadarSort.allCases, id: \.self) { sort in
                             Text(sort.label).tag(sort)
                         }
