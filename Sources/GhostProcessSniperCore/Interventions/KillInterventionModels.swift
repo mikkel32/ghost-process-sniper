@@ -602,6 +602,10 @@ public enum KillStrategy: String, Codable, CaseIterable, Sendable {
     case standard
     case gentleDevServer
     case stubbornRunaway
+    /// Ask a GUI app to quit like ⌘Q, so it can save and close its helpers.
+    case quitApp
+    /// Databases and container runtimes: SIGTERM with time to flush data.
+    case carefulShutdown
     case inspectOnly
 
     public var label: String {
@@ -609,6 +613,8 @@ public enum KillStrategy: String, Codable, CaseIterable, Sendable {
         case .standard: "Standard"
         case .gentleDevServer: "Gentle dev server"
         case .stubbornRunaway: "Stubborn runaway"
+        case .quitApp: "Quit app"
+        case .carefulShutdown: "Careful shutdown"
         case .inspectOnly: "Inspect only"
         }
     }
@@ -619,12 +625,17 @@ public enum KillStrategy: String, Codable, CaseIterable, Sendable {
             return [gracefulSignal, SIGKILL]
         case .gentleDevServer:
             return [SIGINT, SIGTERM, SIGKILL]
-        case .stubbornRunaway:
+        case .quitApp:
+            return [KillSignalPhase.quitRequest, SIGTERM, SIGKILL]
+        case .stubbornRunaway, .carefulShutdown:
             return [SIGTERM, SIGKILL]
         case .inspectOnly:
             return []
         }
     }
+
+    /// Strategies that try a second, still-polite step before any force.
+    var hasSecondaryStep: Bool { self == .gentleDevServer || self == .quitApp }
 }
 
 public enum KillDecisionFactorKind: String, Codable, Sendable {
@@ -672,6 +683,9 @@ public struct KillDecisionScore: Codable, Equatable, Sendable {
 }
 
 public struct KillSignalPhase: Identifiable, Codable, Equatable, Sendable {
+    /// Not a signal: a polite quit request, like choosing Quit from the app's menu.
+    public static let quitRequest: Int32 = 0
+
     public var id: String { "\(order)-\(signalName)-\(label)" }
 
     public let order: Int
@@ -685,6 +699,7 @@ public struct KillSignalPhase: Identifiable, Codable, Equatable, Sendable {
             return "VERIFY"
         }
         return switch signal {
+        case Self.quitRequest: "QUIT"
         case SIGINT: "SIGINT"
         case SIGTERM: "SIGTERM"
         case SIGKILL: "SIGKILL"

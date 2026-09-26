@@ -95,19 +95,22 @@ public struct InterventionPolicyEvaluation: Equatable, Sendable {
     public let profile: KillStrategyProfile
     public let simulation: KillStrategySimulation
     public let calibration: KillCalibrationSnapshot
+    public let risk: KillRiskAssessment
 
     public init(
         decisionScore: KillDecisionScore,
         recommendation: KillStrategyRecommendation,
         profile: KillStrategyProfile,
         simulation: KillStrategySimulation,
-        calibration: KillCalibrationSnapshot = .empty
+        calibration: KillCalibrationSnapshot = .empty,
+        risk: KillRiskAssessment = .none
     ) {
         self.decisionScore = decisionScore
         self.recommendation = recommendation
         self.profile = profile
         self.simulation = simulation
         self.calibration = calibration
+        self.risk = risk
     }
 }
 
@@ -139,6 +142,17 @@ public struct KillStrategySimulator: Sendable {
             baseForce = 0.54
             baseSurvivor = 0.08
             baseDuration = profile.verificationSchedule.graceSeconds + profile.verificationSchedule.settleSeconds
+        case .quitApp:
+            // Apps answer a quit request well, but may pause on a save prompt.
+            baseGrace = 0.84
+            baseForce = 0.08
+            baseSurvivor = 0.1
+            baseDuration = profile.verificationSchedule.graceSeconds * 0.4 + profile.verificationSchedule.secondaryGraceSeconds
+        case .carefulShutdown:
+            baseGrace = 0.8
+            baseForce = 0.12
+            baseSurvivor = 0.08
+            baseDuration = profile.verificationSchedule.graceSeconds * 0.5 + profile.verificationSchedule.settleSeconds
         case .inspectOnly:
             return KillStrategySimulation(
                 strategy: .inspectOnly,
@@ -215,7 +229,14 @@ public struct KillStrategyCalibrator: Sendable {
         let learnedGrace = calibration.averageGraceSeconds > 0 ? calibration.averageGraceSeconds : base.verificationSchedule.graceSeconds
         let forceBias = calibration.forceRate >= 0.45 || calibration.survivorRate >= 0.25
         let reclaimBias = calibration.reclaimAccuracy < 0.45
-        let lowerBound = base.strategy == .gentleDevServer ? 0.45 : 0.25
+        // Apps and databases get their clean-shutdown time as a floor: the
+        // wait ends as soon as they exit, so a long ceiling costs nothing when
+        // history says they are quick, and learning never cuts it short.
+        let lowerBound: Double = switch base.strategy {
+        case .quitApp, .carefulShutdown: base.verificationSchedule.graceSeconds
+        case .gentleDevServer: 0.45
+        default: 0.25
+        }
         let upperBound = max(lowerBound, forceKillDelay)
         let tunedGrace = min(upperBound, max(lowerBound, forceBias || reclaimBias ? learnedGrace * 0.8 : learnedGrace * 1.08))
         let schedule = KillVerificationSchedule(
@@ -249,6 +270,7 @@ public struct KillStrategyCalibrator: Sendable {
 public struct InterventionPolicyEngine: Sendable {
     private let simulator = KillStrategySimulator()
     private let calibrator = KillStrategyCalibrator()
+    private let riskAssessor = KillRiskAssessor()
 
     public init() {}
 
@@ -263,6 +285,7 @@ public struct InterventionPolicyEngine: Sendable {
         nearbyCount: Int,
         forceKillDelay: TimeInterval
     ) -> InterventionPolicyEvaluation {
+        let risk = riskAssessor.assess(plan.workload ?? .empty)
         let decisionScore = decisionScore(
             plan: plan,
             targets: targets,
@@ -271,17 +294,20 @@ public struct InterventionPolicyEngine: Sendable {
             recycled: recycled,
             reclaim: reclaim,
             diff: diff,
-            nearbyCount: nearbyCount
+            nearbyCount: nearbyCount,
+            risk: risk
         )
         let recommendation = strategyRecommendation(
             plan: plan,
             targets: targets,
             locked: locked,
-            decisionScore: decisionScore
+            decisionScore: decisionScore,
+            risk: risk
         )
         let baseProfile = strategyProfile(
             recommendation: recommendation,
-            forceKillDelay: forceKillDelay
+            forceKillDelay: forceKillDelay,
+            risk: risk
         )
         let baseSimulation = simulator.simulate(
             recommendation: recommendation,
@@ -291,7 +317,7 @@ public struct InterventionPolicyEngine: Sendable {
             locked: locked,
             decisionScore: decisionScore
         )
-        let calibration = plan.killCalibration ?? .empty
+        let calibration = plan.calibration(for: recommendation.strategy)
         let profile = calibrator.tunedProfile(
             base: baseProfile,
             calibration: calibration,
@@ -306,7 +332,8 @@ public struct InterventionPolicyEngine: Sendable {
             recommendation: recommendation,
             profile: profile,
             simulation: simulation,
-            calibration: calibration
+            calibration: calibration,
+            risk: risk
         )
     }
 
@@ -318,7 +345,8 @@ public struct InterventionPolicyEngine: Sendable {
         recycled: [KillTarget],
         reclaim: KillReclaimEstimate,
         diff: KillTargetDiff,
-        nearbyCount: Int
+        nearbyCount: Int,
+        risk: KillRiskAssessment
     ) -> KillDecisionScore {
         var factors: [KillDecisionFactor] = []
         if targets.isEmpty {
@@ -363,17 +391,36 @@ public struct InterventionPolicyEngine: Sendable {
             }
         }
 
+        factors.append(contentsOf: riskFactors(risk))
+
         let raw = factors.reduce(42.0) { $0 + $1.weight }
         let blockingPenalty = factors.contains { $0.kind == .blocking } ? 35.0 : 0
         let confidence = min(1, max(0.2, 0.45 + Double(targets.count) * 0.08 + reclaim.confidence * 0.25 - Double(locked.count) * 0.04))
         return KillDecisionScore(value: raw - blockingPenalty, confidence: confidence, factors: factors)
     }
 
+    /// Consequences weigh on the decision without blocking it: the user may
+    /// well want a restarting process restarted, or a stuck database gone.
+    private func riskFactors(_ risk: KillRiskAssessment) -> [KillDecisionFactor] {
+        risk.risks.map { item in
+            let weight: Double = switch (item.isBenefit, item.kind, item.severity) {
+            case (true, .orphaned, _): 8
+            case (true, _, _): 4
+            case (false, .respawn, _): -12
+            case (false, _, .danger): -14
+            case (false, _, .caution): -6
+            case (false, _, .info): -1
+            }
+            return KillDecisionFactor(kind: item.isBenefit ? .whyKill : .whyWait, title: item.title, detail: item.detail, weight: weight)
+        }
+    }
+
     private func strategyRecommendation(
         plan: KillPlan,
         targets: [KillTarget],
         locked: [KillTarget],
-        decisionScore: KillDecisionScore
+        decisionScore: KillDecisionScore,
+        risk: KillRiskAssessment
     ) -> KillStrategyRecommendation {
         if targets.isEmpty || decisionScore.factors.contains(where: { $0.kind == .blocking }) || locked.count >= max(3, targets.count) {
             return KillStrategyRecommendation(
@@ -381,6 +428,22 @@ public struct InterventionPolicyEngine: Sendable {
                 confidence: max(0.72, decisionScore.confidence),
                 reasons: decisionScore.whyWait.prefix(2).map(\.detail).ifEmpty(["Low confidence or too many protected descendants."]),
                 previewText: "Inspect only; no signal should be sent until ownership is clearer."
+            )
+        }
+        if let quitPID = risk.appQuitPID, targets.contains(where: { $0.pid == quitPID }) {
+            return KillStrategyRecommendation(
+                strategy: .quitApp,
+                confidence: max(0.82, decisionScore.confidence),
+                reasons: ["\(risk.kind.label): quitting lets it save state and close its own helpers."],
+                previewText: "Quit like \u{2318}Q, then SIGTERM anything left; SIGKILL only for same-identity survivors."
+            )
+        }
+        if risk.kind == .dataStore || risk.kind == .containerRuntime {
+            return KillStrategyRecommendation(
+                strategy: .carefulShutdown,
+                confidence: max(0.8, decisionScore.confidence),
+                reasons: ["\(risk.kind.label): needs time to flush data before it exits."],
+                previewText: "SIGTERM with a long grace period; SIGKILL only if you allow it."
             )
         }
         if let history = plan.killHistory, history.operationCount >= 2, history.forceRate >= 0.5 {
@@ -393,7 +456,9 @@ public struct InterventionPolicyEngine: Sendable {
         }
         let kind = plan.familyMetadata?.devKindLabel.lowercased() ?? plan.displayName.lowercased()
         let devServerHints = ["node", "vite", "python", "ruby", "swift", "server", "bun", "deno", "go service", "php", "dotnet"]
-        if devServerHints.contains(where: { kind.contains($0) || plan.displayName.lowercased().contains($0) }) {
+        let looksLikeDevServer = risk.kind == .devServer ||
+            (risk.kind == .general && devServerHints.contains(where: { kind.contains($0) || plan.displayName.lowercased().contains($0) }))
+        if looksLikeDevServer {
             return KillStrategyRecommendation(
                 strategy: .gentleDevServer,
                 confidence: max(0.76, decisionScore.confidence),
@@ -419,8 +484,10 @@ public struct InterventionPolicyEngine: Sendable {
 
     private func strategyProfile(
         recommendation: KillStrategyRecommendation,
-        forceKillDelay: TimeInterval
+        forceKillDelay: TimeInterval,
+        risk: KillRiskAssessment
     ) -> KillStrategyProfile {
+        let cleanShutdownGrace = max(forceKillDelay, risk.graceSeconds ?? forceKillDelay)
         let schedule: KillVerificationSchedule
         let phases: [KillSignalPhase]
         switch recommendation.strategy {
@@ -442,6 +509,19 @@ public struct InterventionPolicyEngine: Sendable {
             phases = [
                 KillSignalPhase(order: 0, label: "Terminate runaway", signal: SIGTERM, waitAfterSeconds: min(forceKillDelay, 0.8), isForce: false),
                 KillSignalPhase(order: 1, label: "Force verified survivors", signal: SIGKILL, waitAfterSeconds: 0.25, isForce: true)
+            ]
+        case .quitApp:
+            schedule = KillVerificationSchedule(graceSeconds: cleanShutdownGrace, secondaryGraceSeconds: 1.5, settleSeconds: 0.35, allowsSkipForce: true)
+            phases = [
+                KillSignalPhase(order: 0, label: "Ask the app to quit, like \u{2318}Q", signal: KillSignalPhase.quitRequest, waitAfterSeconds: cleanShutdownGrace, isForce: false),
+                KillSignalPhase(order: 1, label: "Terminate what is left", signal: SIGTERM, waitAfterSeconds: 1.5, isForce: false),
+                KillSignalPhase(order: 2, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.35, isForce: true)
+            ]
+        case .carefulShutdown:
+            schedule = KillVerificationSchedule(graceSeconds: cleanShutdownGrace, secondaryGraceSeconds: 0.2, settleSeconds: 0.5, allowsSkipForce: true)
+            phases = [
+                KillSignalPhase(order: 0, label: "Request a clean shutdown", signal: SIGTERM, waitAfterSeconds: cleanShutdownGrace, isForce: false),
+                KillSignalPhase(order: 1, label: "Force same-identity survivors", signal: SIGKILL, waitAfterSeconds: 0.5, isForce: true)
             ]
         case .inspectOnly:
             schedule = KillVerificationSchedule(graceSeconds: 0, secondaryGraceSeconds: 0, settleSeconds: 0, allowsSkipForce: false)

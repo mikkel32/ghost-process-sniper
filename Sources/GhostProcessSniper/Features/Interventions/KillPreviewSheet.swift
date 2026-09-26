@@ -23,6 +23,25 @@ struct KillPreviewSheet: View {
     @State private var liveTargetReasons: [Int32: String] = [:]
     @State private var stageText = "Ready for explicit confirmation"
     @State private var selectedStep: KillPreviewStep = .scope
+    @State private var showsEngineDetails = false
+
+    init(
+        family: ProcessFamily,
+        preview: KillPreview,
+        approvalExpiresAt: Date,
+        confirm: @escaping (_ skipForce: Bool, _ control: KillOperationControl,
+                            _ eventSink: @escaping @Sendable (KillOperationEvent) -> Void) async -> KillReport,
+        close: @escaping () -> Void
+    ) {
+        self.family = family
+        self.preview = preview
+        self.approvalExpiresAt = approvalExpiresAt
+        self.confirm = confirm
+        self.close = close
+        // One-time seed: work that can lose data is never forced unless the
+        // user turns this off. The sheet is rebuilt for every new preview.
+        _skipForce = State(initialValue: preview.riskAssessment.forceNeedsConfirmation)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -95,9 +114,10 @@ struct KillPreviewSheet: View {
                 .frame(width: 30)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Intervention Console")
+                Text("Stop \(preview.displayName)")
                     .font(.title2.weight(.semibold))
-                Text("\(preview.displayName) - \(family.signature.displayName)")
+                    .lineLimit(1)
+                Text("\(preview.riskAssessment.kind.label) \u{00b7} \(preview.strategyRecommendation.strategy.label) \u{00b7} \(family.signature.displayName)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -124,6 +144,23 @@ struct KillPreviewSheet: View {
     }
 
     private var scopeStrategyPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            KillPlanOverview(preview: preview)
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                GridRow {
+                    compactEvidenceBlock(title: "Why stop it", factors: preview.whyKillEvidence, empty: "No strong reason to stop it yet.")
+                    compactEvidenceBlock(title: "Why wait", factors: preview.whyWaitEvidence, empty: "Nothing suggests waiting.")
+                }
+            }
+            DisclosureGroup("Engine details", isExpanded: $showsEngineDetails) {
+                engineDetails
+                    .padding(.top, 8)
+            }
+            .font(.callout)
+        }
+    }
+
+    private var engineDetails: some View {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
             GridRow {
                 compactInfoBlock(
@@ -195,10 +232,6 @@ struct KillPreviewSheet: View {
                     )
                 )
             }
-            GridRow {
-                compactEvidenceBlock(title: "Why Kill", factors: preview.whyKillEvidence, empty: "No strong positive evidence yet.")
-                compactEvidenceBlock(title: "Why Wait", factors: preview.whyWaitEvidence, empty: "No blocking or caution evidence found.")
-            }
         }
     }
 
@@ -263,10 +296,15 @@ struct KillPreviewSheet: View {
                 }
                 Spacer()
             }
-            Toggle("Skip force escalation and report survivors", isOn: $skipForce)
+            Toggle("Report anything that refuses to stop instead of force-stopping it", isOn: $skipForce)
                 .font(.caption)
                 .toggleStyle(.switch)
                 .disabled(isKilling)
+            if preview.riskAssessment.forceNeedsConfirmation {
+                Text("On by default for a \(preview.riskAssessment.kind.label.lowercased()): a forced stop can lose work.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             if isKilling && !skipForce {
                 Button {
                     skipForce = true
@@ -345,6 +383,22 @@ struct KillPreviewSheet: View {
                     RadarFormat.bytes(report.realizedMemoryReclaimBytes)
                 ]
             )
+            if !report.respawnedPIDs.isEmpty {
+                KillRiskCard(risk: KillRisk(kind: .respawn, severity: .caution, title: "It came back",
+                                            detail: report.summary))
+            } else if report.skipForceRequested, !report.survivorPIDs.isEmpty {
+                HStack(alignment: .top, spacing: 10) {
+                    KillRiskCard(risk: KillRisk(kind: .unsavedWork, severity: .caution, title: "Still running",
+                                                detail: "Check it for a save prompt or unfinished work first."))
+                    Button(role: .destructive) {
+                        startKill(force: true)
+                    } label: {
+                        Label("Force Stop", systemImage: "bolt")
+                    }
+                    .disabled(isKilling || previewExpired || Date() > approvalExpiresAt)
+                    .help("Runs the stop again and force-stops whatever is still running.")
+                }
+            }
             if !report.verificationPasses.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(report.verificationPasses.prefix(4)) { pass in
@@ -394,12 +448,12 @@ struct KillPreviewSheet: View {
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                 } else {
-                    Button(role: .destructive, action: startKill) {
+                    Button(role: .destructive) { startKill() } label: {
                         if isKilling {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Label(preview.scopePreview.scope == .singleRoot ? "Confirm Stop Process" : "Confirm Stop Family", systemImage: "scope")
+                            Label(confirmTitle, systemImage: "scope")
                         }
                     }
                     .buttonStyle(.borderedProminent)
@@ -410,8 +464,17 @@ struct KillPreviewSheet: View {
         }
     }
 
-    private func startKill() {
-        guard !isKilling, report == nil, !previewExpired, Date() <= approvalExpiresAt else { return }
+    private var confirmTitle: String {
+        if preview.strategyRecommendation.strategy == .quitApp { return "Quit \(preview.displayName)" }
+        return preview.scopePreview.scope == .singleRoot ? "Confirm Stop Process" : "Confirm Stop Family"
+    }
+
+    /// `force` re-runs a finished stop without holding back force, for
+    /// survivors the user has checked.
+    private func startKill(force: Bool = false) {
+        guard !isKilling, report == nil || force, !previewExpired, Date() <= approvalExpiresAt else { return }
+        if force { skipForce = false }
+        report = nil
         isKilling = true
         Task {
             liveEvents = []
@@ -470,7 +533,8 @@ struct KillPreviewSheet: View {
     private var strategyColor: Color {
         switch preview.strategyRecommendation.strategy {
         case .standard: .blue
-        case .gentleDevServer: .green
+        case .gentleDevServer, .quitApp: .green
+        case .carefulShutdown: .purple
         case .stubbornRunaway: .red
         case .inspectOnly: .orange
         }
@@ -486,9 +550,9 @@ struct KillPreviewSheet: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             ForEach(factors.prefix(4)) { factor in
-                Label("\(factor.title): \(factor.detail)", systemImage: icon(for: factor.kind))
+                Label("\(factor.title): \(factor.detail)", systemImage: KillFactorStyle.icon(for: factor.kind))
                     .font(.caption)
-                    .foregroundStyle(color(for: factor.kind))
+                    .foregroundStyle(KillFactorStyle.color(for: factor.kind))
                     .lineLimit(1)
             }
             if factors.isEmpty {
@@ -568,140 +632,4 @@ struct KillPreviewSheet: View {
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-}
-
-private enum KillPreviewStep: Int, CaseIterable, Identifiable {
-    case scope
-    case targets
-    case confirm
-
-    var id: Self { self }
-
-    var label: String {
-        switch self {
-        case .scope: "1. Scope"
-        case .targets: "2. Targets"
-        case .confirm: "3. Confirm"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .scope: "checkmark.shield"
-        case .targets: "list.bullet.rectangle"
-        case .confirm: "scope"
-        }
-    }
-
-    var next: Self {
-        Self(rawValue: min(Self.confirm.rawValue, rawValue + 1)) ?? .confirm
-    }
-
-    var previous: Self {
-        Self(rawValue: max(Self.scope.rawValue, rawValue - 1)) ?? .scope
-    }
-}
-
-private struct KillTargetRow: View {
-    let target: KillTarget
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .foregroundStyle(color)
-                .frame(width: 18)
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(target.name)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                    if target.isRoot {
-                        Text("root")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.quaternary, in: Capsule())
-                    }
-                }
-                Text(target.reason)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            Text("PID \(target.pid)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 70, alignment: .trailing)
-
-            Text(target.state.label)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(color)
-                .frame(width: 78, alignment: .trailing)
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
-    }
-
-    private var icon: String {
-        switch target.state {
-        case .ready: "checkmark.circle"
-        case .locked: "lock"
-        case .stale: "clock.badge.xmark"
-        case .recycled: "arrow.triangle.2.circlepath"
-        case .terminated: "checkmark.seal"
-        case .forceKilled: "bolt"
-        case .survived: "exclamationmark.triangle"
-        case .exitedBeforeSignal: "figure.run"
-        case .failed: "xmark.octagon"
-        }
-    }
-
-    private var color: Color {
-        switch target.state {
-        case .ready, .terminated: .green
-        case .locked, .stale, .recycled: .orange
-        case .forceKilled: .red
-        case .exitedBeforeSignal: .secondary
-        case .survived, .failed: .red
-        }
-    }
-}
-
-private func icon(for evidence: KillDecisionEvidenceKind) -> String {
-    switch evidence {
-    case .positive: "checkmark.seal"
-    case .caution: "exclamationmark.triangle"
-    case .blocking: "xmark.octagon"
-    case .info: "info.circle"
-    }
-}
-
-private func icon(for factor: KillDecisionFactorKind) -> String {
-    switch factor {
-    case .whyKill: "checkmark.seal"
-    case .whyWait: "exclamationmark.triangle"
-    case .blocking: "xmark.octagon"
-    }
-}
-
-private func color(for evidence: KillDecisionEvidenceKind) -> Color {
-    switch evidence {
-    case .positive: .green
-    case .caution: .orange
-    case .blocking: .red
-    case .info: .secondary
-    }
-}
-
-private func color(for factor: KillDecisionFactorKind) -> Color {
-    switch factor {
-    case .whyKill: .green
-    case .whyWait: .orange
-    case .blocking: .red
-    }
 }

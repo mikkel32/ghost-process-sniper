@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 
@@ -88,10 +89,14 @@ public protocol ProcessSignaling: Sendable {
     var usesDarwinProcessNamespace: Bool { get }
     func send(signal: Int32, to pid: Int32) throws
     func exists(pid: Int32) -> Bool
+    /// Asks a GUI app to quit the way ⌘Q does. Returns false when the
+    /// process is not a running app, so the caller falls back to signals.
+    func requestQuit(pid: Int32) async -> Bool
 }
 
 public extension ProcessSignaling {
     var usesDarwinProcessNamespace: Bool { false }
+    func requestQuit(pid: Int32) async -> Bool { false }
 }
 
 public struct DarwinProcessSignaler: ProcessSignaling {
@@ -116,6 +121,13 @@ public struct DarwinProcessSignaler: ProcessSignaling {
             return true
         }
         return errno == EPERM
+    }
+
+    public func requestQuit(pid: Int32) async -> Bool {
+        await MainActor.run {
+            guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return false }
+            return app.terminate()
+        }
     }
 }
 
@@ -154,6 +166,9 @@ public struct KillReport: Equatable, Sendable {
     public var signalOutcomeCounts: [String: Int]
     public var calibratedReclaimBytes: UInt64
     public var reactorReport: KillReactorReport
+    /// New processes that replaced the stopped ones: a supervisor restarted them.
+    public var respawnedPIDs: [Int32] = []
+    public var respawnedBy: String?
 
     public var partiallySucceeded: Bool {
         !gracefulPIDs.isEmpty || !forcedPIDs.isEmpty
@@ -167,8 +182,15 @@ public struct KillReport: Equatable, Sendable {
         if !failures.isEmpty && !partiallySucceeded {
             return failures.joined(separator: "\n")
         }
+        if !respawnedPIDs.isEmpty {
+            let pids = respawnedPIDs.sorted().map(String.init).joined(separator: ", ")
+            return "Stopped, but \(respawnedBy ?? "a supervisor") started it again (PID \(pids)). Stop \(respawnedBy ?? "the supervisor") instead."
+        }
         if !survivorPIDs.isEmpty {
-            return "Survivors: \(survivorPIDs.sorted().map(String.init).joined(separator: ", "))."
+            let pids = survivorPIDs.sorted().map(String.init).joined(separator: ", ")
+            return skipForceRequested
+                ? "Still running: PID \(pids). It may be waiting on you, such as a save prompt; force-stop only if you are sure."
+                : "Survivors: \(pids)."
         }
         if !forcedPIDs.isEmpty {
             return "Force-killed \(forcedPIDs.count) stubborn process\(forcedPIDs.count == 1 ? "" : "es")."
@@ -212,6 +234,7 @@ public struct KillReport: Equatable, Sendable {
             "Signal waves: \(reactorReport.signalWaves.count), arena reuse \(reactorReport.arenaReuseCount), slice cache \(reactorReport.sliceCacheHitCount)",
             "Calibrated reclaim: \(RadarFormat.bytes(calibratedReclaimBytes))",
             "Force skipped: \(skipForceRequested ? "yes" : "no")",
+            "Respawned: \(respawnedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))\(respawnedBy.map { " by \($0)" } ?? "")",
             "Graceful: \(gracefulPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Forced: \(forcedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Survivors: \(survivorPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
@@ -495,7 +518,7 @@ public final class ProcessKiller: @unchecked Sendable {
             let strategy = freshStrategy == .inspectOnly ? freshStrategy : plan.approvedStrategy ?? freshStrategy
             let strategySignals = strategy.signals(gracefulSignal: profile.gracefulSignal)
             let gracefulSignal = strategySignals.first ?? profile.gracefulSignal
-            let escalationSignal = strategy == .gentleDevServer ? SIGTERM : profile.forcedSignal
+            let escalationSignal = strategy.hasSecondaryStep ? SIGTERM : profile.forcedSignal
             let schedule = preflight.preview.strategyProfile.verificationSchedule
             var report = KillReport(
                 operationID: operationID,
@@ -537,6 +560,14 @@ public final class ProcessKiller: @unchecked Sendable {
 
             let signalStart = Date()
             let targets = preflight.targets.sorted(by: Self.signalOrder)
+            let signaler = signaler
+            // The exit watcher usually ends a grace period early; a cheap
+            // existence check covers the times it cannot run.
+            @Sendable func allExited(_ group: [KillTarget]) async -> Bool {
+                guard !group.isEmpty else { return false }
+                let states = await operationState.targetStates()
+                return group.allSatisfy { states[$0.pid] == .terminated || !signaler.exists(pid: $0.pid) }
+            }
             if signaler.usesDarwinProcessNamespace {
                 let exitWatcher = KillExitWatcher()
                 let hintStream = await exitWatcher.watchHints(operationID: operationID, targets: targets)
@@ -564,7 +595,25 @@ public final class ProcessKiller: @unchecked Sendable {
             let attemptsBeforeGrace = report.attempts.count
             for target in targets {
                 appendEvent(.targetUpdated, operationID: operationID, pid: target.pid, targetState: .ready, message: "Queued \(target.name).", report: &report, eventSink: eventSink)
-                send(gracefulSignal, to: target, stage: "graceful", operationID: operationID, report: &report, eventSink: eventSink)
+            }
+            if gracefulSignal == KillSignalPhase.quitRequest {
+                // A quitting app saves its state and closes its own helpers;
+                // signalling them now would race that. Anything left after
+                // the grace period is handled by the next step.
+                var asked = false
+                if let quitPID = preflight.preview.riskAssessment.appQuitPID,
+                   let app = targets.first(where: { $0.pid == quitPID }) {
+                    asked = await requestQuit(app, operationID: operationID, report: &report, eventSink: eventSink)
+                }
+                if !asked {
+                    for target in targets {
+                        send(SIGTERM, to: target, stage: "graceful", operationID: operationID, report: &report, eventSink: eventSink)
+                    }
+                }
+            } else {
+                for target in targets {
+                    send(gracefulSignal, to: target, stage: "graceful", operationID: operationID, report: &report, eventSink: eventSink)
+                }
             }
             await reactor.recordWave(
                 signalWave(
@@ -584,8 +633,7 @@ public final class ProcessKiller: @unchecked Sendable {
                     sleeper: sleeper,
                     skipForceCheck: skipForceCheck
                 ) {
-                    let states = await operationState.targetStates()
-                    return !targets.isEmpty && targets.allSatisfy { states[$0.pid] == .terminated }
+                    await allExited(targets)
                 }
                 if graceResult.endedEarly && !graceResult.skipForceRequested {
                     await reactor.recordEarlyExitSavings(max(0, schedule.graceSeconds - graceResult.waitedSeconds))
@@ -614,11 +662,11 @@ public final class ProcessKiller: @unchecked Sendable {
                     let escalationWaveStarted = Date()
                     let attemptsBeforeEscalation = report.attempts.count
                     for target in latestLiveTargets {
-                        send(escalationSignal, to: target, stage: strategy == .gentleDevServer ? "secondary" : "forced", operationID: operationID, report: &report, eventSink: eventSink)
+                        send(escalationSignal, to: target, stage: strategy.hasSecondaryStep ? "secondary" : "forced", operationID: operationID, report: &report, eventSink: eventSink)
                     }
                     await reactor.recordWave(
                         signalWave(
-                            stage: strategy == .gentleDevServer ? "secondary" : "forced",
+                            stage: strategy.hasSecondaryStep ? "secondary" : "forced",
                             signal: escalationSignal,
                             targets: latestLiveTargets,
                             startedAt: escalationWaveStarted,
@@ -627,8 +675,7 @@ public final class ProcessKiller: @unchecked Sendable {
                     )
                     let secondaryTargets = latestLiveTargets
                     let secondaryGrace = await graceCoordinator.wait(seconds: schedule.secondaryGraceSeconds, sleeper: sleeper) {
-                        let states = await operationState.targetStates()
-                        return !secondaryTargets.isEmpty && secondaryTargets.allSatisfy { states[$0.pid] == .terminated }
+                        await allExited(secondaryTargets)
                     }
                     if secondaryGrace.endedEarly {
                         await reactor.recordEarlyExitSavings(max(0, schedule.secondaryGraceSeconds - secondaryGrace.waitedSeconds))
@@ -643,7 +690,7 @@ public final class ProcessKiller: @unchecked Sendable {
                     appendUnique(survivors: postForce.recycled.map(\.pid), to: &report.recycledPIDs)
                     latestLiveTargets = postForce.live
                     appendEvent(.verified, operationID: operationID, message: "Post-force verification: \(postForce.pass.livePIDs.count) live.", report: &report, eventSink: eventSink)
-                    if strategy == .gentleDevServer && !latestLiveTargets.isEmpty {
+                    if strategy.hasSecondaryStep && !latestLiveTargets.isEmpty {
                         appendEvent(.forcePending, operationID: operationID, message: "Gentle stop left \(latestLiveTargets.count) target\(latestLiveTargets.count == 1 ? "" : "s"); preparing SIGKILL.", report: &report, eventSink: eventSink)
                         let forceWaveStarted = Date()
                         let attemptsBeforeForce = report.attempts.count
@@ -661,8 +708,7 @@ public final class ProcessKiller: @unchecked Sendable {
                         )
                     }
                     _ = await graceCoordinator.wait(seconds: schedule.settleSeconds, sleeper: sleeper) {
-                        let states = await operationState.targetStates()
-                        return !targets.isEmpty && targets.allSatisfy { states[$0.pid] == .terminated }
+                        await allExited(targets)
                     }
                 }
             } else {
@@ -743,6 +789,10 @@ public final class ProcessKiller: @unchecked Sendable {
                 completeVerificationCount: report.reactorReport.verificationModeCounts[KillVerificationMode.completeArena.rawValue, default: 0],
                 eventTriggeredVerificationCount: report.reactorReport.verificationModeCounts[KillVerificationMode.eventTriggeredComplete.rawValue, default: 0]
             )
+            if let supervisor = preflight.preview.riskAssessment.supervisor,
+               report.survivorPIDs.isEmpty, report.partiallySucceeded {
+                await detectRespawn(of: targets, by: supervisor, since: totalStart, operationID: operationID, report: &report, eventSink: eventSink)
+            }
             appendEvent(.completed, operationID: operationID, message: report.summary, report: &report, eventSink: eventSink)
             RadarLogger.kill.info("Kill operation \(operationID.rawValue, privacy: .public) \(plan.displayName, privacy: .public) finished in \(report.timeline.totalMilliseconds, privacy: .public)ms, forced \(report.forcedPIDs.count, privacy: .public), survivors \(report.survivorPIDs.count, privacy: .public)")
             return report
@@ -935,7 +985,8 @@ public final class ProcessKiller: @unchecked Sendable {
             calibratedForceProbability: policy.simulation.forceProbability,
             calibratedSurvivorRisk: policy.simulation.survivorRisk,
             recommendedGraceSeconds: policy.profile.verificationSchedule.graceSeconds,
-            verificationPlanText: "Confirm uses a fresh complete arena; pre-force and final settle use target-only verification unless watcher drift triggers a full arena."
+            verificationPlanText: "Confirm uses a fresh complete arena; pre-force and final settle use target-only verification unless watcher drift triggers a full arena.",
+            riskAssessment: policy.risk
         )
         return Preflight(preview: preview, targets: targets, locked: locked, stale: stale, recycled: recycled)
     }
@@ -1023,64 +1074,6 @@ public final class ProcessKiller: @unchecked Sendable {
         return KillDecisionEvidence(kind: kind, title: factor.title, detail: factor.detail)
     }
 
-    private func strategyRecommendation(
-        plan: KillPlan,
-        targets: [KillTarget],
-        locked: [KillTarget],
-        stale: [KillTarget],
-        recycled: [KillTarget]
-    ) -> KillStrategyRecommendation {
-        if targets.isEmpty || locked.count >= max(3, targets.count) {
-            return KillStrategyRecommendation(
-                strategy: .inspectOnly,
-                confidence: 0.84,
-                reasons: ["Low confidence or too many protected descendants."],
-                previewText: "Inspect only; no signal should be sent until ownership is clearer."
-            )
-        }
-
-        if let history = plan.killHistory, history.operationCount >= 2 {
-            if history.survivorRate >= 0.35 || history.commonDenialCount >= 2 {
-                return KillStrategyRecommendation(
-                    strategy: .inspectOnly,
-                    confidence: 0.78,
-                    reasons: ["Recent history shows survivors or denied signals for this family."],
-                    previewText: "Inspect history before another intervention; no signal is the safest default."
-                )
-            }
-            if history.forceRate >= 0.5 {
-                return KillStrategyRecommendation(
-                    strategy: .stubbornRunaway,
-                    confidence: 0.74,
-                    reasons: ["This family often survives graceful shutdown; expect force verification."],
-                    previewText: "SIGTERM, verify, then SIGKILL same-identity survivors if needed."
-                )
-            }
-        }
-
-        let kind = plan.familyMetadata?.devKindLabel.lowercased() ?? plan.displayName.lowercased()
-        let devServerHints = ["node", "vite", "python", "ruby", "swift", "server", "bun", "deno"]
-        if devServerHints.contains(where: { kind.contains($0) || plan.displayName.lowercased().contains($0) }) {
-            return KillStrategyRecommendation(
-                strategy: .gentleDevServer,
-                confidence: 0.76,
-                reasons: ["Looks like a dev server; try SIGINT before SIGTERM."],
-                previewText: "SIGINT, verify, then SIGTERM; SIGKILL only for same-identity survivors."
-            )
-        }
-
-        if plan.familyMetadata?.forecastState == .runaway || plan.familyMetadata?.scoreLevel == .critical {
-            return KillStrategyRecommendation(
-                strategy: .stubbornRunaway,
-                confidence: 0.72,
-                reasons: ["Critical or runaway process family; expect possible force escalation."],
-                previewText: "SIGTERM, short verification, then SIGKILL same-identity survivors."
-            )
-        }
-
-        return .standard
-    }
-
     private func appendEvent(
         _ kind: KillOperationEventKind,
         operationID: KillOperationID,
@@ -1101,6 +1094,59 @@ public final class ProcessKiller: @unchecked Sendable {
         )
         report.eventHistory.append(event)
         eventSink?(event)
+    }
+
+    private func requestQuit(
+        _ target: KillTarget,
+        operationID: KillOperationID,
+        report: inout KillReport,
+        eventSink: (@Sendable (KillOperationEvent) -> Void)?
+    ) async -> Bool {
+        let accepted = await signaler.requestQuit(pid: target.pid)
+        let attempt = KillAttempt(
+            pid: target.pid,
+            signal: KillSignalPhase.quitRequest,
+            stage: "graceful",
+            succeeded: accepted,
+            message: accepted ? "" : "Not a running app; falling back to SIGTERM."
+        )
+        report.attempts.append(attempt)
+        guard accepted else { return false }
+        if !report.gracefulPIDs.contains(target.pid) { report.gracefulPIDs.append(target.pid) }
+        appendEvent(.signaled, operationID: operationID, pid: target.pid, signalName: attempt.signalName, targetState: .terminated,
+                    message: "Asked \(target.name) to quit, like \u{2318}Q.", report: &report, eventSink: eventSink)
+        return true
+    }
+
+    /// A supervisor restarts what it watches within a moment of its exit.
+    /// Looks for a fresh process with a stopped target's name that started
+    /// after this operation began.
+    private func detectRespawn(
+        of targets: [KillTarget],
+        by supervisor: KillSupervisor,
+        since start: Date,
+        operationID: KillOperationID,
+        report: inout KillReport,
+        eventSink: (@Sendable (KillOperationEvent) -> Void)?
+    ) async {
+        await sleeper(1_500_000_000)
+        guard let snapshot = try? await snapshotProvider.snapshot(policy: .verify) else { return }
+        let lites = snapshot.arena?.processes ?? snapshot.processes.map { KillProcessLite(process: $0) }
+        let stoppedNames = Set(targets.map(\.name))
+        let stopped = Set(targets.map(\.identity))
+        let started = UInt64(max(0, start.timeIntervalSince1970.rounded(.down)))
+        let respawned = lites.filter { process in
+            !stopped.contains(process.identity) &&
+                stoppedNames.contains(process.name) &&
+                process.identity.startTimeSeconds >= started &&
+                process.userID == currentUserID
+        }
+        guard !respawned.isEmpty else { return }
+        report.respawnedPIDs = respawned.map(\.pid).sorted()
+        report.respawnedBy = supervisor.name
+        appendEvent(.verified, operationID: operationID,
+                    message: "\(supervisor.name) restarted it as PID \(report.respawnedPIDs.map(String.init).joined(separator: ", ")).",
+                    report: &report, eventSink: eventSink)
     }
 
     private func send(

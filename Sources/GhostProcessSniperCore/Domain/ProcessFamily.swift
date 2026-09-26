@@ -96,7 +96,9 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
 
     public func killPlan(
         killHistory: KillHistorySummary? = nil,
-        killCalibration: KillCalibrationSnapshot? = nil
+        killCalibration: KillCalibrationSnapshot? = nil,
+        workload: KillWorkloadProfile? = nil,
+        strategyCalibrations: [KillStrategy: KillCalibrationSnapshot] = [:]
     ) -> KillPlan {
         KillPlan(
             rootIdentity: root.identity,
@@ -105,7 +107,9 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
             displayName: displayName,
             familyMetadata: KillFamilyMetadata(family: self),
             killHistory: killHistory,
-            killCalibration: killCalibration
+            killCalibration: killCalibration,
+            workload: workload ?? KillWorkloadProfile(family: self, sample: []),
+            strategyCalibrations: strategyCalibrations
         )
     }
 
