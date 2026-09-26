@@ -68,7 +68,7 @@ final class ForgottenProcessTests: XCTestCase {
         let code = process(pid: 10, name: "Electron", path: "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
                            command: "/Applications/Visual Studio Code.app/Contents/MacOS/Electron", cpu: 12,
                            startedAgo: 4 * 3_600, session: session(pid: 10, sid: 10))
-        let active = FamilyCPUActivity(buckets: [], lastActiveAt: Fixture.now.addingTimeInterval(-5), firstSeen: Fixture.now.addingTimeInterval(-4 * 3_600))
+        let active = FamilyCPUActivity(buckets: [], lastActiveAt: Fixture.now.addingTimeInterval(-5), measuredSince: Fixture.now.addingTimeInterval(-4 * 3_600))
         let assessment = ForgottenProcessAssessor.assess(root: code, context: .appBundle, activity: active,
                                                          forensics: code.forensics, workingDirectoryMissing: false, now: Fixture.now)
         XCTAssertLessThan(assessment.likelihood, 0.3)
@@ -78,7 +78,7 @@ final class ForgottenProcessTests: XCTestCase {
         let vite = process(pid: 30, command: "node /Users/dev/web/node_modules/.bin/vite", session: session(pid: 30, sid: 900),
                            ports: [5173], directory: "/Users/dev/web")
         let idle = FamilyCPUActivity(buckets: [], lastActiveAt: Fixture.now.addingTimeInterval(-40 * 60),
-                                     firstSeen: Fixture.now.addingTimeInterval(-3_000))
+                                     measuredSince: Fixture.now.addingTimeInterval(-3_000))
         let assessment = ForgottenProcessAssessor.assess(root: vite, context: .abandonedTerminalJob, activity: idle,
                                                          forensics: vite.forensics, workingDirectoryMissing: false, now: Fixture.now)
         XCTAssertGreaterThanOrEqual(assessment.likelihood, 0.8)
@@ -92,7 +92,7 @@ final class ForgottenProcessTests: XCTestCase {
     func testDeletedWorkingDirectoryIsEvidenceEvenForLaunchdJobs() {
         let agent = process(pid: 25, name: "syncd", path: "/Users/dev/bin/syncd", session: session(pid: 25, sid: 25),
                             directory: "/Users/dev/old-project")
-        let watched = FamilyCPUActivity(buckets: [], lastActiveAt: nil, firstSeen: Fixture.now.addingTimeInterval(-600))
+        let watched = FamilyCPUActivity(buckets: [], lastActiveAt: nil, measuredSince: Fixture.now.addingTimeInterval(-600))
         let kept = ForgottenProcessAssessor.assess(root: agent, context: .launchdJob, activity: watched, forensics: agent.forensics,
                                                    workingDirectoryMissing: false, now: Fixture.now)
         XCTAssertEqual(kept.likelihood, 0)
@@ -162,6 +162,28 @@ final class ForgottenProcessTests: XCTestCase {
         XCTAssertEqual(forgotten.launchContext, .abandonedTerminalJob)
         XCTAssertFalse(forgotten.facts.contains { $0.contains("was deleted") })
         XCTAssertEqual(forgotten.likelihood, 0.8, accuracy: 0.001)
+    }
+
+    /// A member outside the rich-read budget was never measured, so forty
+    /// minutes of watching it say nothing about its CPU.
+    func testIdlenessNeedsTwoFreshReads() {
+        var unmeasured = ActivityLedger()
+        var measured = ActivityLedger()
+        let start = Fixture.now.addingTimeInterval(-40 * 60)
+        var cached = FamilyCPUActivity.empty
+        var fresh = FamilyCPUActivity.empty
+        for minute in stride(from: 0, through: 40, by: 2) {
+            let date = start.addingTimeInterval(Double(minute) * 60)
+            let stale = Fixture.process(pid: 60, date: date, cpuStatus: .cached(start))
+            unmeasured.recordProcesses([stale], now: date)
+            cached = unmeasured.recordFamily(key: "stale", members: [stale], now: date)
+            // Measured from the second minute on.
+            let read = Fixture.process(pid: 61, date: date, cpuStatus: minute < 2 ? .cached(start) : .fresh)
+            measured.recordProcesses([read], now: date)
+            fresh = measured.recordFamily(key: "read", members: [read], now: date)
+        }
+        XCTAssertNil(cached.idleSeconds(at: Fixture.now))
+        XCTAssertEqual(fresh.idleSeconds(at: Fixture.now) ?? 0, 38 * 60, accuracy: 1)
     }
 
     func testZombieChildrenAreFlaggedWithoutBlankingTheFamily() throws {

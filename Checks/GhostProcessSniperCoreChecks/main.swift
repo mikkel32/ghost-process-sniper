@@ -865,7 +865,7 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
         cpu: 0,
         trend: .empty,
         score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"]),
-        cpuActivity: FamilyCPUActivity(buckets: [], lastActiveAt: nil, firstSeen: Date(timeIntervalSince1970: 12_000))
+        cpuActivity: FamilyCPUActivity(buckets: [], lastActiveAt: nil, measuredSince: Date(timeIntervalSince1970: 12_000))
     )
     let staleForecast = forecastWithFreshMeasurements(
         family: stale,

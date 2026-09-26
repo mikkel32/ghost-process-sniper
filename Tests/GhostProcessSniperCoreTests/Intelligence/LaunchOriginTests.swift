@@ -21,7 +21,7 @@ final class LaunchOriginTests: XCTestCase {
         let vite = Fixture.process(name: "node", command: "node node_modules/.bin/vite", megabytes: 300, cpu: 0, started: fourHoursAgo)
         let trend = Fixture.trend(megabytes: [300, 300, 300, 300, 300], cpu: [0, 1, 0, 0, 0])
         // Watched for two hours without doing any work.
-        let idle = FamilyCPUActivity(buckets: [], lastActiveAt: nil, firstSeen: Fixture.now.addingTimeInterval(-7_200))
+        let idle = FamilyCPUActivity(buckets: [], lastActiveAt: nil, measuredSince: Fixture.now.addingTimeInterval(-7_200))
         let family = Fixture.family(vite, trend: trend, activity: idle)
         let forecast = FamilyRiskForecaster().forecast(family: family, settings: .smart, now: Fixture.now)
         XCTAssertEqual(forecast.state, .stale)

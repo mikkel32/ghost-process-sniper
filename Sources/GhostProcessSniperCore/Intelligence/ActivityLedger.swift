@@ -24,22 +24,23 @@ public struct FamilyCPUActivity: Equatable, Sendable {
     /// Oldest first; the last bucket is the minute in progress.
     public let buckets: [CPUMinuteBucket]
     public let lastActiveAt: Date?
-    /// When the ledger first saw any member; idleness is only claimed for
-    /// time actually watched.
-    public let firstSeen: Date?
+    /// Since when the ledger has measured any member's CPU, from its first
+    /// of two fresh reads; idleness is only claimed for time measured, never
+    /// for a member outside the rich-read budget.
+    public let measuredSince: Date?
 
-    public static let empty = FamilyCPUActivity(buckets: [], lastActiveAt: nil, firstSeen: nil)
+    public static let empty = FamilyCPUActivity(buckets: [], lastActiveAt: nil, measuredSince: nil)
 
-    public init(buckets: [CPUMinuteBucket], lastActiveAt: Date?, firstSeen: Date?) {
+    public init(buckets: [CPUMinuteBucket], lastActiveAt: Date?, measuredSince: Date?) {
         self.buckets = buckets
         self.lastActiveAt = lastActiveAt
-        self.firstSeen = firstSeen
+        self.measuredSince = measuredSince
     }
 
     /// Seconds since any member last used more than 1% of a core.
     public func idleSeconds(at now: Date) -> TimeInterval? {
-        guard let firstSeen else { return nil }
-        return max(0, now.timeIntervalSince(lastActiveAt ?? firstSeen))
+        guard let measuredSince else { return nil }
+        return max(0, now.timeIntervalSince(lastActiveAt ?? measuredSince))
     }
 
     /// The trailing run of finished, well-observed minutes, oldest first.
@@ -70,6 +71,7 @@ public struct ActivityLedger: Sendable {
         var cpuSeconds: TimeInterval
         var measuredAt: Date?
         let firstSeen: Date
+        var measuredSince: Date?
         var lastActiveAt: Date?
         var lastSeen: Date
         var tickDelta: Double
@@ -96,7 +98,7 @@ public struct ActivityLedger: Sendable {
             guard var entry = processes[process.identity] else {
                 processes[process.identity] = ProcessEntry(
                     cpuSeconds: process.totalProcessorSeconds, measuredAt: freshAt, firstSeen: now,
-                    lastActiveAt: nil, lastSeen: now, tickDelta: 0, deltaTick: 0
+                    measuredSince: nil, lastActiveAt: nil, lastSeen: now, tickDelta: 0, deltaTick: 0
                 )
                 continue
             }
@@ -106,6 +108,7 @@ public struct ActivityLedger: Sendable {
                     let delta = max(0, process.totalProcessorSeconds - entry.cpuSeconds)
                     entry.tickDelta = delta
                     entry.deltaTick = tick
+                    entry.measuredSince = entry.measuredSince ?? previous
                     if delta / freshAt.timeIntervalSince(previous) > Self.activeCores {
                         entry.lastActiveAt = freshAt
                     }
@@ -128,7 +131,7 @@ public struct ActivityLedger: Sendable {
         var cpuSeconds = 0.0
         var dominant = 0.0
         var lastActiveAt: Date?
-        var firstSeen: Date?
+        var measuredSince: Date?
         for member in members {
             guard let entry = processes[member.identity] else { continue }
             if entry.deltaTick == tick {
@@ -138,7 +141,9 @@ public struct ActivityLedger: Sendable {
             if let active = entry.lastActiveAt {
                 lastActiveAt = max(lastActiveAt ?? active, active)
             }
-            firstSeen = min(firstSeen ?? entry.firstSeen, entry.firstSeen)
+            if let since = entry.measuredSince {
+                measuredSince = min(measuredSince ?? since, since)
+            }
         }
 
         let identities = Set(members.map(\.identity))
@@ -161,7 +166,7 @@ public struct ActivityLedger: Sendable {
         family.members = identities
         family.lastRecordedAt = now
         families[key] = family
-        return FamilyCPUActivity(buckets: family.buckets, lastActiveAt: lastActiveAt, firstSeen: firstSeen)
+        return FamilyCPUActivity(buckets: family.buckets, lastActiveAt: lastActiveAt, measuredSince: measuredSince)
     }
 
     /// When a process last did work, and since when it has been watched.
