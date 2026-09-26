@@ -114,7 +114,11 @@ public struct ThermalActivitySummary: Equatable, Sendable {
         }
     }
 
-    /// The most recent app that was busy before this scan and is quiet or unmeasured now.
+    /// Every measured group, quiet ones included, so the history sees moderate long loads.
+    var measuredContributorsForHistory: [ThermalContributor] { measuredContributors }
+
+    /// The heaviest recent app, by decayed load, that was busy before this scan and is
+    /// quiet or unmeasured now.
     public func earlierContributor(at now: Date) -> ThermalRecentContributor? {
         recentContributors.first {
             $0.lastActiveAt < sampledAt &&

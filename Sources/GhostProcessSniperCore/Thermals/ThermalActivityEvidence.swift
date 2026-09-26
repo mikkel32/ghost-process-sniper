@@ -36,9 +36,19 @@ public struct ThermalRecentContributor: Identifiable, Equatable, Sendable {
     public let lastActiveAt: Date
     public let activeSampleCount: Int
     public let isSystemProcess: Bool
+    /// Decayed accumulated activity (CPU capacity or reported GPU, whichever is higher)
+    /// as of `sustainedLoadAt`. Recent readings weigh more, like chip temperature does.
+    public let sustainedLoadPercent: Double
+    public let sustainedLoadAt: Date
 
     public var activeSpanSeconds: TimeInterval {
         max(0, lastActiveAt.timeIntervalSince(firstActiveAt))
+    }
+
+    /// The load keeps decaying between readings; it never grows without a new one.
+    public func sustainedLoad(at now: Date) -> Double {
+        guard (0...ThermalActivityHistory.maximumAge).contains(now.timeIntervalSince(lastActiveAt)) else { return 0 }
+        return sustainedLoadPercent * exp(-max(0, now.timeIntervalSince(sustainedLoadAt)) / ThermalActivityHistory.loadTimeConstant)
     }
 }
 
