@@ -22,7 +22,7 @@ public final class ProcessMonitor {
     public private(set) var performanceMetrics: RadarPerformanceMetrics = .empty
     public private(set) var scannerHealth: ScannerHealthSnapshot = .starting
     public private(set) var storeHealth: StoreHealth = .empty
-    public private(set) var storeError: String?
+    public internal(set) var storeError: String?
     public private(set) var publishedState: ProcessMonitorPublishedState = .empty
     public private(set) var systemPressure: SystemMemoryPressure = .unknown
     public private(set) var selfUsage: SelfResourceUsage = .unknown
@@ -54,7 +54,11 @@ public final class ProcessMonitor {
     @ObservationIgnored private(set) var rerunCount = 0
     @ObservationIgnored var postKillTask: Task<Void, Never>?
     @ObservationIgnored var settingsSaveTask: Task<Void, Never>?
-    @ObservationIgnored private var didLoadPersistedSettings = false
+    @ObservationIgnored var didLoadPersistedSettings = false
+    /// What `settings` held before the stored settings loaded; a field that
+    /// differs from it was edited and wins over the stored value.
+    @ObservationIgnored let settingsBeforeLoad: ThresholdSettings
+    @ObservationIgnored var settingsLoad: Task<Bool, Never>?
     @ObservationIgnored var visibleSurfaces: Set<RadarSurface> = []
     @ObservationIgnored private var focusedSignatureIDs: Set<String> = []
     @ObservationIgnored private var portCensusRequested = false
@@ -80,6 +84,7 @@ public final class ProcessMonitor {
         thermalSampler: any ThermalSampling = ThermalSampler()
     ) {
         self.settings = settings
+        settingsBeforeLoad = settings
         self.store = store
         self.thermalSampler = thermalSampler
         self.notifier = notifier
@@ -103,9 +108,10 @@ public final class ProcessMonitor {
         // Utility QoS keeps hidden sampling, scoring and store work off the
         // performance cores; a visible caller awaiting it escalates it.
         refreshTask = Task(priority: .utility) { @MainActor [weak self] in
-            await self?.loadPersistedSettingsIfNeeded()
             var isFirstTick = true
             while !Task.isCancelled {
+                // Retried every tick until it succeeds: saves wait for it.
+                await self?.loadPersistedSettingsIfNeeded()
                 guard let interval = await self?.runLoopTick(isFirstTick: isFirstTick) else { return }
                 isFirstTick = false
                 let sleeper = self?.startSleepUntilNextTick(interval)
@@ -272,14 +278,6 @@ public final class ProcessMonitor {
 
     public func removePublishedStateObserver(_ id: UUID) {
         publishedStateObservers[id] = nil
-    }
-
-    public func saveSettingsDebounced(delay: TimeInterval = 0.45) {
-        settingsSaveTask?.cancel()
-        let settings = settings
-        settingsSaveTask = DebouncedTask.schedule(delay: delay) { [store] in
-            try? await store?.saveSettings(settings)
-        }
     }
 
     public func focusFamilies(signatureIDs: Set<String>) {
@@ -458,15 +456,9 @@ public final class ProcessMonitor {
         RadarStore()
     }
 
-    private func loadPersistedSettingsIfNeeded() async {
-        guard !didLoadPersistedSettings else {
-            return
-        }
-        didLoadPersistedSettings = true
+    /// Shown until the first refresh publishes its own.
+    func loadStoredRulesAndIncidents() async {
         do {
-            if let loaded = try await store?.loadSettings(defaults: settings) {
-                settings = loaded
-            }
             rules = try await store?.loadRules(settings: settings) ?? RadarRule.builtIns(settings: settings)
             incidents = try await store?.recentIncidents() ?? []
         } catch {

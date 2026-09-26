@@ -3,6 +3,7 @@ import Foundation
 public enum RadarStoreError: Error, LocalizedError {
     case openFailed(String)
     case sqlite(String)
+    case unreadSettings
 
     public var errorDescription: String? {
         switch self {
@@ -10,6 +11,8 @@ public enum RadarStoreError: Error, LocalizedError {
             "Unable to open radar store: \(message)"
         case .sqlite(let message):
             "Radar store error: \(message)"
+        case .unreadSettings:
+            "Radar store error: saved settings were not loaded yet, so they were left as they are"
         }
     }
 }
@@ -44,6 +47,9 @@ public actor RadarStore {
     private var lastContextMilliseconds = 0.0
     private var skippedSettingsWriteCount = 0
     private var lastSettingsJSON: String?
+    /// A save from a caller that never saw the stored settings would put
+    /// its defaults over them.
+    private var hasReadSettings = false
     private var lastErrorMessage: String?
     private var droppedModelCount = 0
     private var isClosed = false
@@ -75,13 +81,17 @@ public actor RadarStore {
 
     public func loadSettings(defaults: ThresholdSettings) throws -> ThresholdSettings {
         let db = try ensureOpen()
-        guard let json = try db.string("SELECT json FROM settings WHERE key = 'thresholds' LIMIT 1") else {
+        let json = try db.string("SELECT json FROM settings WHERE key = 'thresholds' LIMIT 1")
+        hasReadSettings = true
+        guard let json else {
             return defaults
         }
         lastSettingsJSON = json
         return codec.decode(ThresholdSettings.self, from: json) ?? defaults
     }
 
+    /// Throws `unreadSettings` instead of replacing stored settings that
+    /// this store never loaded.
     public func saveSettings(_ settings: ThresholdSettings) throws {
         let db = try ensureOpen()
         let json = try codec.encode(settings)
@@ -89,10 +99,15 @@ public actor RadarStore {
             skippedSettingsWriteCount += 1
             return
         }
-        if let stored = try db.string("SELECT json FROM settings WHERE key = 'thresholds' LIMIT 1"), stored == json {
-            lastSettingsJSON = json
-            skippedSettingsWriteCount += 1
-            return
+        if let stored = try db.string("SELECT json FROM settings WHERE key = 'thresholds' LIMIT 1") {
+            if stored == json {
+                lastSettingsJSON = json
+                skippedSettingsWriteCount += 1
+                return
+            }
+            guard hasReadSettings else {
+                throw RadarStoreError.unreadSettings
+            }
         }
         try db.execute(
             "INSERT INTO settings(key, json, updated_at) VALUES('thresholds', ?, ?) " +
