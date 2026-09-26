@@ -50,6 +50,7 @@ public struct ProcessFamilyBuilder: Sendable {
         classifier: DevProcessClassifier = DevProcessClassifier(),
         currentUserID: UInt32 = UInt32(geteuid()),
         processorCount: Int = ProcessInfo.processInfo.activeProcessorCount,
+        physicalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory,
         directoryExists: @escaping @Sendable (String) -> Bool = { WorkingDirectoryProbe.exists($0) }
     ) {
         self.classifier = classifier
@@ -57,7 +58,7 @@ public struct ProcessFamilyBuilder: Sendable {
         self.processorCount = max(1, processorCount)
         self.directories = DirectoryExistenceCache(check: directoryExists)
         self.duplicateDetector = DuplicateClusterDetector(classifier: classifier, currentUserID: currentUserID)
-        self.hardwareDetector = HardwareOffenderDetector(currentUserID: currentUserID)
+        self.hardwareDetector = HardwareOffenderDetector(currentUserID: currentUserID, physicalMemoryBytes: physicalMemoryBytes)
     }
 
     public func buildFamilies(
