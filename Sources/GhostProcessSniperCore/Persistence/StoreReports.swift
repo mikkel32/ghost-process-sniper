@@ -43,7 +43,8 @@ extension RadarStore {
             "Forecasts: \(forecasts.count), predictive alerts: \(alerts.count)",
             "Recent kills: \(kills.count)",
             "Last kill: \(kills.first?.summary ?? "none")",
-            "Error: \(health.errorMessage ?? "none")"
+            "Error: \(health.errorMessage ?? "none")",
+            "Recovered from a corrupt file this session: \(health.recoveredFromCorruption ? "yes" : "no")"
         ].joined(separator: "\n")
     }
 }

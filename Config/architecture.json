@@ -14,7 +14,6 @@
     "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 656,
     "GhostProcessSniperCore/Domain/ScannerModels.swift": 695,
     "GhostProcessSniperCore/Configuration/SettingsPerformanceModels.swift": 771,
-    "GhostProcessSniperCore/Intelligence/ForecastModels.swift": 767,
-    "GhostProcessSniperCore/Monitoring/RadarEngine.swift": 605
+    "GhostProcessSniperCore/Intelligence/ForecastModels.swift": 767
   }
 }

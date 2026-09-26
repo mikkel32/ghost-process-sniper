@@ -455,7 +455,7 @@ public final class ProcessMonitor {
     }
 
     nonisolated public static func createDefaultStore() -> RadarStore? {
-        try? RadarStore()
+        RadarStore()
     }
 
     private func loadPersistedSettingsIfNeeded() async {
@@ -505,7 +505,7 @@ public final class ProcessMonitor {
             latestSpikePhase: mergedReport.latestSpikePhase,
             smoothnessReport: mergedReport
         )
-        storeError = state.storeError
+        storeError = state.storeError ?? state.storeHealth.errorMessage
         storeHealth = state.storeHealth
         scannerHealth = state.scannerHealth
 
@@ -522,7 +522,7 @@ public final class ProcessMonitor {
             metrics: performance,
             health: state.health,
             storeHealth: state.storeHealth,
-            storeError: state.storeError,
+            storeError: storeError,
             summary: state.summary,
             generatedAt: payload.generatedAt
         )

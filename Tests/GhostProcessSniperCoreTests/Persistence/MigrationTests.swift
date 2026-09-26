@@ -29,7 +29,7 @@ final class MigrationTests: XCTestCase {
         XCTAssertEqual(try userVersion(handle), 0)
         sqlite3_close(handle)
 
-        let store = try RadarStore(url: url)
+        let store = RadarStore(url: url)
         let rules = try await store.loadRules(includeBuiltIns: false)
         XCTAssertEqual(rules.map(\.id), [rule.id])
 

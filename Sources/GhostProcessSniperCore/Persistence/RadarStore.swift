@@ -16,9 +16,13 @@ public enum RadarStoreError: Error, LocalizedError {
 
 /// Settings, rules, context and write batching. Tables with their own logic
 /// live in collaborators that share this actor's connection and never escape it.
+///
+/// The database opens on first use, on this actor, so creating the store on
+/// the main actor at launch does no SQLite work there.
 public actor RadarStore {
     public static let denseSampleRetention: TimeInterval = 7 * 24 * 60 * 60
     public static let incidentRetention: TimeInterval = 90 * 24 * 60 * 60
+    static let openRetryInterval: TimeInterval = 30
 
     typealias BindingValue = SQLiteValue
 
@@ -28,6 +32,9 @@ public actor RadarStore {
     private let baselineBook: BaselineBook
     private let incidentLedger: IncidentLedger
     private let forecastLedger: ForecastLedger
+    private let clock: @Sendable () -> Date
+    private var openFailure: (date: Date, error: any Error)?
+    private var recoveredFromCorruption = false
     private var pendingModels: [(RadarModel, ThresholdSettings)] = []
     private var pendingActions: [PendingAction] = []
     private var lastFlushDate: Date?
@@ -44,16 +51,18 @@ public actor RadarStore {
     private var rulesCacheHitCount = 0
     private var rulesRevision = 0
 
-    public init(url: URL = RadarStore.defaultURL()) throws {
-        let database = SQLiteDatabase(url: url)
+    public init(url: URL = RadarStore.defaultURL()) {
+        self.init(url: url, busyTimeoutMilliseconds: 2_000, clock: { Date() })
+    }
+
+    init(url: URL, busyTimeoutMilliseconds: Int32, clock: @escaping @Sendable () -> Date) {
+        let database = SQLiteDatabase(url: url, busyTimeoutMilliseconds: busyTimeoutMilliseconds)
         self.url = url
+        self.clock = clock
         db = database
         baselineBook = BaselineBook(db: database)
         incidentLedger = IncidentLedger(db: database, codec: codec)
         forecastLedger = ForecastLedger(db: database)
-        try database.open()
-        try database.migrate(RadarStoreSchema.migrations)
-        RadarLogger.store.info("Radar store opened at \(url.path, privacy: .private)")
     }
 
     public static func defaultURL() -> URL {
@@ -65,6 +74,7 @@ public actor RadarStore {
     }
 
     public func loadSettings(defaults: ThresholdSettings) throws -> ThresholdSettings {
+        let db = try ensureOpen()
         guard let json = try db.string("SELECT json FROM settings WHERE key = 'thresholds' LIMIT 1") else {
             return defaults
         }
@@ -73,6 +83,7 @@ public actor RadarStore {
     }
 
     public func saveSettings(_ settings: ThresholdSettings) throws {
+        let db = try ensureOpen()
         let json = try codec.encode(settings)
         if lastSettingsJSON == json {
             skippedSettingsWriteCount += 1
@@ -101,6 +112,7 @@ public actor RadarStore {
         defer {
             lastContextMilliseconds = Date().timeIntervalSince(contextStart) * 1_000
         }
+        try ensureOpen()
         try pruneIfNeeded(now: now)
         let signatureIDs = Array(Set(families.map(\.signature.id)))
         let rules = try rulesForContext(settings: settings)
@@ -133,7 +145,7 @@ public actor RadarStore {
 
         let flushStart = Date()
         do {
-            try db.transaction {
+            try ensureOpen().transaction {
                 var latestForecastFamilies: [String: ProcessFamily] = [:]
                 var forecastCandidates = 0
                 for (model, settings) in models {
@@ -179,20 +191,24 @@ public actor RadarStore {
             coalescingStats: forecastLedger.lastStats,
             rulesCacheHitCount: rulesCacheHitCount,
             errorMessage: lastErrorMessage,
-            lastKillOperationSummary: lastKillOperationSummary
+            lastKillOperationSummary: lastKillOperationSummary,
+            recoveredFromCorruption: recoveredFromCorruption
         )
     }
 
     public func recentIncidents(limit: Int = 80) throws -> [RadarIncident] {
-        try incidentLedger.recent(limit: limit)
+        try ensureOpen()
+        return try incidentLedger.recent(limit: limit)
     }
 
     public func recentForecasts(limit: Int = 80) throws -> [ForecastStoreSnapshot] {
-        try forecastLedger.recentForecasts(limit: limit)
+        try ensureOpen()
+        return try forecastLedger.recentForecasts(limit: limit)
     }
 
     public func recentPredictiveAlerts(limit: Int = 80) throws -> [PredictiveAlert] {
-        try forecastLedger.recentPredictiveAlerts(limit: limit)
+        try ensureOpen()
+        return try forecastLedger.recentPredictiveAlerts(limit: limit)
     }
 
     public func loadRules(includeBuiltIns: Bool = true, settings: ThresholdSettings = .aggressive) throws -> [RadarRule] {
@@ -203,6 +219,7 @@ public actor RadarStore {
             rulesCacheHitCount += 1
             return cachedStoredRules
         }
+        let db = try ensureOpen()
         var rules: [RadarRule] = []
         let now = Date()
         try db.query("SELECT json FROM rules ORDER BY created_at DESC") { row in
@@ -240,6 +257,7 @@ public actor RadarStore {
     }
 
     public func saveRule(_ rule: RadarRule) throws {
+        let db = try ensureOpen()
         let json = try codec.encode(rule)
         try db.execute(
             "INSERT INTO rules(id, json, created_at) VALUES(?, ?, ?) " +
@@ -253,7 +271,7 @@ public actor RadarStore {
     }
 
     public func deleteRule(id: UUID) throws {
-        try db.execute("DELETE FROM rules WHERE id = ?", .text(id.uuidString))
+        try ensureOpen().execute("DELETE FROM rules WHERE id = ?", .text(id.uuidString))
         invalidateRulesCache()
     }
 
@@ -288,7 +306,7 @@ public actor RadarStore {
 
     public func actionSummaries(kind: RadarActionType, limit: Int = 20) throws -> [String] {
         var summaries: [String] = []
-        try db.query(
+        try ensureOpen().query(
             "SELECT summary FROM actions WHERE kind = ? ORDER BY created_at DESC LIMIT ?",
             [.text(kind.rawValue), .int64(Int64(limit))]
         ) { row in
@@ -303,6 +321,7 @@ public actor RadarStore {
         if let lastPruneDate, now.timeIntervalSince(lastPruneDate) < 24 * 60 * 60 {
             return
         }
+        let db = try ensureOpen()
         let sampleCutoff = now.addingTimeInterval(-RadarStore.denseSampleRetention).timeIntervalSince1970
         let cutoff = now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970
         try db.execute("DELETE FROM samples WHERE sampled_at < ?", .double(sampleCutoff))
@@ -325,7 +344,7 @@ public actor RadarStore {
     }
 
     private func writeAction(_ action: PendingAction) throws {
-        try db.execute(
+        try ensureOpen().execute(
             "INSERT INTO actions(id, signature_id, kind, summary, created_at) VALUES(?, ?, ?, ?, ?)",
             .text(action.id.uuidString),
             action.signatureID.map { .text($0) } ?? .null,
@@ -333,6 +352,57 @@ public actor RadarStore {
             .text(action.summary),
             .double(action.createdAt.timeIntervalSince1970)
         )
+    }
+
+    /// Opens and migrates on first use. After a failure it retries at most
+    /// once per `openRetryInterval`, rethrowing the last error in between so
+    /// callers can surface it.
+    @discardableResult
+    private func ensureOpen() throws -> SQLiteDatabase {
+        if db.isOpen {
+            return db
+        }
+        let now = clock()
+        if let openFailure, now.timeIntervalSince(openFailure.date) < Self.openRetryInterval {
+            throw openFailure.error
+        }
+        do {
+            try openAndMigrate(now: now)
+        } catch {
+            openFailure = (now, error)
+            lastErrorMessage = error.localizedDescription
+            RadarLogger.store.error("Radar store unavailable: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+        if openFailure != nil {
+            openFailure = nil
+            lastErrorMessage = nil
+        }
+        RadarLogger.store.info("Radar store opened at \(self.url.path, privacy: .private)")
+        return db
+    }
+
+    private func openAndMigrate(now: Date) throws {
+        do {
+            try openMigrated()
+        } catch where db.lastFailureIsCorruption {
+            // A corrupt file would otherwise disable learning on every launch.
+            let moved = db.quarantineFiles(at: now)
+            RadarLogger.store.error("Radar store was corrupt; moved it to \(moved.lastPathComponent, privacy: .public) and started fresh")
+            try openMigrated()
+            recoveredFromCorruption = true
+        }
+    }
+
+    /// A half-migrated connection must not look open to the next caller.
+    private func openMigrated() throws {
+        try db.open()
+        do {
+            try db.migrate(RadarStoreSchema.migrations)
+        } catch {
+            db.close()
+            throw error
+        }
     }
 
     private struct PendingAction {
@@ -348,15 +418,15 @@ public actor RadarStore {
 // statements themselves.
 extension RadarStore {
     func transaction(_ body: () throws -> Void) throws {
-        try db.transaction(body)
+        try ensureOpen().transaction(body)
     }
 
     func execute(_ sql: String, _ values: BindingValue...) throws {
-        try db.execute(sql, values: values)
+        try ensureOpen().execute(sql, values: values)
     }
 
     func prepare(_ sql: String) throws -> OpaquePointer? {
-        try db.prepare(sql)
+        try ensureOpen().prepare(sql)
     }
 
     func bind(_ value: BindingValue, to statement: OpaquePointer?, index: Int32) {

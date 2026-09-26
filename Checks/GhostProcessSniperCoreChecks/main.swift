@@ -1786,7 +1786,7 @@ private func monitorPublishObserversCanMutateRegistrationDuringCallback() throws
 private func radarStorePersistsSettingsRulesAndIncidents() async throws {
     let url = temporaryStoreURL()
     defer { try? FileManager.default.removeItem(at: url) }
-    let store = try RadarStore(url: url)
+    let store = RadarStore(url: url)
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 42_000_000
 
@@ -1829,7 +1829,7 @@ private func radarStorePersistsSettingsRulesAndIncidents() async throws {
 private func radarStoreQueriesIncidentsAndTogglesRules() async throws {
     let url = temporaryStoreURL()
     defer { try? FileManager.default.removeItem(at: url) }
-    let store = try RadarStore(url: url)
+    let store = RadarStore(url: url)
     let settings = ThresholdSettings.aggressive
     let family = hotFamily(pid: 505, memory: 700_000_000, cpu: 95)
     let model = RadarModel(
@@ -1861,7 +1861,7 @@ private func radarStoreQueriesIncidentsAndTogglesRules() async throws {
 private func radarStorePersistsForecastSnapshots() async throws {
     let url = temporaryStoreURL()
     defer { try? FileManager.default.removeItem(at: url) }
-    let store = try RadarStore(url: url)
+    let store = RadarStore(url: url)
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 500 * 1_048_576
     let base = forecastFamily(
@@ -1904,7 +1904,7 @@ private func radarStorePersistsForecastSnapshots() async throws {
 private func radarStoreCoalescesRecommendationHistory() async throws {
     let url = temporaryStoreURL()
     defer { try? FileManager.default.removeItem(at: url) }
-    let store = try RadarStore(url: url)
+    let store = RadarStore(url: url)
     let base = forecastFamily(
         pid: 507,
         memory: 350 * 1_048_576,
@@ -1945,7 +1945,7 @@ private func radarStoreCoalescesRecommendationHistory() async throws {
 private func monitorDebouncesSettingsPersistence() async throws {
     let url = temporaryStoreURL()
     defer { try? FileManager.default.removeItem(at: url) }
-    let store = try RadarStore(url: url)
+    let store = RadarStore(url: url)
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 123_000_000
     let monitor = ProcessMonitor(
@@ -1965,7 +1965,7 @@ private func monitorDebouncesSettingsPersistence() async throws {
 private func radarStoreBatchesQueuedWrites() async throws {
     let url = temporaryStoreURL()
     defer { try? FileManager.default.removeItem(at: url) }
-    let store = try RadarStore(url: url)
+    let store = RadarStore(url: url)
     let settings = ThresholdSettings.aggressive
     let family = hotFamily(pid: 510, memory: 300_000_000, cpu: 90)
     let model = RadarModel(
@@ -1989,7 +1989,7 @@ private func radarStoreBatchesQueuedWrites() async throws {
 private func radarStoreSkipsUnchangedSettingsAndBatchesContext() async throws {
     let url = temporaryStoreURL()
     defer { try? FileManager.default.removeItem(at: url) }
-    let store = try RadarStore(url: url)
+    let store = RadarStore(url: url)
     let settings = ThresholdSettings.aggressive
 
     try await store.saveSettings(settings)
@@ -2009,7 +2009,7 @@ private func radarStoreSkipsUnchangedSettingsAndBatchesContext() async throws {
 private func radarStoreCachesQuietRuleContext() async throws {
     let url = temporaryStoreURL()
     defer { try? FileManager.default.removeItem(at: url) }
-    let store = try RadarStore(url: url)
+    let store = RadarStore(url: url)
     let family = hotFamily(pid: 518, memory: 400_000_000, cpu: 12)
     let rule = RadarRule(
         name: "Quiet node check",
@@ -2154,7 +2154,7 @@ private func radarRuleEngineMatchesAdvisoryRules() throws {
 private func monitorPersistsIncidentsWithInjectedStore() async throws {
     let url = temporaryStoreURL()
     defer { try? FileManager.default.removeItem(at: url) }
-    let store = try RadarStore(url: url)
+    let store = RadarStore(url: url)
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 50_000_000
     let monitor = ProcessMonitor(
@@ -3287,7 +3287,7 @@ private func syntheticKillPreviewBenchmark(processCount: Int, maxMilliseconds: D
 }
 
 private func radarStoreRecordsKillActions() async throws {
-    let store = try RadarStore(url: temporaryStoreURL())
+    let store = RadarStore(url: temporaryStoreURL())
     let family = hotFamily(pid: 95, memory: 700_000_000, cpu: 75)
     let report = KillReport(displayName: "node", rootPID: 95, gracefulPIDs: [95])
 
@@ -3299,7 +3299,7 @@ private func radarStoreRecordsKillActions() async throws {
 }
 
 private func radarStoreRecordsStructuredKillOperations() async throws {
-    let store = try RadarStore(url: temporaryStoreURL())
+    let store = RadarStore(url: temporaryStoreURL())
     let family = hotFamily(pid: 97, memory: 700_000_000, cpu: 75)
     let report = KillReport(
         displayName: "node",
@@ -3320,7 +3320,7 @@ private func radarStoreRecordsStructuredKillOperations() async throws {
 }
 
 private func radarStoreRecordsKillEventsAndLearning() async throws {
-    let store = try RadarStore(url: temporaryStoreURL())
+    let store = RadarStore(url: temporaryStoreURL())
     let family = hotFamily(pid: 98, memory: 900_000_000, cpu: 88)
     let operationID = KillOperationID(rawValue: "op-events")
     let report = KillReport(
@@ -3362,7 +3362,7 @@ private func radarStoreRecordsKillEventsAndLearning() async throws {
 }
 
 private func radarStoreRecordsInterventionKernelTables() async throws {
-    let store = try RadarStore(url: temporaryStoreURL())
+    let store = RadarStore(url: temporaryStoreURL())
     let family = hotFamily(pid: 99, memory: 800_000_000, cpu: 80)
     let operationID = KillOperationID(rawValue: "kernel-tables")
     let report = KillReport(
@@ -3406,7 +3406,7 @@ private func radarStoreRecordsInterventionKernelTables() async throws {
 }
 
 private func radarStoreRecordsKillCalibrationAggregates() async throws {
-    let store = try RadarStore(url: temporaryStoreURL())
+    let store = RadarStore(url: temporaryStoreURL())
     let family = hotFamily(pid: 100, memory: 500_000_000, cpu: 50)
     let first = KillReport(
         operationID: KillOperationID(rawValue: "calibration-1"),
