@@ -70,7 +70,7 @@ struct FamilyDetailConsoleView: View {
                     .font(.caption)
                     .foregroundStyle(panel.change.level > .quiet ? RadarStyle.color(for: panel.change.level) : .secondary)
                     .lineLimit(1)
-                    .help("How memory and CPU moved over the last half minute")
+                    .help("How memory and CPU moved across the recent trend window")
                 Label(FamilyDetailPanelModel.lastScoredText(lastScoredAt), systemImage: "clock")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)

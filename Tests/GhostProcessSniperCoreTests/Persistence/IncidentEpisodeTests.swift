@@ -126,7 +126,7 @@ final class IncidentEpisodeTests: XCTestCase {
         XCTAssertEqual(incident.lastSeenAt, at(0))
     }
 
-    func testRecurrenceSortSumsEpisodeHits() {
+    func testRecurrenceSortRanksReopenedEpisodeAboveSingleHits() {
         let signature = ProcessSignature(id: "a", displayName: "a", canonicalPath: "/a", commandFingerprint: "a")
         let other = ProcessSignature(id: "b", displayName: "b", canonicalPath: "/b", commandFingerprint: "b")
         let reopened = incident(signature: signature, hits: 4, lastSeen: at(0))
