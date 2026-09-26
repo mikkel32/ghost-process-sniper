@@ -20,8 +20,10 @@ final class StopRiskMemoTests: XCTestCase {
         var cache = StopRiskCache()
         _ = cache.entry(for: family, sample: family.members, revision: 1, liveFamilyKeys: [family.familyKey])
         let busier = Self.electronFamily(cpu: 80)
-        _ = cache.entry(for: busier, sample: busier.members, revision: 2, liveFamilyKeys: [busier.familyKey])
+        let entry = cache.entry(for: busier, sample: busier.members, revision: 2, liveFamilyKeys: [busier.familyKey])
         XCTAssertEqual(cache.assessmentCount, 1, "metrics change every refresh; identities do not")
+        XCTAssertEqual(entry.workload.root?.cpuPercent, 80, "the reclaim estimate reads the latest radar numbers")
+        XCTAssertEqual(entry.workload.processes.map(\.cpuPercent), Array(repeating: 80, count: busier.members.count))
     }
 
     func testMembershipChangeRecomputes() {
@@ -67,6 +69,22 @@ final class StopRiskMemoTests: XCTestCase {
         let risk = monitor.stopRisk(for: family)
         let plan = await monitor.killPlan(for: family)
         XCTAssertEqual(KillRiskAssessor().assess(plan.workload ?? .empty), risk)
+        XCTAssertEqual(monitor.stopRiskCache.assessmentCount, 1)
+    }
+
+    @MainActor
+    func testPlanWorkloadFollowsTheLatestSample() async {
+        let monitor = ProcessMonitor(builder: ProcessFamilyBuilder(currentUserID: 501), store: nil)
+        let idle = Self.electronFamily(cpu: 5)
+        monitor.ingest(idle.members)
+        _ = monitor.stopRisk(for: idle)
+        _ = await monitor.killPlan(for: idle)
+
+        let runaway = Self.electronFamily(cpu: 300)
+        monitor.ingest(runaway.members)
+        let plan = await monitor.killPlan(for: runaway)
+
+        XCTAssertEqual(plan.workload?.root?.cpuPercent, 300, "a preview after a spike must not show the idle scan's CPU")
         XCTAssertEqual(monitor.stopRiskCache.assessmentCount, 1)
     }
 

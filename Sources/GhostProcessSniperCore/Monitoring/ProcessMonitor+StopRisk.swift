@@ -3,10 +3,12 @@ import Foundation
 /// Stop risk for family pages and stop plans. Assessing reads the name, path
 /// and command line of everything the stop would hit, so it runs once per
 /// change in that set instead of on every render; metrics change each
-/// refresh, identities don't.
+/// refresh, identities don't. The workload is rebuilt per sample because the
+/// reclaim estimate and preflight read its CPU and memory.
 struct StopRiskCache {
     struct Entry {
         let key: Int
+        let revision: UInt64
         let workload: KillWorkloadProfile
         let risk: KillRiskAssessment
     }
@@ -36,12 +38,19 @@ struct StopRiskCache {
         index = sampleIndex
         let stopSet = KillWorkloadProfile.stopSet(root: family.root, index: sampleIndex, family: family)
         let key = Self.key(root: family.root, stopSet: stopSet)
-        if let entry = entries[family.familyKey], entry.key == key {
-            return entry
+        let memo = entries[family.familyKey].flatMap { $0.key == key ? $0 : nil }
+        if let memo, memo.revision == sampleRevision {
+            return memo
         }
         let workload = KillWorkloadProfile(root: family.root, stopSet: stopSet, index: sampleIndex)
-        let entry = Entry(key: key, workload: workload, risk: assessor.assess(workload))
-        assessmentCount += 1
+        let risk: KillRiskAssessment
+        if let memo {
+            risk = memo.risk
+        } else {
+            risk = assessor.assess(workload)
+            assessmentCount += 1
+        }
+        let entry = Entry(key: key, revision: sampleRevision, workload: workload, risk: risk)
         entries[family.familyKey] = entry
         return entry
     }
