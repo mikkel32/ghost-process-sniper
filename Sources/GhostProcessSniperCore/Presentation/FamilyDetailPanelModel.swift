@@ -84,6 +84,8 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
     public let trendVelocityMegabytesPerMinute: Double
     public let memoryPattern: MemoryPatternAnalysis
     public let verdict: FamilyVerdict
+    public let brief: FamilyDecisionBrief
+    public let processTree: [FamilyProcessTreeRow]
     public let forecastETASeconds: TimeInterval?
     public let scoreValue: Double
     public let isKillable: Bool
@@ -158,6 +160,8 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         )
         memoryPattern = patternAnalysis
         verdict = FamilyVerdict.synthesize(family: family, pattern: patternAnalysis)
+        brief = FamilyDecisionBrief(family: family, verdict: verdict, assessment: assessment, pattern: patternAnalysis, culprit: culprit)
+        processTree = FamilyProcessTreeRow.build(members: family.members, root: family.root, ownedIdentities: family.ownedIdentities)
         forecastETASeconds = family.forecast.etaSeconds
         scoreValue = family.score.value
         isKillable = family.isKillable
