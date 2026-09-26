@@ -4,6 +4,7 @@ import XCTest
 @testable import GhostProcessSniperCore
 
 final class MigrationTests: XCTestCase {
+    private let latest = RadarStoreSchema.migrations.map(\.version).max() ?? 0
     private var folder: URL!
 
     override func setUpWithError() throws {
@@ -15,7 +16,7 @@ final class MigrationTests: XCTestCase {
         try? FileManager.default.removeItem(at: folder)
     }
 
-    func testUnversionedStoreOpensAsVersionOneWithRowsIntact() async throws {
+    func testUnversionedStoreMigratesWithRowsIntact() async throws {
         let url = folder.appendingPathComponent("Radar.sqlite")
         var handle: OpaquePointer?
         XCTAssertEqual(sqlite3_open(url.path, &handle), SQLITE_OK)
@@ -35,22 +36,24 @@ final class MigrationTests: XCTestCase {
 
         let reopened = SQLiteDatabase(url: url)
         try reopened.open()
-        XCTAssertEqual(try reopened.userVersion(), 1)
+        XCTAssertEqual(try reopened.userVersion(), latest)
         XCTAssertEqual(try reopened.migrate(RadarStoreSchema.migrations), [], "a current store must open without migrating")
         XCTAssertEqual(try reopened.string("SELECT id FROM rules"), rule.id.uuidString)
+        let indexes = "SELECT group_concat(name) FROM sqlite_master WHERE type = 'index' AND name LIKE 'incidents_signature_started%'"
+        XCTAssertEqual(try reopened.string(indexes), "incidents_signature_started_resolved")
     }
 
     func testNewerVersionAppliesOnceAndKeepsRows() throws {
         let database = SQLiteDatabase(url: folder.appendingPathComponent("Radar.sqlite"))
         try database.open()
-        XCTAssertEqual(try database.migrate(RadarStoreSchema.migrations), [1])
+        XCTAssertEqual(try database.migrate(RadarStoreSchema.migrations), RadarStoreSchema.migrations.map(\.version))
         try database.execute("INSERT INTO settings(key, json, updated_at) VALUES('thresholds', '{}', 1)")
 
         let next = RadarStoreSchema.migrations + [
-            SQLiteMigration(version: 2, statements: ["CREATE TABLE extra(id INTEGER PRIMARY KEY)"])
+            SQLiteMigration(version: latest + 1, statements: ["CREATE TABLE extra(id INTEGER PRIMARY KEY)"])
         ]
-        XCTAssertEqual(try database.migrate(next), [2])
-        XCTAssertEqual(try database.userVersion(), 2)
+        XCTAssertEqual(try database.migrate(next), [latest + 1])
+        XCTAssertEqual(try database.userVersion(), latest + 1)
         XCTAssertEqual(try database.string("SELECT json FROM settings WHERE key = 'thresholds'"), "{}")
         XCTAssertEqual(try database.migrate(next), [])
     }
@@ -60,10 +63,10 @@ final class MigrationTests: XCTestCase {
         try database.open()
         try database.migrate(RadarStoreSchema.migrations)
         let broken = RadarStoreSchema.migrations + [
-            SQLiteMigration(version: 2, statements: ["CREATE TABLE half(id INTEGER)", "NOT SQL"])
+            SQLiteMigration(version: latest + 1, statements: ["CREATE TABLE half(id INTEGER)", "NOT SQL"])
         ]
         XCTAssertThrowsError(try database.migrate(broken))
-        XCTAssertEqual(try database.userVersion(), 1)
+        XCTAssertEqual(try database.userVersion(), latest)
         XCTAssertNil(try database.string("SELECT name FROM sqlite_master WHERE name = 'half'"))
     }
 

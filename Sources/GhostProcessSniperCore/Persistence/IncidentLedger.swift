@@ -21,6 +21,8 @@ final class IncidentLedger {
         return incidents
     }
 
+    /// Past episodes per signature. The open incident is the episode in
+    /// progress, so counting it would make every first incident recurring.
     func recentCounts(for signatureIDs: [String], since: Date) throws -> [String: Int] {
         guard !signatureIDs.isEmpty else {
             return [:]
@@ -40,7 +42,7 @@ final class IncidentLedger {
                 """
                 SELECT signature_id, COUNT(*)
                 FROM incidents
-                WHERE signature_id IN (\(SQLiteDatabase.placeholders(count: slots))) AND started_at >= ?
+                WHERE signature_id IN (\(SQLiteDatabase.placeholders(count: slots))) AND started_at >= ? AND resolved_at IS NOT NULL
                 GROUP BY signature_id
                 """,
                 values

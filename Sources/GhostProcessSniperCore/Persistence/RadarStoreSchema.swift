@@ -11,6 +11,15 @@ enum RadarStoreSchema {
             addedColumns: [
                 SQLiteAddedColumn(table: "baselines", column: "measurement_version", definition: "INTEGER NOT NULL DEFAULT 0")
             ]
+        ),
+        // Recurrence counts only resolved incidents, so the index must cover
+        // resolved_at as well.
+        SQLiteMigration(
+            version: 2,
+            statements: [
+                "DROP INDEX IF EXISTS incidents_signature_started",
+                "CREATE INDEX IF NOT EXISTS incidents_signature_started_resolved ON incidents(signature_id, started_at, resolved_at)"
+            ]
         )
     ]
 

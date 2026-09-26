@@ -116,21 +116,21 @@ final class PresentationPipelineTests: XCTestCase {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(":memory:", &db), SQLITE_OK)
         defer { sqlite3_close(db) }
-        for sql in RadarStoreSchema.migrationStatements { XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK) }
-        for (id, time) in [(1, 99), (2, 100), (3, 101)] {
-            let sql = "INSERT INTO incidents VALUES('\(id)', 'test', 'worker', '/test', 'hash', 'worker', 'Watch', 0, 0, 0, 0, '[]', \(time), \(time), NULL, 1)"
+        for sql in RadarStoreSchema.migrations.flatMap(\.statements) { XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK) }
+        for (id, time, resolved) in [(1, 99, "99.5"), (2, 100, "100.5"), (3, 101, "NULL")] {
+            let sql = "INSERT INTO incidents VALUES('\(id)', 'test', 'worker', '/test', 'hash', 'worker', 'Watch', 0, 0, 0, 0, '[]', \(time), \(time), \(resolved), 1)"
             XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
         }
-        let sql = "SELECT signature_id, COUNT(*) FROM incidents WHERE signature_id IN ('test') AND started_at >= 100 GROUP BY signature_id"
+        let sql = "SELECT signature_id, COUNT(*) FROM incidents WHERE signature_id IN ('test') AND started_at >= 100 AND resolved_at IS NOT NULL GROUP BY signature_id"
         var statement: OpaquePointer?
         XCTAssertEqual(sqlite3_prepare_v2(db, sql, -1, &statement, nil), SQLITE_OK)
         XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
-        XCTAssertEqual(sqlite3_column_int(statement, 1), 2)
+        XCTAssertEqual(sqlite3_column_int(statement, 1), 1)
         sqlite3_finalize(statement)
         XCTAssertEqual(sqlite3_prepare_v2(db, "EXPLAIN QUERY PLAN " + sql, -1, &statement, nil), SQLITE_OK)
         XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
         let text = try XCTUnwrap(sqlite3_column_text(statement, 3))
-        XCTAssertTrue(String(cString: text).contains("COVERING INDEX incidents_signature_started"))
+        XCTAssertTrue(String(cString: text).contains("COVERING INDEX incidents_signature_started_resolved"))
         sqlite3_finalize(statement)
     }
 
