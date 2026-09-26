@@ -120,9 +120,7 @@ public final class ProcessMonitor {
     /// share one trailing rerun. Loop ticks just join the running refresh.
     public func refresh(reason: RefreshReason = .user, now: Date? = nil) async {
         guard let running = inFlight else {
-            let task = Task { await self.performRefresh(now: now ?? Date()) }
-            inFlight = task
-            await task.value
+            await launchRefresh(now: now ?? Date()).value
             return
         }
         coalescedCount += 1
@@ -134,13 +132,24 @@ public final class ProcessMonitor {
             trailing = Task {
                 await running.value
                 self.trailing = nil
+                // A caller may have started a refresh in the gap after the
+                // running one ended; it began after every waiter, so join it.
+                if let fresh = self.inFlight {
+                    await fresh.value
+                    return
+                }
                 self.rerunCount += 1
-                let rerun = Task { await self.performRefresh(now: Date()) }
-                self.inFlight = rerun
-                await rerun.value
+                await self.launchRefresh(now: Date()).value
             }
         }
         await trailing?.value
+    }
+
+    /// Only called while nothing is in flight.
+    private func launchRefresh(now: Date) -> Task<Void, Never> {
+        let task = Task { await self.performRefresh(now: now) }
+        inFlight = task
+        return task
     }
 
     private func performRefresh(now: Date) async {

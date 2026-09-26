@@ -6,13 +6,20 @@ import Foundation
 actor GatedSampler: ProcessSampling {
     private let processes: [ProcessMetrics]
     private let heldCalls: Set<Int>
+    private let yieldsPerCall: Int
     private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var running = 0
     private(set) var calls = 0
     private(set) var plans: [SamplingPlan] = []
+    /// The most samples ever in progress at once; the monitor must keep it at 1.
+    private(set) var maxConcurrent = 0
 
-    init(processes: [ProcessMetrics] = [], holding heldCalls: Set<Int> = []) {
+    /// `yieldsPerCall` suspends each call a few times, so a second sample
+    /// started by mistake would overlap it.
+    init(processes: [ProcessMetrics] = [], holding heldCalls: Set<Int> = [], yieldsPerCall: Int = 0) {
         self.processes = processes
         self.heldCalls = heldCalls
+        self.yieldsPerCall = yieldsPerCall
     }
 
     var waitingCount: Int { waiting.count }
@@ -20,8 +27,14 @@ actor GatedSampler: ProcessSampling {
     func sample(plan: SamplingPlan) async throws -> ProcessSampleBatch {
         calls += 1
         plans.append(plan)
+        running += 1
+        maxConcurrent = max(maxConcurrent, running)
+        defer { running -= 1 }
         if heldCalls.contains(calls) {
             await withCheckedContinuation { waiting.append($0) }
+        }
+        for _ in 0..<yieldsPerCall {
+            await Task.yield()
         }
         return ProcessSampleBatch(processes: processes, sampledAt: plan.sampledAt, stats: .empty)
     }

@@ -76,3 +76,24 @@ final class ProcessMonitorRefreshTests: XCTestCase {
         XCTAssertEqual(monitor.coalescedCount, 0)
     }
 }
+
+@MainActor
+final class ProcessMonitorSingleFlightTests: XCTestCase {
+    func testSamplesNeverOverlapUnderBurstsOfCallers() async {
+        let sampler = GatedSampler(yieldsPerCall: 3)
+        let monitor = ProcessMonitor(sampler: sampler, builder: ProcessFamilyBuilder(currentUserID: 501),
+                                     settings: .smart, store: nil)
+        for round in 0..<30 {
+            // Callers land at every point of a refresh, including the gap
+            // between one finishing and the queued rerun starting.
+            var callers: [Task<Void, Never>] = []
+            for caller in 0..<4 {
+                callers.append(Task { await monitor.refresh(reason: caller == 3 ? .loop : .user) })
+                for _ in 0..<((round + caller) % 5) { await Task.yield() }
+            }
+            for caller in callers { await caller.value }
+        }
+        let maxConcurrent = await sampler.maxConcurrent
+        XCTAssertEqual(maxConcurrent, 1, "NativeProcessSampler.sample must never run concurrently")
+    }
+}
