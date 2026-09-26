@@ -106,11 +106,10 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         addMenuItem("Toggle Inspector", key: "i", modifiers: [.command, .option], action: #selector(toggleInspectorCommand), to: radarMenu)
         radarMenu.addItem(.separator())
         addMenuItem("Overview", key: "1", modifiers: [.command], action: #selector(showOverviewCommand), to: radarMenu)
-        addMenuItem("All Processes", key: "6", modifiers: [.command], action: #selector(showProcessesCommand), to: radarMenu)
-        addMenuItem("Duplicates", key: "2", modifiers: [.command], action: #selector(showDuplicatesCommand), to: radarMenu)
-        addMenuItem("Incidents", key: "3", modifiers: [.command], action: #selector(showIncidentsCommand), to: radarMenu)
-        addMenuItem("Rules", key: "4", modifiers: [.command], action: #selector(showRulesCommand), to: radarMenu)
-        addMenuItem("Engine", key: "5", modifiers: [.command], action: #selector(showEngineCommand), to: radarMenu)
+        addMenuItem("All Processes", key: "2", modifiers: [.command], action: #selector(showProcessesCommand), to: radarMenu)
+        addMenuItem("Duplicates", key: "3", modifiers: [.command], action: #selector(showDuplicatesCommand), to: radarMenu)
+        addMenuItem("Incidents", key: "4", modifiers: [.command], action: #selector(showIncidentsCommand), to: radarMenu)
+        addMenuItem("Rules", key: "5", modifiers: [.command], action: #selector(showRulesCommand), to: radarMenu)
         radarMenu.addItem(.separator())
         addMenuItem("Copy Incident Report", key: "c", modifiers: [.command, .shift], action: #selector(copyReportCommand), to: radarMenu)
         addMenuItem("Copy Diagnostics", key: "d", modifiers: [.command, .shift], action: #selector(copyDiagnosticsCommand), to: radarMenu)
@@ -294,11 +293,6 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     @objc private func showRulesCommand() {
         openConsole()
         consoleController.focusSection(.rules)
-    }
-
-    @objc private func showEngineCommand() {
-        openConsole()
-        consoleController.focusSection(.engine)
     }
 
     @objc private func openConsoleCommand() {

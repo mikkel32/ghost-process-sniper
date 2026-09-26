@@ -3,6 +3,7 @@ import SwiftUI
 
 struct OverviewMetricsView: View {
     let session: RadarConsoleSession
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(spacing: 12) {
@@ -77,7 +78,7 @@ struct OverviewMetricsView: View {
         case "Leaks": "Inspect growth"
         case "Duplicates": "Review overlaps"
         case "Memory": "Largest first"
-        default: "Engine health"
+        default: "Diagnostics in Settings"
         }
     }
 
@@ -88,7 +89,7 @@ struct OverviewMetricsView: View {
         case "Leaks": session.browseFamilies(filter: .leaking)
         case "Duplicates": session.focus(.duplicates)
         case "Memory": session.browseFamilies(sort: .memory)
-        default: session.focus(.engine)
+        default: openSettings()
         }
     }
 }

@@ -15,14 +15,12 @@ struct GhostProcessSniperApp: App {
                 Button("Overview") { appDelegate.coordinator.openSection(.overview) }
                     .keyboardShortcut("1")
                 Button("All Processes") { appDelegate.coordinator.openSection(.processes) }
-                    .keyboardShortcut("6")
-                Button("Duplicates") { appDelegate.coordinator.openSection(.duplicates) }
                     .keyboardShortcut("2")
-                Button("Incidents") { appDelegate.coordinator.openSection(.incidents) }
+                Button("Duplicates") { appDelegate.coordinator.openSection(.duplicates) }
                     .keyboardShortcut("3")
-                Button("Rules") { appDelegate.coordinator.openSection(.rules) }
+                Button("Incidents") { appDelegate.coordinator.openSection(.incidents) }
                     .keyboardShortcut("4")
-                Button("Engine") { appDelegate.coordinator.openSection(.engine) }
+                Button("Rules") { appDelegate.coordinator.openSection(.rules) }
                     .keyboardShortcut("5")
                 Divider()
                 Button("Find Processes") { appDelegate.coordinator.findProcesses() }

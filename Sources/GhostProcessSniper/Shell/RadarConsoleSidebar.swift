@@ -159,13 +159,6 @@ struct RadarConsoleSidebar: View {
                 badge: nil,
                 isSelected: session.state.focusedSelection == .rules
             ) { session.focus(.rules) }
-            SidebarToolButton(
-                title: "Engine",
-                systemImage: "gauge.with.dots.needle.67percent",
-                color: .teal,
-                badge: nil,
-                isSelected: session.state.focusedSelection == .engine
-            ) { session.focus(.engine) }
         }
         .padding(10)
         .background(RadarTheme.panel)

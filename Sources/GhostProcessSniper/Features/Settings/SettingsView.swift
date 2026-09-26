@@ -39,6 +39,10 @@ struct SettingsView: View {
                     PerformanceSettingsTab(monitor: monitor)
                 }
 
+                Tab("Diagnostics", systemImage: "stethoscope", value: .diagnostics) {
+                    DiagnosticsSettingsTab(monitor: monitor)
+                }
+
                 Tab("System", systemImage: "gearshape.2", value: .system) {
                     SystemSettingsTab(
                         monitor: monitor,
@@ -110,6 +114,7 @@ private enum SettingsSection: String, Hashable {
     case protection
     case alerts
     case performance
+    case diagnostics
     case system
 }
 
