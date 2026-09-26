@@ -150,11 +150,11 @@ public struct RadarPipeline: Sendable {
             metricsVersions = metricsVersions.filter { familyKeys.contains($0.key) }
         }
         let enriched = families.map { family in
-            if let cached = scoringCache.cachedFamily(for: family, context: context) {
+            if let cached = scoringCache.cachedFamily(for: family, context: context, now: now) {
                 return cached
             }
             let scored = intelligence.enrich(family: family, context: context, settings: settings, now: now)
-            scoringCache.store(scored, context: context)
+            scoringCache.store(scored, from: family, context: context, now: now)
             return scored
         }
         .sorted(by: FamilyPriorityOrder.areInIncreasingOrder)

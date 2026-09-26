@@ -115,7 +115,7 @@ public struct AlertState: Codable, Equatable, Sendable {
 
 
 
-public struct RadarRuleMatch: Codable, Equatable, Sendable {
+public struct RadarRuleMatch: Codable, Hashable, Sendable {
     public var signatureID: String?
     public var commandContains: String?
     public var pathContains: String?

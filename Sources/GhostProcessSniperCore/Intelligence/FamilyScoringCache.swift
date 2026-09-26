@@ -10,8 +10,8 @@ public struct FamilyScoringCache: Sendable {
 
     public init() {}
 
-    public mutating func cachedFamily(for family: ProcessFamily, context: RadarContext) -> ProcessFamily? {
-        let fingerprint = Self.fingerprint(family: family, context: context)
+    public mutating func cachedFamily(for family: ProcessFamily, context: RadarContext, now: Date? = nil) -> ProcessFamily? {
+        let fingerprint = Self.fingerprint(family: family, context: context, now: now)
         guard let entry = entries[family.familyKey], entry.fingerprint == fingerprint else {
             return nil
         }
@@ -30,18 +30,22 @@ public struct FamilyScoringCache: Sendable {
         )
     }
 
-    public mutating func store(_ family: ProcessFamily, context: RadarContext) {
+    /// Pass the unscored `input` the lookup will see: enrichment changes the
+    /// score, so fingerprinting the scored family would never hit again.
+    public mutating func store(_ family: ProcessFamily, from input: ProcessFamily? = nil, context: RadarContext, now: Date? = nil) {
         entries[family.familyKey] = Entry(
-            fingerprint: Self.fingerprint(family: family, context: context),
+            fingerprint: Self.fingerprint(family: input ?? family, context: context, now: now),
             family: family
         )
     }
 
-    public mutating func prune(keeping signatureIDs: Set<String>) {
-        entries = entries.filter { signatureIDs.contains($0.key) }
+    public mutating func prune(keeping familyKeys: Set<String>) {
+        entries = entries.filter { familyKeys.contains($0.key) }
     }
 
-    public static func fingerprint(family: ProcessFamily, context: RadarContext) -> UInt64 {
+    /// `now` defaults to the root's sample time.
+    public static func fingerprint(family: ProcessFamily, context: RadarContext, now: Date? = nil) -> UInt64 {
+        let now = now ?? family.root.sampledAt
         var hasher = Hasher()
         hasher.combine(context.systemPressure.level)
         hasher.combine(family.signature.id)
@@ -71,6 +75,10 @@ public struct FamilyScoringCache: Sendable {
             hasher.combine(rule.isEnabled)
             hasher.combine(rule.action.rawValue)
             hasher.combine(rule.expiresAt?.timeIntervalSince1970 ?? 0)
+            // An edited match or a snooze that just ran out must rescore now,
+            // not when the five-minute bucket rolls over.
+            hasher.combine(rule.match)
+            hasher.combine(rule.expiresAt.map { $0 <= now })
         }
         return UInt64(bitPattern: Int64(hasher.finalize()))
     }
