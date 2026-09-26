@@ -16,19 +16,17 @@ public struct FamilyRiskForecaster: Sendable {
             points: family.trend.memoryPoints,
             fitQuality: family.trend.memoryFitQuality
         )
-        let acceleration = trustedWindow && patternAnalysis.pattern.indicatesAccumulation ? leakAcceleration(samples: family.trend.samples) : 0
-        let memoryETA = etaSeconds(
-            current: Double(family.totalPhysicalFootprintBytes),
-            threshold: Double(settings.memoryBytes),
-            ratePerMinute: memoryVelocity * 1_048_576,
-            accelerationPerMinute2: acceleration * 1_048_576
-        )
-        let cpuETA = etaSeconds(
-            current: family.totalCPUPercent,
-            threshold: settings.cpuPercent,
-            ratePerMinute: cpuSlope
-        )
-        let eta = minPositive(memoryETA, cpuETA).flatMap { $0.isFinite && $0 <= 86_400 ? $0 : nil }
+        let acceleration = trustedWindow && patternAnalysis.indicatesAccumulation ? leakAcceleration(samples: family.trend.samples) : 0
+        // Only memory has a meaningful time-to-limit. A linear CPU% ETA is an
+        // extrapolation of noise; CPU above its limit feeds CPU evidence instead.
+        let memoryETA = memoryETASeconds(
+            family: family,
+            settings: settings,
+            velocity: memoryVelocity,
+            acceleration: acceleration
+        ).flatMap { $0.isFinite && $0 <= 86_400 ? $0 : nil }
+        let eta = memoryETA
+        let etaKind: ForecastETAKind = eta == nil ? .none : .memoryLimit
         let horizon = trustedHorizon(ForecastHorizon.from(etaSeconds: eta), trend: family.trend)
         let recurrenceRisk = min(1, Double(baseline.recurrenceCount) / 5)
         let staleLikelihood = staleLikelihood(family: family, now: now)
@@ -40,7 +38,6 @@ public struct FamilyRiskForecaster: Sendable {
             family: family,
             horizon: horizon,
             memoryVelocity: memoryVelocity,
-            acceleration: acceleration,
             recurrenceRisk: recurrenceRisk,
             staleLikelihood: staleLikelihood,
             pattern: patternAnalysis,
@@ -55,7 +52,8 @@ public struct FamilyRiskForecaster: Sendable {
             baseline: baseline,
             memoryVelocity: memoryVelocity,
             recurrenceRisk: recurrenceRisk,
-            staleLikelihood: staleLikelihood
+            staleLikelihood: staleLikelihood,
+            acceleration: acceleration
         )
         let whyNow = whyNow(
             family: family,
@@ -68,7 +66,8 @@ public struct FamilyRiskForecaster: Sendable {
             staleLikelihood: staleLikelihood,
             pattern: patternAnalysis,
             cpuEvidence: cpuEvidence,
-            inStartupGrace: inStartupGrace
+            inStartupGrace: inStartupGrace,
+            settings: settings
         )
 
         return RiskForecast(
@@ -90,13 +89,15 @@ public struct FamilyRiskForecaster: Sendable {
             recurrenceRisk: recurrenceRisk,
             staleLikelihood: staleLikelihood,
             baseline: baseline,
-            generatedAt: now
+            generatedAt: now,
+            etaKind: etaKind
         )
     }
 
     struct CPUEvidence {
         let isRunaway: Bool
         let isSustained: Bool
+        let isBreached: Bool
     }
 
     // One CPU spike is a compile or an indexing burst; a runaway verdict
@@ -105,19 +106,22 @@ public struct FamilyRiskForecaster: Sendable {
     // instantaneous reading; ordinary compile/index bursts stay as Heat.
     private func cpuEvidence(family: ProcessFamily, settings: ThresholdSettings) -> CPUEvidence {
         let cpuSamples = family.trend.samples.map(\.cpuPercent)
+        let isBreached = family.totalCPUPercent >= settings.cpuPercent
         guard cpuSamples.count >= 4, family.trend.hasSustainedHistory else {
             return CPUEvidence(
                 isRunaway: family.totalCPUPercent >= settings.cpuPercent * 2,
-                isSustained: false
+                isSustained: false,
+                isBreached: isBreached
             )
         }
         let hotFraction = Double(cpuSamples.filter { $0 >= settings.cpuPercent }.count) / Double(cpuSamples.count)
-        if hotFraction >= 0.6, family.totalCPUPercent >= settings.cpuPercent {
-            return CPUEvidence(isRunaway: true, isSustained: true)
+        if hotFraction >= 0.6, isBreached {
+            return CPUEvidence(isRunaway: true, isSustained: true, isBreached: true)
         }
         return CPUEvidence(
             isRunaway: family.totalCPUPercent >= settings.cpuPercent * 2,
-            isSustained: false
+            isSustained: false,
+            isBreached: isBreached
         )
     }
 
@@ -132,7 +136,6 @@ public struct FamilyRiskForecaster: Sendable {
         family: ProcessFamily,
         horizon: ForecastHorizon,
         memoryVelocity: Double,
-        acceleration: Double,
         recurrenceRisk: Double,
         staleLikelihood: Double,
         pattern: MemoryPatternAnalysis,
@@ -143,14 +146,20 @@ public struct FamilyRiskForecaster: Sendable {
         if family.score.level >= .critical {
             return .critical
         }
-        if cpuEvidence.isRunaway || acceleration > 80 {
+        if cpuEvidence.isRunaway {
             return .runaway
         }
-        if memoryVelocity >= settings.leakVelocityMegabytesPerMinute || horizon == .imminent || horizon == .breached {
+        // Being above the memory limit is not a leak; growth is. Near the
+        // limit a slower but real, sustained climb is enough.
+        let nearLimit = horizon == .imminent || horizon == .breached
+        let leakEntry = memoryVelocity >= settings.leakVelocityMegabytesPerMinute ||
+            (nearLimit && family.trend.hasSustainedHistory &&
+                memoryVelocity >= max(5, settings.leakVelocityMegabytesPerMinute * 0.1))
+        if leakEntry {
             // Positive net velocity with a reclaiming shape (sawtooth) or a
             // single allocation step is not an accumulating leak. Startup
             // allocation bursts get the same benefit of the doubt.
-            if pattern.pattern.indicatesAccumulation, !inStartupGrace {
+            if pattern.indicatesAccumulation, !inStartupGrace {
                 return .leaking
             }
             return .warming
@@ -158,7 +167,8 @@ public struct FamilyRiskForecaster: Sendable {
         if staleLikelihood >= 0.65 {
             return .stale
         }
-        if horizon == .soon || memoryVelocity >= settings.leakVelocityMegabytesPerMinute * 0.35 || family.score.level >= .watch {
+        if horizon == .soon || horizon == .breached || cpuEvidence.isBreached ||
+            memoryVelocity >= settings.leakVelocityMegabytesPerMinute * 0.35 || family.score.level >= .watch {
             // A family that is actively releasing memory with no threshold in
             // sight is recovering, not warming.
             if pattern.pattern == .declining, horizon == .unknown {
@@ -176,13 +186,15 @@ public struct FamilyRiskForecaster: Sendable {
         baseline: AnomalyBaseline,
         memoryVelocity: Double,
         recurrenceRisk: Double,
-        staleLikelihood: Double
+        staleLikelihood: Double,
+        acceleration: Double
     ) -> Double {
         var value = 0.18 + family.devConfidence * 0.22
         if family.trend.memoryPoints.count >= 3 { value += 0.16 }
         if baseline.sampleCount >= 6 { value += 0.14 }
         if memoryVelocity > 0 { value += 0.14 }
         if horizon == .imminent || horizon == .breached { value += 0.14 }
+        if acceleration > 0 { value += 0.06 }
         value += recurrenceRisk * 0.08
         value += staleLikelihood * 0.08
         // With enough samples, a clean linear trend earns confidence and a
@@ -201,6 +213,30 @@ public struct FamilyRiskForecaster: Sendable {
             return horizon
         }
         return .soon
+    }
+
+    private func memoryETASeconds(
+        family: ProcessFamily,
+        settings: ThresholdSettings,
+        velocity: Double,
+        acceleration: Double
+    ) -> TimeInterval? {
+        let current = Double(family.totalPhysicalFootprintBytes)
+        let threshold = Double(settings.memoryBytes)
+        let linear = etaSeconds(current: current, threshold: threshold, ratePerMinute: velocity * 1_048_576)
+        guard acceleration > 0 else { return linear }
+        let quadratic = etaSeconds(
+            current: current,
+            threshold: threshold,
+            ratePerMinute: velocity * 1_048_576,
+            accelerationPerMinute2: acceleration * 1_048_576
+        )
+        // A quadratic fit from two half-window slopes says nothing about the
+        // far future; trust it only out to twice the window it was fitted on.
+        if let quadratic, quadratic <= family.trend.observedSeconds * 2 {
+            return quadratic
+        }
+        return linear
     }
 
     private func etaSeconds(
@@ -226,41 +262,34 @@ public struct FamilyRiskForecaster: Sendable {
         return gap / ratePerMinute * 60
     }
 
-    private func minPositive(_ lhs: TimeInterval?, _ rhs: TimeInterval?) -> TimeInterval? {
-        switch (lhs, rhs) {
-        case (.some(let lhs), .some(let rhs)): min(lhs, rhs)
-        case (.some(let value), .none), (.none, .some(let value)): value
-        case (.none, .none): nil
-        }
-    }
-
     // Compare time-aware regression slopes of the window halves. Refresh
     // cadence is adaptive, so sample-index slopes would make the exact same
     // process look more/less accelerated purely because sampling slowed down.
+    // The change only counts when it is larger than the slopes' own noise.
     private func leakAcceleration(samples: [TrendSample]) -> Double {
-        guard samples.count >= 4 else {
-            return 0
-        }
         let midpoint = samples.count / 2
         let firstRange = 0..<midpoint
         let secondRange = midpoint..<samples.count
-        guard firstRange.count >= 2, secondRange.count >= 2 else {
+        guard firstRange.count >= 4, secondRange.count >= 4,
+              let first = memorySlope(samples: samples, range: firstRange),
+              let second = memorySlope(samples: samples, range: secondRange)
+        else {
             return 0
         }
-
-        let firstSlope = memorySlope(samples: samples, range: firstRange)
-        let secondSlope = memorySlope(samples: samples, range: secondRange)
-        let firstCenter = centerTime(samples: samples, range: firstRange)
-        let secondCenter = centerTime(samples: samples, range: secondRange)
-        let centerDeltaMinutes = secondCenter.timeIntervalSince(firstCenter) / 60
+        let noise = (first.standardError * first.standardError + second.standardError * second.standardError).squareRoot()
+        guard abs(second.slope - first.slope) > 2 * noise else {
+            return 0
+        }
+        let centerDeltaMinutes = centerTime(samples: samples, range: secondRange)
+            .timeIntervalSince(centerTime(samples: samples, range: firstRange)) / 60
         guard centerDeltaMinutes > 0 else {
             return 0
         }
-        return max(0, (secondSlope - firstSlope) / centerDeltaMinutes)
+        return max(0, (second.slope - first.slope) / centerDeltaMinutes)
     }
 
-    private func memorySlope(samples: [TrendSample], range: Range<Int>) -> Double {
-        guard let firstIndex = range.first else { return 0 }
+    private func memorySlope(samples: [TrendSample], range: Range<Int>) -> (slope: Double, standardError: Double)? {
+        guard let firstIndex = range.first, range.count >= 3 else { return nil }
         let origin = samples[firstIndex].date
         let n = Double(range.count)
         var sumX = 0.0
@@ -275,9 +304,18 @@ public struct FamilyRiskForecaster: Sendable {
             sumXX += x * x
             sumXY += x * y
         }
-        let denominator = sumXX - (sumX * sumX / n)
-        guard denominator > 0 else { return 0 }
-        return (sumXY - (sumX * sumY / n)) / denominator
+        let sxx = sumXX - (sumX * sumX / n)
+        guard sxx > 0 else { return nil }
+        let slope = (sumXY - (sumX * sumY / n)) / sxx
+        let intercept = (sumY - slope * sumX) / n
+        var residualSquares = 0.0
+        for index in range {
+            let x = samples[index].date.timeIntervalSince(origin) / 60
+            let residual = Double(samples[index].memoryBytes) / 1_048_576 - (intercept + slope * x)
+            residualSquares += residual * residual
+        }
+        let standardError = (residualSquares / (n - 2) / sxx).squareRoot()
+        return (slope, standardError)
     }
 
     private func centerTime(samples: [TrendSample], range: Range<Int>) -> Date {
@@ -330,11 +368,17 @@ public struct FamilyRiskForecaster: Sendable {
         staleLikelihood: Double,
         pattern: MemoryPatternAnalysis,
         cpuEvidence: CPUEvidence,
-        inStartupGrace: Bool
+        inStartupGrace: Bool,
+        settings: ThresholdSettings
     ) -> String {
         var parts: [String] = []
         if cpuEvidence.isSustained {
             parts.append("CPU held above threshold for most of the window")
+        } else if cpuEvidence.isBreached {
+            parts.append("CPU above its \(Int(settings.cpuPercent.rounded()))% limit now")
+        }
+        if horizon == .breached {
+            parts.append("above its memory limit")
         }
         if memoryVelocity > 0 {
             parts.append("memory is rising \(Int(memoryVelocity.rounded())) MB/min")
@@ -354,11 +398,11 @@ public struct FamilyRiskForecaster: Sendable {
         if acceleration > 0 {
             parts.append("leak is accelerating")
         }
+        if horizon == .soon || horizon == .imminent {
+            parts.append("memory limit in \(etaText)")
+        }
         if baseline.memoryMultiple >= 1.5 {
             parts.append(String(format: "%.1fx normal memory", baseline.memoryMultiple))
-        }
-        if horizon == .soon || horizon == .imminent {
-            parts.append("threshold ETA \(etaText)")
         }
         if staleLikelihood >= 0.65 {
             parts.append("background process looks stale")
@@ -389,7 +433,7 @@ public struct FamilyRiskForecaster: Sendable {
         case .leaking:
             return TriageRecommendation(
                 title: "Inspect leak",
-                detail: horizon == .imminent ? "Likely to cross threshold soon." : "Memory trend is rising faster than normal.",
+                detail: horizon == .imminent ? "Likely to cross its memory limit soon." : "Memory trend is rising faster than normal.",
                 action: .inspect,
                 confidence: confidence
             )

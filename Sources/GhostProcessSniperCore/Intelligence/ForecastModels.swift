@@ -78,6 +78,15 @@ public enum ForecastHorizon: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// What a forecast's ETA counts down to. CPU never has an ETA: a linear CPU%
+/// extrapolation is meaningless, so a CPU breach is evidence, not a countdown.
+public enum ForecastETAKind: String, Codable, CaseIterable, Sendable {
+    case none
+    case memoryLimit
+    /// Reserved for time-to-host-memory-pressure.
+    case hostMemory
+}
+
 public struct AnomalyBaseline: Codable, Equatable, Sendable {
     public let memoryMultiple: Double
     public let cpuMultiple: Double
@@ -163,6 +172,7 @@ public struct RiskForecast: Codable, Equatable, Sendable {
     public let staleLikelihood: Double
     public let baseline: AnomalyBaseline
     public let generatedAt: Date
+    public let etaKind: ForecastETAKind
 
     public static let quiet = RiskForecast(
         state: .quiet,
@@ -200,7 +210,8 @@ public struct RiskForecast: Codable, Equatable, Sendable {
         recurrenceRisk: Double,
         staleLikelihood: Double,
         baseline: AnomalyBaseline,
-        generatedAt: Date
+        generatedAt: Date,
+        etaKind: ForecastETAKind? = nil
     ) {
         self.state = state
         self.horizon = horizon
@@ -216,6 +227,7 @@ public struct RiskForecast: Codable, Equatable, Sendable {
         self.staleLikelihood = min(1, max(0, staleLikelihood))
         self.baseline = baseline
         self.generatedAt = generatedAt
+        self.etaKind = etaKind ?? (etaSeconds == nil ? .none : .memoryLimit)
     }
 
     /// A low-confidence forecast is useful as directional context, but should

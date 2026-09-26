@@ -814,7 +814,7 @@ private func riskForecasterPredictsETAAndState() throws {
 
     try check(forecast.state >= .leaking, "forecaster should promote imminent memory growth")
     try check((forecast.etaSeconds ?? 0) > 180 && (forecast.etaSeconds ?? 999) < 240, "forecaster should compute memory threshold ETA")
-    try check(forecast.whyNow.contains("threshold ETA"), "forecast should explain why now")
+    try check(forecast.whyNow.contains("memory limit in"), "forecast should explain why now")
     try check(forecast.recommendedAction.action == .inspect, "leaking forecast should remain advisory inspect")
 }
 
@@ -893,8 +893,8 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
 }
 
 private func riskForecasterDetectsLeakAcceleration() throws {
-    let base = Date(timeIntervalSince1970: 20_840)
-    let samples = [100, 140, 220, 340, 500, 700].enumerated().map { index, megabytes in
+    let base = Date(timeIntervalSince1970: 20_790)
+    let samples = [100, 110, 120, 130, 200, 300, 400, 500].enumerated().map { index, megabytes in
         TrendSample(
             date: base.addingTimeInterval(Double(index) * 30),
             memoryBytes: UInt64(megabytes) * 1_048_576,
@@ -903,12 +903,13 @@ private func riskForecasterDetectsLeakAcceleration() throws {
     }
     let family = forecastFamily(
         pid: 209,
-        memory: 700 * 1_048_576,
+        memory: 500 * 1_048_576,
         cpu: 4,
         trend: TrendMetrics(
-            memoryVelocityMegabytesPerMinute: 20,
+            memoryVelocityMegabytesPerMinute: 120,
             cpuSlopePerMinute: 0,
             memoryPoints: samples.map { Double($0.memoryBytes) },
+            memoryFitQuality: 0.9,
             samples: samples
         ),
         score: GhostScore(value: 12, level: .quiet, reasons: ["quiet dev process"])
@@ -919,8 +920,10 @@ private func riskForecasterDetectsLeakAcceleration() throws {
         now: Date(timeIntervalSince1970: 21_000)
     )
 
-    try check(forecast.state == .runaway, "accelerating leak should become runaway even before fixed thresholds")
+    // Acceleration sharpens a leak call; on its own it is not a runaway.
+    try check(forecast.state == .leaking, "accelerating leak should be called a leak")
     try check(forecast.leakAccelerationMegabytesPerMinute2 > 80, "forecast should expose leak acceleration")
+    try check(forecast.whyNow.contains("accelerating"), "acceleration should be explained")
 }
 
 private func trendWindowRegressionResistsEndpointSpikes() throws {

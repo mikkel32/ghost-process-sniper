@@ -36,12 +36,13 @@ public enum MemoryPattern: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    /// Whether a positive net velocity with this shape should still be
-    /// treated as an accumulating leak.
+    /// Whether a positive net velocity with this shape is, by shape alone, an
+    /// accumulating leak. Too few points or an irregular shape prove nothing;
+    /// MemoryPatternAnalysis.indicatesAccumulation adds the fit evidence.
     public var indicatesAccumulation: Bool {
         switch self {
-        case .steadyClimb, .volatile, .unknown: true
-        case .flat, .sawtooth, .stepJump, .declining: false
+        case .steadyClimb: true
+        case .flat, .sawtooth, .stepJump, .declining, .volatile, .unknown: false
         }
     }
 }
@@ -50,6 +51,8 @@ public struct MemoryPatternAnalysis: Equatable, Sendable {
     public let pattern: MemoryPattern
     public let confidence: Double
     public let detail: String
+    /// R² of the memory regression the shape was judged with.
+    public let fitQuality: Double
 
     public static let unknown = MemoryPatternAnalysis(
         pattern: .unknown,
@@ -57,10 +60,17 @@ public struct MemoryPatternAnalysis: Equatable, Sendable {
         detail: "Collecting samples"
     )
 
-    public init(pattern: MemoryPattern, confidence: Double, detail: String) {
+    public init(pattern: MemoryPattern, confidence: Double, detail: String, fitQuality: Double = 0) {
         self.pattern = pattern
         self.confidence = min(1, max(0, confidence))
         self.detail = detail
+        self.fitQuality = min(1, max(0, fitQuality))
+    }
+
+    /// An irregular series still accumulates when the trend explains most
+    /// of it; every other shape answers by itself.
+    public var indicatesAccumulation: Bool {
+        pattern == .volatile ? fitQuality >= 0.5 : pattern.indicatesAccumulation
     }
 
     /// Classify a memory series (bytes) by its shape.
@@ -93,7 +103,8 @@ public struct MemoryPatternAnalysis: Equatable, Sendable {
             return MemoryPatternAnalysis(
                 pattern: .flat,
                 confidence: 0.9,
-                detail: String(format: "Memory holds within %.0f MB of %.0f MB", range, mean)
+                detail: String(format: "Memory holds within %.0f MB of %.0f MB", range, mean),
+                fitQuality: fitQuality
             )
         }
 
@@ -101,7 +112,8 @@ public struct MemoryPatternAnalysis: Equatable, Sendable {
             return MemoryPatternAnalysis(
                 pattern: .declining,
                 confidence: 0.8,
-                detail: String(format: "Released %.0f MB across the window", -netMegabytes)
+                detail: String(format: "Released %.0f MB across the window", -netMegabytes),
+                fitQuality: fitQuality
             )
         }
 
@@ -111,7 +123,8 @@ public struct MemoryPatternAnalysis: Equatable, Sendable {
             return MemoryPatternAnalysis(
                 pattern: .stepJump,
                 confidence: min(1, largestStep / max(1, totalRise)),
-                detail: String(format: "One %.0f MB step accounts for the growth", largestStep)
+                detail: String(format: "One %.0f MB step accounts for the growth", largestStep),
+                fitQuality: fitQuality
             )
         }
 
@@ -121,7 +134,8 @@ public struct MemoryPatternAnalysis: Equatable, Sendable {
             return MemoryPatternAnalysis(
                 pattern: .sawtooth,
                 confidence: min(1, totalFall / totalRise),
-                detail: "Reclaims \(reclaimed)% of what it allocates across \(dipCount) dips"
+                detail: "Reclaims \(reclaimed)% of what it allocates across \(dipCount) dips",
+                fitQuality: fitQuality
             )
         }
 
@@ -129,14 +143,16 @@ public struct MemoryPatternAnalysis: Equatable, Sendable {
             return MemoryPatternAnalysis(
                 pattern: .steadyClimb,
                 confidence: fitQuality,
-                detail: String(format: "Monotonic growth of %.0f MB with little reclaim", netMegabytes)
+                detail: String(format: "Monotonic growth of %.0f MB with little reclaim", netMegabytes),
+                fitQuality: fitQuality
             )
         }
 
         return MemoryPatternAnalysis(
             pattern: .volatile,
             confidence: 0.5,
-            detail: String(format: "Irregular swings across a %.0f MB range", range)
+            detail: String(format: "Irregular swings across a %.0f MB range", range),
+            fitQuality: fitQuality
         )
     }
 }
@@ -220,7 +236,7 @@ public struct FamilyVerdict: Equatable, Sendable {
             if pattern.pattern == .steadyClimb {
                 return FamilyVerdict(
                     headline: "Likely leak",
-                    detail: "Climbing \(Int(velocity.rounded())) MB/min with little reclaim. \(forecast.etaText == "No threshold ETA" ? "No threshold in sight yet." : "Threshold ETA \(forecast.etaText).")",
+                    detail: "Climbing \(Int(velocity.rounded())) MB/min with little reclaim. \(leakETASentence(forecast))",
                     level: .hot,
                     systemImage: "drop.triangle"
                 )
@@ -300,6 +316,14 @@ public struct FamilyVerdict: Equatable, Sendable {
                 level: .quiet,
                 systemImage: "checkmark.circle"
             )
+        }
+    }
+
+    private static func leakETASentence(_ forecast: RiskForecast) -> String {
+        switch (forecast.etaKind, forecast.horizon) {
+        case (.none, _): "No memory limit in sight yet."
+        case (_, .breached): "Already above its memory limit."
+        default: "Memory limit in \(forecast.etaText)."
         }
     }
 

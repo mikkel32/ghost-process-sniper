@@ -18,9 +18,9 @@ enum RadarSummaryBuilder {
 
         let statusText: String
         if let topForecast = families.first(where: { $0.forecastIsCredibleEscalation }) {
-            statusText = topForecast.forecast.state == .leaking ? "Leak \(topForecast.forecast.etaText)" : topForecast.forecast.state.label
+            statusText = escalationText(topForecast.forecast)
         } else if let topWarming = families.first(where: { $0.forecastIsCredibleEarlyWarning }) {
-            statusText = "Warming \(topWarming.forecast.etaText)"
+            statusText = earlyWarningText(topWarming.forecast)
         } else if let topGPU = families.first(where: { $0.totalGPUPercent >= 25 }) {
             statusText = "GPU \(Int(topGPU.totalGPUPercent.rounded()))%"
         } else if hotCount > 0 {
@@ -43,5 +43,19 @@ enum RadarSummaryBuilder {
             leakingCount: leakingCount,
             suggestionCount: suggestionCount
         )
+    }
+
+    // Only a memory countdown earns an ETA suffix; a CPU breach or an
+    // unbounded climb reads as the state alone.
+    private static func escalationText(_ forecast: RiskForecast) -> String {
+        guard forecast.state == .leaking else { return forecast.state.label }
+        guard forecast.etaKind != .none, forecast.etaSeconds != nil else { return "Leak" }
+        return "Leak \(forecast.etaText)"
+    }
+
+    private static func earlyWarningText(_ forecast: RiskForecast) -> String {
+        if forecast.state == .stale { return "Forgotten?" }
+        guard forecast.etaKind != .none, forecast.etaSeconds != nil else { return "Warming" }
+        return "Warming \(forecast.etaText)"
     }
 }
