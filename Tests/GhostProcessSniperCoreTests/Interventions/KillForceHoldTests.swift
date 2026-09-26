@@ -192,4 +192,28 @@ final class KillForceHoldTests: XCTestCase {
         XCTAssertEqual(table.elapsedSeconds, 12, accuracy: 0.08, "a database found at confirm still gets its 12 s")
         XCTAssertEqual(table.log.map(\.signal), [SIGTERM])
     }
+
+    func testForceSurvivorsSendsOnlySigkillToVerifiedSurvivors() async throws {
+        let table = FakeProcessTable()
+        let app = KillProcessLite.fake(pid: 300, name: "Pages")
+        let helper = KillProcessLite.fake(pid: 301, parent: 300, name: "Pages Helper")
+        table.add(app, FakeProcessTable.Behaviour(quitsOnRequest: 100_000))
+        table.add(helper)
+        let plan = KillPlan.fixture(app, members: [app, helper], paths: [300: KillFixture.pagesPath, 301: KillFixture.pagesHelperPath])
+        let held = await table.killer().kill(plan: plan, forceKillDelay: 2, skipForce: true)
+        XCTAssertEqual(held.survivorPIDs, [300])
+        let waitedBefore = table.elapsedSeconds
+
+        let followUp = try XCTUnwrap(plan.forcingSurvivors(of: held))
+        let forced = await table.killer().kill(plan: followUp, forceKillDelay: 2)
+
+        XCTAssertEqual(followUp.targetIdentities, [app.identity])
+        XCTAssertEqual(table.quitRequests.count, 1, "the quit request is not repeated")
+        XCTAssertEqual(table.signals(to: 300), [SIGKILL])
+        XCTAssertEqual(table.elapsedSeconds, waitedBefore, accuracy: 0.001, "no grace period the second time")
+        XCTAssertTrue(forced.isForceFollowUp)
+        XCTAssertEqual(forced.forcedPIDs, [300])
+        XCTAssertTrue(forced.survivorPIDs.isEmpty)
+        XCTAssertNil(plan.forcingSurvivors(of: forced), "nothing is left to force")
+    }
 }

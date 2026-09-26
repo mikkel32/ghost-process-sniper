@@ -16,6 +16,9 @@ public struct KillPlan: Equatable, Sendable {
     /// The phases and waits the user approved in the preview. Confirm runs
     /// them as they are; it only ever lengthens the first wait.
     public let approvedProfile: KillStrategyProfile?
+    /// Forces the survivors of an earlier, held stop; it teaches the
+    /// learning tables nothing new.
+    public let isForceFollowUp: Bool
     /// Names, paths, command lines, ports and supervisors, for risk-aware stops.
     public let workload: KillWorkloadProfile?
     /// Local outcomes per strategy, so a strategy is only tuned by its own history.
@@ -34,6 +37,7 @@ public struct KillPlan: Equatable, Sendable {
         approvedIdentities: Set<ProcessIdentity>? = nil,
         approvalExpiresAt: Date? = nil,
         approvedProfile: KillStrategyProfile? = nil,
+        isForceFollowUp: Bool = false,
         workload: KillWorkloadProfile? = nil,
         strategyCalibrations: [KillStrategy: KillCalibrationSnapshot] = [:]
     ) {
@@ -49,6 +53,7 @@ public struct KillPlan: Equatable, Sendable {
         self.approvedIdentities = approvedIdentities
         self.approvalExpiresAt = approvalExpiresAt
         self.approvedProfile = approvedProfile
+        self.isForceFollowUp = isForceFollowUp
         self.workload = workload
         self.strategyCalibrations = strategyCalibrations
     }
@@ -64,6 +69,19 @@ public struct KillPlan: Equatable, Sendable {
                  createdAt: createdAt, familyMetadata: familyMetadata, killHistory: killHistory,
                  approvedIdentities: Set(identities), approvalExpiresAt: expiresAt,
                  approvedProfile: profile, workload: workload, strategyCalibrations: strategyCalibrations)
+    }
+
+    /// A plan that sends SIGKILL now to what a held stop reported still
+    /// running, and to nothing else. Nil when nothing survived.
+    public func forcingSurvivors(of report: KillReport, now: Date = Date()) -> KillPlan? {
+        let survivors = report.targetResults.filter { $0.state == .survived }.map(\.identity)
+        guard !survivors.isEmpty else { return nil }
+        return KillPlan(rootIdentity: rootIdentity, targetIdentities: survivors, protectedPIDs: protectedPIDs,
+                        displayName: displayName, gracefulSignal: gracefulSignal, scope: scope,
+                        createdAt: now, familyMetadata: familyMetadata, killHistory: killHistory,
+                        approvedIdentities: Set(survivors), approvalExpiresAt: now.addingTimeInterval(30),
+                        approvedProfile: .forceNow, isForceFollowUp: true, workload: workload,
+                        strategyCalibrations: strategyCalibrations)
     }
 
     public func targetingOnly(_ process: ProcessMetrics) -> KillPlan {

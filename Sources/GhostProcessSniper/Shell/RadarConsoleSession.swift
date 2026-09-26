@@ -425,6 +425,23 @@ final class RadarConsoleSession {
             eventSink: eventSink
         )
     }
+
+    /// Sends SIGKILL now to what a held stop reported still running, and
+    /// to nothing else; nil when nothing survived.
+    func forceSurvivors(
+        _ pending: PendingKill,
+        report: KillReport,
+        eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
+    ) async -> KillReport? {
+        guard let plan = pending.plan.forcingSurvivors(of: report) else { return nil }
+        return await monitor.confirmKill(
+            family: pending.family,
+            killer: killer,
+            approvedPlan: plan,
+            forceKillDelay: pending.forceKillDelay,
+            eventSink: eventSink
+        )
+    }
 }
 
 @MainActor

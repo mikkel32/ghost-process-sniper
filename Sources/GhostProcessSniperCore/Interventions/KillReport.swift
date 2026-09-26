@@ -38,6 +38,8 @@ public struct KillReport: Equatable, Sendable {
     /// The app accepted the quit request but was still open at the end,
     /// usually because it is showing a save prompt.
     public var appStillOpen = false
+    /// Forced the survivors of an earlier held stop; not a new outcome to learn from.
+    public var isForceFollowUp = false
     /// The parent an already-exited (zombie) target waits on to collect it.
     public var zombieParentName: String?
 
@@ -118,7 +120,7 @@ public struct KillReport: Equatable, Sendable {
             "Verification modes: \(reactorReport.verificationModeCounts.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ").ifEmpty("none"))",
             "Signal waves: \(reactorReport.signalWaves.count), arena reuse \(reactorReport.arenaReuseCount)",
             "Calibrated reclaim: \(RadarFormat.bytes(calibratedReclaimBytes))",
-            "Force skipped: \(skipForceRequested ? "yes" : "no")\(appStillOpen ? ", app still open" : "")",
+            "Force skipped: \(skipForceRequested ? "yes" : "no")\(appStillOpen ? ", app still open" : "")\(isForceFollowUp ? " (force follow-up)" : "")",
             "Refused by macOS: \(signalDeniedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Respawned: \(respawnedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))\(respawnedBy.map { " by \($0)" } ?? "")",
             "Graceful: \(gracefulPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",

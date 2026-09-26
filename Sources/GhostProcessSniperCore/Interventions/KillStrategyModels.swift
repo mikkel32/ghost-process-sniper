@@ -145,6 +145,17 @@ public struct KillStrategyProfile: Codable, Equatable, Sendable {
         summary: "SIGTERM, verify, then SIGKILL same-identity survivors."
     )
 
+    /// For survivors the user chose to force after a held stop: nothing
+    /// polite is repeated.
+    public static let forceNow = KillStrategyProfile(
+        strategy: .stubbornRunaway,
+        confidence: 1,
+        phases: [
+            KillSignalPhase(order: 0, label: "Force the processes still running", action: .signal(SIGKILL), waitAfterSeconds: 0.35)
+        ],
+        summary: "SIGKILL the verified survivors now."
+    )
+
     public init(strategy: KillStrategy, confidence: Double, phases: [KillSignalPhase], summary: String) {
         self.strategy = strategy
         self.confidence = min(1, max(0, confidence))

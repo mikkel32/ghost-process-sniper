@@ -145,6 +145,7 @@ public final class ProcessKiller: Sendable {
                 targetDiff: preflight.preview.targetDiff,
                 performanceReport: preflight.preview.performanceReport
             )
+            report.isForceFollowUp = plan.isForceFollowUp
             report.zombieParentName = preflight.zombieParentName
             appendEvent(.queued, operationID: operationID,
                         message: "Stopping \(targets.count) process\(targets.count == 1 ? "" : "es") with the \(runProfile.strategy.label.lowercased()) strategy.",

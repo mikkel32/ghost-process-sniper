@@ -34,28 +34,17 @@ extension RadarStore {
             for event in report.eventHistory {
                 try insertKillEvent(event)
             }
-            try insertKillOutcomeHistory(report: report, signatureID: record.signatureID, createdAt: date)
-            try insertKillStrategyHistory(
-                report: report,
-                signatureID: record.signatureID,
-                devKind: family?.classification?.kind.rawValue,
-                createdAt: date
-            )
             try insertKillSignalOutcomes(report: report, createdAt: date)
             try insertKillGraphDeltas(report: report, createdAt: date)
-            try insertKillReclaimCalibration(
-                report: report,
-                signatureID: record.signatureID,
-                devKind: family?.classification?.kind.rawValue,
-                createdAt: date
-            )
             try insertKillExitEvents(report: report)
-            try upsertKillCalibrationAggregate(
-                report: report,
-                signatureID: record.signatureID,
-                devKind: family?.classification?.kind.rawValue,
-                createdAt: date
-            )
+            // Forcing a held stop's survivors says nothing about how the
+            // strategy behaves, so it stays out of the learning tables.
+            guard !report.isForceFollowUp else { return }
+            let devKind = family?.classification?.kind.rawValue
+            try insertKillOutcomeHistory(report: report, signatureID: record.signatureID, createdAt: date)
+            try insertKillStrategyHistory(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
+            try insertKillReclaimCalibration(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
+            try upsertKillCalibrationAggregate(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
         }
         lastKillOperationSummary = "\(record.displayName): \(record.summary)"
     }
