@@ -140,6 +140,8 @@ private struct OverviewQueuesSection: View {
 
 }
 
+/// Its own body reads only cached shares: the radar, pulse chart and
+/// incidents each observe their own data, so a pulse append redraws one chart.
 private struct OverviewAnalyticsSection: View {
     let session: RadarConsoleSession
     @State private var cachedMemoryShares: [MemoryShare] = []
@@ -148,8 +150,8 @@ private struct OverviewAnalyticsSection: View {
             OverviewSectionLabel(eyebrow: "Analytics", title: "Where your resources go",
                                  detail: "Explore activity, memory usage, and changes over time.")
             visualizationGrid
-            memoryPulseStrip
-            recentIncidents
+            MemoryPulseCard(session: session)
+            RecentIncidentsCard(session: session)
         }
         .onAppear(perform: rebuildMemoryShares)
         .onChange(of: session.snapshotContentToken) { _, _ in rebuildMemoryShares() }
@@ -160,12 +162,18 @@ private struct OverviewAnalyticsSection: View {
     }
     private var visualizationGrid: some View {
         AdaptivePairLayout(breakpoint: 720, spacing: 14, secondaryWidth: 320) {
-            liveRadarCard
-            memoryShareCard
+            LiveRadarCard(session: session)
+            MemoryShareCard(session: session, shares: cachedMemoryShares)
         }
     }
+}
 
-    private var liveRadarCard: some View {
+/// Every tracked family, riskiest first — never the All Processes search,
+/// filter or sort — straight from the content-gated snapshot.
+private struct LiveRadarCard: View {
+    let session: RadarConsoleSession
+
+    var body: some View {
         CompactRadarSection(
             title: "Live Radar",
             subtitle: "closer to center = higher risk",
@@ -177,13 +185,18 @@ private struct OverviewAnalyticsSection: View {
             ),
             accent: RadarTheme.accent(for: session.commandCenter.level)
         ) {
-            RadarSweepView(session: session)
+            RadarSweepView(rows: Array(session.compactSnapshot.allRows.prefix(24)), session: session)
                 .frame(height: 255)
         }
         .frame(maxWidth: .infinity)
     }
+}
 
-    private var memoryShareCard: some View {
+private struct MemoryShareCard: View {
+    let session: RadarConsoleSession
+    let shares: [MemoryShare]
+
+    var body: some View {
         CompactRadarSection(
             title: "Memory Share",
             subtitle: RadarFormat.bytes(session.monitor.summary.totalMemoryBytes),
@@ -194,20 +207,20 @@ private struct OverviewAnalyticsSection: View {
             ),
             accent: .blue
         ) {
-            MemoryShareRanking(shares: cachedMemoryShares)
+            MemoryShareRanking(shares: shares)
                 .equatable()
                 .frame(height: 255)
         }
         .frame(maxWidth: .infinity)
     }
+}
 
-    private var recentIncidentRows: [IncidentRowViewModel] {
-        session.monitor.incidents.prefix(3).map(IncidentRowViewModel.init)
-    }
+/// The only reader of `monitor.incidents` on the Overview.
+private struct RecentIncidentsCard: View {
+    let session: RadarConsoleSession
 
-    @ViewBuilder
-    private var recentIncidents: some View {
-        let rows = recentIncidentRows
+    var body: some View {
+        let rows = session.monitor.incidents.prefix(3).map(IncidentRowViewModel.init)
         if !rows.isEmpty {
             CompactRadarSection(
                 title: "Recent Incidents",
@@ -236,9 +249,13 @@ private struct OverviewAnalyticsSection: View {
             }
         }
     }
+}
 
-    @ViewBuilder
-    private var memoryPulseStrip: some View {
+/// The only reader of `memoryPulse`, which grows every few seconds.
+private struct MemoryPulseCard: View {
+    let session: RadarConsoleSession
+
+    var body: some View {
         if session.memoryPulse.count >= 3 {
             CompactRadarSection(
                 title: "Tracked Memory",
@@ -287,7 +304,6 @@ private struct OverviewAnalyticsSection: View {
             }
         }
     }
-
 }
 
 private struct OverviewSectionLabel: View {
@@ -399,7 +415,7 @@ private struct IntelligenceBriefCard: View {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 7) {
                     Text(brief.eyebrow.uppercased())
-                        .font(.system(size: 9, weight: .black))
+                        .font(.caption2.weight(.bold))
                         .tracking(1.15)
                         .foregroundStyle(RadarTheme.accent(for: brief.level))
                     Text(brief.confidenceText)
@@ -570,148 +586,6 @@ private struct OverviewEngineStatusStrip: View {
 
     var body: some View {
         CompactEngineHealthStrip(status: monitor.engineStatus)
-    }
-}
-
-/// A hoverable legend explaining the four threat levels with their colors.
-private struct LevelLegendTip: View {
-    @State private var isPresented = false
-    @State private var hoverTask: Task<Void, Never>?
-
-    private let entries: [(level: GhostLevel, name: String, meaning: String)] = [
-        (.quiet, "Quiet", "Inside its learned range — nothing to do."),
-        (.watch, "Watch", "Elevated or trending up; the radar is paying attention."),
-        (.hot, "Hot", "Crossed a threshold or forecast to — worth triaging now."),
-        (.critical, "Critical", "Far out of bounds or breaching imminently.")
-    ]
-
-    var body: some View {
-        Image(systemName: "info.circle")
-            .font(.caption)
-            .foregroundStyle(isPresented ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
-            .contentShape(Circle().inset(by: -4))
-            .onHover { hovering in
-                hoverTask?.cancel()
-                hoverTask = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: hovering ? 220_000_000 : 150_000_000)
-                    guard !Task.isCancelled else {
-                        return
-                    }
-                    isPresented = hovering
-                }
-            }
-            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Threat Levels")
-                        .font(.subheadline.weight(.semibold))
-                    ForEach(entries, id: \.name) { entry in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Circle()
-                                .fill(entry.level == .quiet ? Color.teal : RadarStyle.color(for: entry.level))
-                                .frame(width: 8, height: 8)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(entry.name)
-                                    .font(.caption.weight(.semibold))
-                                Text(entry.meaning)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    Divider()
-                    Text("Action levels summarize measured resource use, persistence, and system pressure. Celsius values come from hardware sensors and are shown separately. A high resource reading does not automatically mean a process should be stopped.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(12)
-                .frame(width: 280, alignment: .leading)
-            }
-            .accessibilityLabel("Threat level legend")
-    }
-}
-
-/// Host memory pressure as a compact circular gauge, tinted by severity.
-/// Hovering reveals the full breakdown and what pressure does to scoring.
-struct MemoryPressureBadge: View {
-    let pressure: SystemMemoryPressure
-
-    @State private var isPresented = false
-    @State private var hoverTask: Task<Void, Never>?
-
-    private var color: Color {
-        pressure.level == .nominal ? .teal : RadarStyle.color(for: pressure.level.ghostLevel)
-    }
-
-    var body: some View {
-        HStack(spacing: 7) {
-            Gauge(value: pressure.usedFraction) {
-                EmptyView()
-            } currentValueLabel: {
-                Text("\(Int((pressure.usedFraction * 100).rounded()))")
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-            }
-            .gaugeStyle(.accessoryCircularCapacity)
-            .tint(color.gradient)
-            .scaleEffect(0.62)
-            .frame(width: 28, height: 28)
-            .background(color.opacity(0.09), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("PRESSURE")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.tertiary)
-                    .tracking(0.5)
-                    .lineLimit(1)
-                Text(pressure.isKnown ? pressure.level.label : "—")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(pressure.level == .nominal ? AnyShapeStyle(.primary) : AnyShapeStyle(color))
-                    .contentTransition(.opacity)
-            }
-        }
-        .frame(minHeight: 38, alignment: .leading)
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            hoverTask?.cancel()
-            hoverTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: hovering ? 220_000_000 : 150_000_000)
-                guard !Task.isCancelled else {
-                    return
-                }
-                isPresented = hovering
-            }
-        }
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("System Memory Pressure")
-                    .font(.subheadline.weight(.semibold))
-                if pressure.isKnown {
-                    breakdownRow("Used", "\(Int((pressure.usedFraction * 100).rounded()))% of \(RadarFormat.bytes(pressure.totalBytes))")
-                    breakdownRow("Available", RadarFormat.bytes(pressure.availableBytes))
-                    breakdownRow("Compressed", RadarFormat.bytes(pressure.compressedBytes))
-                    Divider()
-                }
-                Text("Sampled from host VM statistics every refresh. At Warning or Critical, large families get boosted scores — the same footprint matters more when the whole machine is starved.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(12)
-            .frame(width: 270, alignment: .leading)
-        }
-        .accessibilityLabel("System memory pressure \(pressure.level.label), \(pressure.summaryText)")
-    }
-
-    private func breakdownRow(_ title: String, _ value: String) -> some View {
-        HStack {
-            Text(title)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
-                .monospacedDigit()
-        }
-        .font(.caption)
     }
 }
 
