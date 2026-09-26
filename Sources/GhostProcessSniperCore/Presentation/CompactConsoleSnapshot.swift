@@ -169,13 +169,22 @@ public struct OverviewCommandCenterModel: Equatable, Sendable {
         subtitle = engineStatus.statusLine
         updatedText = engineStatus.updatedText
         level = summary.level
+        // Memory is informational here; host pressure tints it in the app.
+        // Engine timing lives on the Engine page, not the user dashboard.
         chips = [
-            FamilyMetricCard(title: "Families", value: "\(summary.familyCount)", systemImage: "rectangle.stack"),
-            FamilyMetricCard(title: "Hot", value: "\(summary.hotCount)", systemImage: "flame", level: summary.hotCount > 0 ? .hot : .quiet),
-            FamilyMetricCard(title: "Leaks", value: "\(summary.leakingCount)", systemImage: "chart.line.uptrend.xyaxis", level: summary.leakingCount > 0 ? .watch : .quiet),
-            FamilyMetricCard(title: "Duplicates", value: "\(duplicateCount)", systemImage: "doc.on.doc", level: duplicateCount > 0 ? .watch : .quiet),
-            FamilyMetricCard(title: "Memory", value: RadarFormat.bytes(summary.totalMemoryBytes), systemImage: "memorychip", level: .watch),
-            FamilyMetricCard(title: "Refresh", value: engineStatus.refreshText, systemImage: "timer")
+            FamilyMetricCard(title: "Families", value: "\(summary.familyCount)", systemImage: "rectangle.stack",
+                             destination: .families, actionTitle: "Browse all"),
+            FamilyMetricCard(title: "Needs review", value: "\(summary.hotCount)", systemImage: "flame",
+                             level: summary.hotCount > 0 ? .hot : .quiet,
+                             destination: .attention, actionTitle: "Review activity"),
+            FamilyMetricCard(title: "Leaks", value: "\(summary.leakingCount)", systemImage: "chart.line.uptrend.xyaxis",
+                             level: summary.leakingCount > 0 ? .watch : .quiet,
+                             destination: .leaking, actionTitle: "Inspect growth"),
+            FamilyMetricCard(title: "Duplicates", value: "\(duplicateCount)", systemImage: "doc.on.doc",
+                             level: duplicateCount > 0 ? .watch : .quiet,
+                             destination: .duplicates, actionTitle: "Review overlaps"),
+            FamilyMetricCard(title: "Memory", value: RadarFormat.bytes(summary.totalMemoryBytes), systemImage: "memorychip",
+                             destination: .memory, actionTitle: "Largest first")
         ]
     }
 }
