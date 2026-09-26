@@ -95,7 +95,7 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         smoothnessText: "0 ms publish / 0 coalesced / 0 UI hits",
         expensiveCallText: "0",
         storeBacklogText: "0",
-        storeCoalescingText: "0/0 forecasts, 0 rec skipped",
+        storeCoalescingText: "0 baseline writes, 0 deferred, 0 flushes skipped",
         pressureText: "Nominal",
         diagnosticsReport: "Ghost Process Sniper Diagnostics\nWarming up."
     )
@@ -162,7 +162,8 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         smoothnessText = "\(Int(metrics.mainActorPublishMilliseconds.rounded())) ms publish / \(metrics.coalescedRefreshCount) coalesced / \(metrics.diagnosticsOnlyPublishCount) diag-only / \(metrics.contentPublishSkippedCount) content skips / \(metrics.uiCacheHitCount) UI hits / \(metrics.uiPublishSkippedCount) UI skips\(hitchText)"
         expensiveCallText = "\(metrics.scannerHealth.expensiveCallCount)"
         storeBacklogText = "\(storeHealth.backlogCount + storeHealth.pendingActionCount)"
-        storeCoalescingText = "\(storeHealth.coalescingStats.forecastWrites)/\(storeHealth.coalescingStats.forecastCandidates) forecasts, \(storeHealth.coalescingStats.recommendationSkippedCount) rec skipped, \(storeHealth.rulesCacheHitCount) rule hits"
+        let writes = storeHealth.writeStats
+        storeCoalescingText = "\(writes.baselineWrites) baseline writes, \(writes.baselinesDeferred) deferred, \(writes.transactionsSkipped) flushes skipped, \(storeHealth.rulesCacheHitCount) rule hits"
         pressureText = metrics.pressureLevel.rawValue.capitalized
         let optimization = RadarOptimizationReport(scannerHealth: metrics.scannerHealth, metrics: metrics)
         diagnosticsReport = [

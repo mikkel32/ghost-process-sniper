@@ -77,25 +77,4 @@ enum RadarStoreRows {
             occurrenceCount: row.int(15)
         )
     }
-
-    static func forecastSnapshot(from row: SQLiteRow) -> ForecastStoreSnapshot {
-        ForecastStoreSnapshot(
-            signatureID: row.string(0) ?? "",
-            state: ForecastState(rawValue: row.string(1) ?? "") ?? .quiet,
-            confidence: row.double(2),
-            etaSeconds: row.isNull(3) ? nil : row.double(3),
-            whyNow: row.string(4) ?? "",
-            generatedAt: row.date(5)
-        )
-    }
-
-    static func predictiveAlert(from row: SQLiteRow) -> PredictiveAlert {
-        PredictiveAlert(
-            id: UUID(uuidString: row.string(0) ?? "") ?? UUID(),
-            signatureID: row.string(1) ?? "",
-            state: ForecastState(rawValue: row.string(2) ?? "") ?? .warming,
-            message: row.string(3) ?? "",
-            createdAt: row.date(4)
-        )
-    }
 }

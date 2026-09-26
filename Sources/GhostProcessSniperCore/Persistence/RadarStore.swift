@@ -20,7 +20,6 @@ public enum RadarStoreError: Error, LocalizedError {
 /// The database opens on first use, on this actor, so creating the store on
 /// the main actor at launch does no SQLite work there.
 public actor RadarStore {
-    public static let denseSampleRetention: TimeInterval = 7 * 24 * 60 * 60
     public static let incidentRetention: TimeInterval = 90 * 24 * 60 * 60
     static let openRetryInterval: TimeInterval = 30
     /// A locked or full disk must not grow the queue by a full model per tick.
@@ -33,15 +32,14 @@ public actor RadarStore {
     private let codec = StoreCodec()
     private let baselineBook: BaselineBook
     private let incidentLedger: IncidentLedger
-    private let forecastLedger: ForecastLedger
     private let ruleBook: RuleBook
+    private let maintenance: StoreMaintenance
     private let clock: @Sendable () -> Date
     private var openFailure: (date: Date, error: any Error)?
     private var recoveredFromCorruption = false
     private var pendingModels: [RadarModel] = []
-    private var pendingActions: [PendingAction] = []
     private var lastFlushDate: Date?
-    private var lastPruneDate: Date?
+    private var transactionsSkipped = 0
     private var lastFlushMilliseconds = 0.0
     private var lastContextMilliseconds = 0.0
     private var skippedSettingsWriteCount = 0
@@ -62,8 +60,9 @@ public actor RadarStore {
         db = database
         baselineBook = BaselineBook(db: database)
         incidentLedger = IncidentLedger(db: database, codec: codec)
-        forecastLedger = ForecastLedger(db: database)
-        ruleBook = RuleBook(db: database, codec: codec)
+        let rules = RuleBook(db: database, codec: codec)
+        ruleBook = rules
+        maintenance = StoreMaintenance(db: database, ruleBook: rules, baselineBook: baselineBook)
     }
 
     public static func defaultURL() -> URL {
@@ -114,11 +113,10 @@ public actor RadarStore {
             lastContextMilliseconds = Date().timeIntervalSince(contextStart) * 1_000
         }
         try ensureOpen()
-        try pruneIfNeeded(now: now)
         let signatureIDs = Array(Set(families.map(\.signature.id)))
         let rules = try ruleBook.composed(settings: settings, now: now)
         return RadarContext(
-            baselines: try baselineBook.baselines(for: signatureIDs),
+            baselines: try baselineBook.baselines(for: signatureIDs, at: now),
             recentIncidentCounts: try incidentLedger.recentCounts(
                 for: signatureIDs,
                 since: now.addingTimeInterval(-RadarStore.incidentRetention)
@@ -138,66 +136,67 @@ public actor RadarStore {
     }
 
     public func flush(now: Date = Date()) throws {
-        guard !pendingModels.isEmpty || !pendingActions.isEmpty else {
+        try flush(now: now, force: false)
+    }
+
+    /// Learns every queued model in memory, then writes only what is due:
+    /// incident changes and baselines that have learned enough or waited
+    /// long enough. A flush with nothing due skips the transaction entirely.
+    /// `force` writes every learned baseline, for shutdown.
+    private func flush(now: Date, force: Bool) throws {
+        guard !pendingModels.isEmpty || (force && baselineBook.deferredCount > 0) else {
             return
         }
         let models = pendingModels
-        let actions = pendingActions
         pendingModels.removeAll(keepingCapacity: true)
-        pendingActions.removeAll(keepingCapacity: true)
+        // Model dates drive the learning clocks, so replayed or test models
+        // age consistently.
+        let modelNow = models.last?.generatedAt ?? now
 
         let flushStart = Date()
         do {
-            try ensureOpen().transaction {
-                var latestForecastFamilies: [String: ProcessFamily] = [:]
-                var forecastCandidates = 0
-                for model in models {
-                    try baselineBook.learn(from: model.families, at: model.generatedAt)
-                    try incidentLedger.stage(model.families, at: model.generatedAt)
-                    for family in model.families.prefix(64) {
-                        forecastCandidates += 1
-                        latestForecastFamilies[family.signature.id] = family
-                    }
+            let db = try ensureOpen()
+            for model in models {
+                try baselineBook.learn(from: model.families, at: model.generatedAt)
+                try incidentLedger.stage(model.families, at: model.generatedAt)
+            }
+            baselineBook.stagePersist(now: modelNow, force: force)
+            if baselineBook.hasPendingWrites || incidentLedger.hasPendingWrites {
+                try db.transaction {
+                    try baselineBook.writeStaged()
+                    try incidentLedger.writeStaged()
                 }
-                if !latestForecastFamilies.isEmpty {
-                    try forecastLedger.persist(
-                        Array(latestForecastFamilies.values),
-                        at: models.last?.generatedAt ?? now,
-                        forecastCandidates: forecastCandidates
-                    )
-                }
-                try incidentLedger.writeStaged()
-                for action in actions {
-                    try writeAction(action)
-                }
+            } else {
+                transactionsSkipped += 1
             }
             baselineBook.commitStaged()
             incidentLedger.commitStaged()
-            forecastLedger.commitStaged()
             lastFlushDate = now
             lastFlushMilliseconds = Date().timeIntervalSince(flushStart) * 1_000
             lastErrorMessage = nil
         } catch {
             baselineBook.discardStaged()
             incidentLedger.discardStaged()
-            forecastLedger.discardStaged()
             let retry = models + pendingModels
             pendingModels = Array(retry.suffix(Self.maximumBacklog))
             droppedModelCount += retry.count - pendingModels.count
-            pendingActions.insert(contentsOf: actions, at: 0)
             lastErrorMessage = error.localizedDescription
             throw error
         }
+        if !force, maintenance.isDue(now: modelNow) {
+            runMaintenance(now: modelNow)
+        }
     }
 
-    /// Flushes what is queued, checkpoints and truncates the WAL, and closes
-    /// the connection. Every later call throws.
+    /// Flushes what is queued, persists every learned baseline, checkpoints
+    /// and truncates the WAL, and closes the connection. Every later call
+    /// throws.
     public func close() {
         guard !isClosed else {
             return
         }
         do {
-            try flush()
+            try flush(now: Date(), force: true)
         } catch {
             RadarLogger.store.error("Final flush failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -212,13 +211,17 @@ public actor RadarStore {
     public func storeHealth() -> StoreHealth {
         StoreHealth(
             backlogCount: pendingModels.count,
-            pendingActionCount: pendingActions.count,
+            pendingActionCount: 0,
             lastFlushDate: lastFlushDate,
-            lastPruneDate: lastPruneDate,
+            lastPruneDate: maintenance.lastRunDate,
             lastFlushMilliseconds: lastFlushMilliseconds,
             lastContextMilliseconds: lastContextMilliseconds,
             skippedSettingsWriteCount: skippedSettingsWriteCount,
-            coalescingStats: forecastLedger.lastStats,
+            writeStats: StoreWriteStats(
+                baselineWrites: baselineBook.writeCount,
+                baselinesDeferred: baselineBook.deferredCount,
+                transactionsSkipped: transactionsSkipped
+            ),
             rulesCacheHitCount: ruleBook.cacheHitCount,
             errorMessage: lastErrorMessage,
             lastKillOperationSummary: lastKillOperationSummary,
@@ -230,16 +233,6 @@ public actor RadarStore {
     public func recentIncidents(limit: Int = 80) throws -> [RadarIncident] {
         try ensureOpen()
         return try incidentLedger.recent(limit: limit)
-    }
-
-    public func recentForecasts(limit: Int = 80) throws -> [ForecastStoreSnapshot] {
-        try ensureOpen()
-        return try forecastLedger.recentForecasts(limit: limit)
-    }
-
-    public func recentPredictiveAlerts(limit: Int = 80) throws -> [PredictiveAlert] {
-        try ensureOpen()
-        return try forecastLedger.recentPredictiveAlerts(limit: limit)
     }
 
     public func loadRules(includeBuiltIns: Bool = true, settings: ThresholdSettings = .aggressive) throws -> [RadarRule] {
@@ -271,74 +264,42 @@ public actor RadarStore {
         try saveRule(stored[index])
     }
 
+    /// Kill reports are stored with their operation; this only notes the
+    /// action in the log.
     public func recordAction(
         kind: RadarActionType,
         family: ProcessFamily?,
         summary: String,
         at date: Date = Date()
     ) throws {
-        pendingActions.append(
-            PendingAction(
-                id: UUID(),
-                signatureID: family?.signature.id,
-                kind: kind,
-                summary: summary,
-                createdAt: date
-            )
-        )
-        if pendingActions.count >= 8 {
-            try flush(now: date)
-        }
+        RadarLogger.store.info("Action \(kind.rawValue, privacy: .public) on \(family?.displayName ?? "no family", privacy: .public)")
     }
 
-    public func actionSummaries(kind: RadarActionType, limit: Int = 20) throws -> [String] {
-        var summaries: [String] = []
-        try ensureOpen().query(
-            "SELECT summary FROM actions WHERE kind = ? ORDER BY created_at DESC LIMIT ?",
-            [.text(kind.rawValue), .int64(Int64(limit))]
-        ) { row in
-            if let summary = row.string(0) {
-                summaries.append(summary)
-            }
-        }
-        return summaries
-    }
-
+    /// Runs the daily maintenance now unless it ran in the last day.
     public func pruneIfNeeded(now: Date) throws {
-        if let lastPruneDate, now.timeIntervalSince(lastPruneDate) < 24 * 60 * 60 {
+        try ensureOpen()
+        guard maintenance.isDue(now: now, ignoringLaunchDelay: true) else {
             return
         }
-        let db = try ensureOpen()
-        let sampleCutoff = now.addingTimeInterval(-RadarStore.denseSampleRetention).timeIntervalSince1970
-        let cutoff = now.addingTimeInterval(-RadarStore.incidentRetention).timeIntervalSince1970
-        try db.execute("DELETE FROM samples WHERE sampled_at < ?", .double(sampleCutoff))
-        try db.execute("DELETE FROM incidents WHERE resolved_at IS NOT NULL AND resolved_at < ?", .double(cutoff))
-        for table in RadarStoreSchema.createdAtRetentionTables {
-            try db.execute("DELETE FROM \(table) WHERE created_at < ?", .double(cutoff))
+        try maintenance.run(now: now)
+    }
+
+    private func runMaintenance(now: Date) {
+        do {
+            try maintenance.run(now: now)
+        } catch {
+            RadarLogger.store.error("Store maintenance failed: \(error.localizedDescription, privacy: .public)")
         }
-        try ruleBook.pruneExpired(now: now)
-        lastPruneDate = now
     }
 
     private func shouldFlush(now: Date, settings: ThresholdSettings) -> Bool {
-        if pendingModels.count >= Self.maximumBacklog || pendingActions.count >= 8 {
+        if pendingModels.count >= Self.maximumBacklog {
             return true
         }
         guard let lastFlushDate else {
             return true
         }
         return now.timeIntervalSince(lastFlushDate) >= RadarPerformanceBudget.budget(for: settings.performanceMode).storeFlushInterval
-    }
-
-    private func writeAction(_ action: PendingAction) throws {
-        try ensureOpen().execute(
-            "INSERT INTO actions(id, signature_id, kind, summary, created_at) VALUES(?, ?, ?, ?, ?)",
-            .text(action.id.uuidString),
-            action.signatureID.map { .text($0) } ?? .null,
-            .text(action.kind.rawValue),
-            .text(action.summary),
-            .double(action.createdAt.timeIntervalSince1970)
-        )
     }
 
     /// Opens and migrates on first use. After a failure it retries at most
@@ -388,25 +349,27 @@ public actor RadarStore {
     private func openMigrated() throws {
         try db.open()
         do {
+            let version = try db.userVersion()
+            if version < RadarStoreSchema.slimVersion, try db.hasTables() {
+                StoreMaintenance.backUp(db, from: version)
+            }
             try db.migrate(RadarStoreSchema.migrations)
         } catch {
             db.close()
             throw error
         }
-    }
-
-    private struct PendingAction {
-        var id: UUID
-        var signatureID: String?
-        var kind: RadarActionType
-        var summary: String
-        var createdAt: Date
+        StoreMaintenance.enableIncrementalVacuum(db)
     }
 }
 
 // Raw statement helpers for the extensions (kill learning) that step
 // statements themselves.
 extension RadarStore {
+    /// Rows written since the connection opened; tests measure write volume.
+    func totalChanges() -> Int {
+        db.totalChanges
+    }
+
     func transaction(_ body: () throws -> Void) throws {
         try ensureOpen().transaction(body)
     }

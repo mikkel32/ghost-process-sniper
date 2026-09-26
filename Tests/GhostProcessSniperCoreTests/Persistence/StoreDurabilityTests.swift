@@ -46,7 +46,7 @@ final class StoreDurabilityTests: XCTestCase {
     func testLockedFlushesKeepTheBacklogBoundedAndNeverLearnTwice() async throws {
         let url = folder.appendingPathComponent("Radar.sqlite")
         let store = RadarStore(url: url, busyTimeoutMilliseconds: 10, clock: { Date() })
-        _ = try await store.enqueue(model: model(at: start), settings: .smart, now: start)
+        _ = try await store.enqueue(model: burstModel(at: start, burst: 0), settings: .smart, now: start)
 
         var blocker: OpaquePointer?
         XCTAssertEqual(sqlite3_open(url.path, &blocker), SQLITE_OK)
@@ -55,7 +55,7 @@ final class StoreDurabilityTests: XCTestCase {
 
         for second in 1...10 {
             let date = start.addingTimeInterval(TimeInterval(second))
-            _ = try? await store.enqueue(model: model(at: date), settings: .smart, now: date)
+            _ = try? await store.enqueue(model: burstModel(at: date, burst: second), settings: .smart, now: date)
             let backlog = await store.storeHealth().backlogCount
             XCTAssertLessThanOrEqual(backlog, 3, "backlog after model \(second)")
         }
@@ -102,6 +102,24 @@ final class StoreDurabilityTests: XCTestCase {
 
     private func model(at date: Date) -> RadarModel {
         RadarModel(families: [family(at: date)], summary: .empty, incidents: [], rules: [], health: .starting, generatedAt: date)
+    }
+
+    /// Adds a new hot family, so every flush has an incident to insert and
+    /// cannot skip its transaction while the database is locked.
+    private func burstModel(at date: Date, burst: Int) -> RadarModel {
+        let identity = ProcessIdentity(pid: Int32(760 + burst), startTimeSeconds: 1_000, startTimeMicroseconds: 0)
+        let root = ProcessMetrics(identity: identity, parentPID: 1, userID: 501, ownerName: "test", name: "burst-\(burst)",
+                                  executablePath: "/usr/local/bin/burst-\(burst)", commandLine: "burst-\(burst)",
+                                  residentMemoryBytes: 3_000_000_000, physicalFootprintBytes: 3_000_000_000,
+                                  virtualMemoryBytes: 6_000_000_000, cpuPercent: 90, totalProcessorSeconds: 10,
+                                  threadCount: 2, isSystemProcess: false, sampledAt: date)
+        let hot = ProcessFamily(root: root, members: [root], totalResidentMemoryBytes: 3_000_000_000,
+                                totalPhysicalFootprintBytes: 3_000_000_000, totalCPUPercent: 90,
+                                devConfidence: 0.9, commandHints: [root.commandLine], trend: .empty,
+                                score: GhostScore(value: 80, level: .hot, reasons: ["memory"]),
+                                ownedIdentities: [identity], protectedPIDs: [], lastScoredAt: date)
+        return RadarModel(families: [family(at: date), hot], summary: .empty, incidents: [], rules: [],
+                          health: .starting, generatedAt: date)
     }
 
     private func family(at date: Date) -> ProcessFamily {

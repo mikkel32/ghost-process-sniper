@@ -43,6 +43,69 @@ final class MigrationTests: XCTestCase {
         XCTAssertEqual(try reopened.string(indexes), "incidents_signature_started_resolved")
     }
 
+    func testVersionOneStoreSlimsDownAndKeepsItsHistory() async throws {
+        let url = folder.appendingPathComponent("Radar.sqlite")
+        let v1 = SQLiteDatabase(url: url)
+        try v1.open()
+        try v1.migrate(RadarStoreSchema.migrations.filter { $0.version == 1 })
+        let seed = [
+            """
+            INSERT INTO incidents VALUES('i1', 'sig', 'node', '/node', 'fp', 'node', 'Hot', 80, 1, 1, 0, '[]',
+                                         1800000000, 1800000010, 1800000020, 1)
+            """,
+            """
+            INSERT INTO baselines VALUES('sig', 'node', '/node', 'fp', 7, 1, 1, 1, 1, 0, 0, 1800000000, 1800000010, 1)
+            """,
+            """
+            INSERT INTO kill_operations VALUES('k1', 'sig', 'node', 42, 'Stopped', 1, 1, 1, 0, 0, 0, 0, 0, 12, 1800000000)
+            """,
+            "INSERT INTO forecasts VALUES('sig', 'leaking', 0.9, NULL, 'why', 1, 1, 0, 0, 1800000000)",
+            "INSERT INTO samples(signature_id, family_name, level, score, memory_bytes, cpu_percent, leak_velocity, sampled_at) VALUES('sig', 'node', 'Hot', 1, 1, 1, 0, 1)",
+            "INSERT INTO actions VALUES('a1', 'sig', 'kill', 'report', 1800000000)"
+        ]
+        for sql in seed {
+            try v1.exec(sql)
+        }
+        XCTAssertEqual(try v1.userVersion(), 1)
+        v1.close()
+
+        let store = RadarStore(url: url)
+        let incidents = try await store.recentIncidents()
+        XCTAssertEqual(incidents.map(\.id.uuidString.isEmpty), [false])
+        let kills = try await store.recentKillOperations()
+        XCTAssertEqual(kills.count, 1)
+        await store.close()
+
+        let migrated = SQLiteDatabase(url: url)
+        try migrated.open()
+        defer { migrated.close() }
+        XCTAssertEqual(try migrated.userVersion(), latest)
+        for table in ["samples", "forecasts", "recommendation_history", "predictive_alerts", "actions"] {
+            XCTAssertNil(try migrated.string("SELECT name FROM sqlite_master WHERE name = ?", [.text(table)]), table)
+        }
+        XCTAssertEqual(try migrated.string("SELECT sample_count FROM baselines WHERE signature_id = 'sig'"), "7")
+        XCTAssertEqual(try migrated.string("SELECT signature_id FROM incidents"), "sig")
+        XCTAssertEqual(try migrated.string("PRAGMA auto_vacuum"), "2", "the store compacts incrementally after migrating")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path + ".bak-v1"), "the pre-migration file is kept")
+        let backup = SQLiteDatabase(url: URL(fileURLWithPath: url.path + ".bak-v1"))
+        try backup.open()
+        defer { backup.close() }
+        XCTAssertEqual(try backup.string("SELECT COUNT(*) FROM forecasts"), "1")
+    }
+
+    func testFreshStoreStartsCompactable() async throws {
+        let url = folder.appendingPathComponent("Radar.sqlite")
+        let store = RadarStore(url: url)
+        _ = try await store.loadRules(includeBuiltIns: false)
+        await store.close()
+        let database = SQLiteDatabase(url: url)
+        try database.open()
+        defer { database.close() }
+        XCTAssertEqual(try database.string("PRAGMA auto_vacuum"), "2")
+        XCTAssertEqual(try database.string("PRAGMA journal_size_limit"), "4194304")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path + ".bak-v0"), "an empty file needs no backup")
+    }
+
     func testNewerVersionAppliesOnceAndKeepsRows() throws {
         let database = SQLiteDatabase(url: folder.appendingPathComponent("Radar.sqlite"))
         try database.open()

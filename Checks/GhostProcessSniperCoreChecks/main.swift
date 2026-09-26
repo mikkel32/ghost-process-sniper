@@ -75,8 +75,8 @@ struct CoreChecks {
         await run("monitorPublishObserversCanMutateRegistrationDuringCallback") { try monitorPublishObserversCanMutateRegistrationDuringCallback() }
         await run("radarStorePersistsSettingsRulesAndIncidents") { try await radarStorePersistsSettingsRulesAndIncidents() }
         await run("radarStoreQueriesIncidentsAndTogglesRules") { try await radarStoreQueriesIncidentsAndTogglesRules() }
-        await run("radarStorePersistsForecastSnapshots") { try await radarStorePersistsForecastSnapshots() }
-        await run("radarStoreCoalescesRecommendationHistory") { try await radarStoreCoalescesRecommendationHistory() }
+        await run("radarStoreKeepsForecastsInMemory") { try await radarStoreKeepsForecastsInMemory() }
+        await run("radarStoreDefersBaselineWrites") { try await radarStoreDefersBaselineWrites() }
         await run("monitorDebouncesSettingsPersistence") { try await monitorDebouncesSettingsPersistence() }
         await run("radarStoreBatchesQueuedWrites") { try await radarStoreBatchesQueuedWrites() }
         await run("radarStoreSkipsUnchangedSettingsAndBatchesContext") { try await radarStoreSkipsUnchangedSettingsAndBatchesContext() }
@@ -121,7 +121,7 @@ struct CoreChecks {
         await run("processKillerHonorsLiveSkipForceControl") { try await processKillerHonorsLiveSkipForceControl() }
         await run("killOperationStateMachineRecordsExitEvents") { try await killOperationStateMachineRecordsExitEvents() }
         await run("fakeKillPreviewBenchmarksStayBounded") { try await fakeKillPreviewBenchmarksStayBounded() }
-        await run("radarStoreRecordsKillActions") { try await radarStoreRecordsKillActions() }
+        await run("radarStoreLogsKillActionsWithoutWriting") { try await radarStoreLogsKillActionsWithoutWriting() }
         await run("radarStoreRecordsStructuredKillOperations") { try await radarStoreRecordsStructuredKillOperations() }
         await run("radarStoreRecordsKillEventsAndLearning") { try await radarStoreRecordsKillEventsAndLearning() }
         await run("radarStoreRecordsInterventionKernelTables") { try await radarStoreRecordsInterventionKernelTables() }
@@ -1858,7 +1858,7 @@ private func radarStoreQueriesIncidentsAndTogglesRules() async throws {
     try check(disabled?.isEnabled == false, "store should toggle custom rule enabled state")
 }
 
-private func radarStorePersistsForecastSnapshots() async throws {
+private func radarStoreKeepsForecastsInMemory() async throws {
     let url = temporaryStoreURL()
     defer { try? FileManager.default.removeItem(at: url) }
     let store = RadarStore(url: url)
@@ -1891,17 +1891,16 @@ private func radarStorePersistsForecastSnapshots() async throws {
     )
 
     try await persistNow(store, model: model, settings: settings)
-    let forecasts = try await store.recentForecasts(limit: 5)
-    let alerts = try await store.recentPredictiveAlerts(limit: 5)
     let diagnostics = try await store.exportDiagnosticsReport(settings: settings)
+    let health = await store.storeHealth()
 
-    try check(forecasts.first?.state == forecast.state, "store should persist latest forecast state additively")
-    try check(forecasts.first?.whyNow == forecast.whyNow, "forecast query should preserve why-now text")
-    try check(!alerts.isEmpty, "leaking predictive forecasts should create advisory alerts")
-    try check(diagnostics.contains("Forecasts:"), "store diagnostics should include forecast table health")
+    try check(forecast.state >= .warming, "the fixture should still forecast a leak")
+    try check(health.writeStats.baselineWrites == 0, "a forecast and a first baseline sample should not write to disk")
+    try check(!diagnostics.contains("Forecasts:"), "store diagnostics should no longer count write-only forecast rows")
+    try check(diagnostics.contains("Baseline writes:"), "store diagnostics should report write-behind health")
 }
 
-private func radarStoreCoalescesRecommendationHistory() async throws {
+private func radarStoreDefersBaselineWrites() async throws {
     let url = temporaryStoreURL()
     defer { try? FileManager.default.removeItem(at: url) }
     let store = RadarStore(url: url)
@@ -1937,8 +1936,14 @@ private func radarStoreCoalescesRecommendationHistory() async throws {
     try await persistNow(store, model: model, settings: settings)
     let health = await store.storeHealth()
 
-    try check(health.coalescingStats.recommendationSkippedCount >= 1, "store should skip duplicate recommendation history inside cooldown")
-    try check(health.coalescingStats.forecastWrites == 1, "store should upsert one forecast per signature")
+    try check(health.writeStats.baselineWrites == 0, "a baseline with one sample should wait in memory")
+    try check(health.writeStats.baselinesDeferred == 1, "the learned baseline should be reported as deferred")
+    try check(health.writeStats.transactionsSkipped >= 1, "a flush with nothing due should skip its transaction")
+
+    await store.close()
+    let reopened = RadarStore(url: url)
+    let context = try await reopened.context(for: [family], settings: settings, now: Date(timeIntervalSince1970: 7_701))
+    try check(context.baselines[family.signature.id] != nil, "closing should persist deferred baselines")
 }
 
 @MainActor
@@ -3286,16 +3291,15 @@ private func syntheticKillPreviewBenchmark(processCount: Int, maxMilliseconds: D
     try check(preview.targetConversionCount == 0, "synthetic graph preview should not require full ProcessMetrics conversion")
 }
 
-private func radarStoreRecordsKillActions() async throws {
+private func radarStoreLogsKillActionsWithoutWriting() async throws {
     let store = RadarStore(url: temporaryStoreURL())
     let family = hotFamily(pid: 95, memory: 700_000_000, cpu: 75)
     let report = KillReport(displayName: "node", rootPID: 95, gracefulPIDs: [95])
 
     try await store.recordAction(kind: .kill, family: family, summary: report.diagnosticText, at: Date(timeIntervalSince1970: 20))
-    try await store.flush(now: Date(timeIntervalSince1970: 20))
-    let summaries = try await store.actionSummaries(kind: .kill)
+    let health = await store.storeHealth()
 
-    try check(summaries.first?.contains("Ghost Process Sniper Kill Report") == true, "store should persist actual kill actions")
+    try check(health.pendingActionCount == 0, "kill reports live with their operation, not in a second action log")
 }
 
 private func radarStoreRecordsStructuredKillOperations() async throws {

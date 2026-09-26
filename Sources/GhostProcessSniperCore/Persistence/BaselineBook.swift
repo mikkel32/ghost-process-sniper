@@ -4,24 +4,60 @@ import Foundation
 /// signatures known to have no row are remembered, so a refresh never re-reads
 /// what it already knows.
 ///
-/// Writes are staged until the caller's transaction commits: a rolled-back
-/// flush that is retried must not learn the same samples twice.
+/// Learning happens in memory on every model; rows are written behind. A
+/// changed baseline is persisted once it has learned `persistEverySamples`
+/// more samples or has waited `persistAfter`, in passes at most
+/// `persistPassInterval` apart, and shutdown persists the rest. A crash loses
+/// at most that much learning, which the next samples make up.
+///
+/// Learning and persistence state are staged until the caller's transaction
+/// commits: a rolled-back flush that is retried must not learn the same
+/// samples twice.
 final class BaselineBook {
+    static let persistEverySamples = 5
+    static let persistAfter: TimeInterval = 10 * 60
+    static let persistPassInterval: TimeInterval = 60
     private static let maximumUpdates = 512
     // Keeps the cold-load query comfortably below SQLite variable limits.
     private static let chunkSize = 400
 
+    /// A learned change that is not on disk yet.
+    struct Dirty: Equatable {
+        var persistedSampleCount: Int
+        var since: Date
+    }
+
     private let db: SQLiteDatabase
     private var cache: [String: FamilyBaseline] = [:]
-    private var staged: [String: FamilyBaseline] = [:]
-    private var knownMissing: Set<String> = []
+    /// Signatures with no row, and when they were last asked for.
+    private var knownMissing: [String: Date] = [:]
+    private var dirty: [String: Dirty] = [:]
+    private var lastPersistPass: Date?
     private var roundRobinOffset = 0
+
+    private var staged: [String: FamilyBaseline] = [:]
+    /// A nil value clears the entry on commit.
+    private var stagedDirty: [String: Dirty?] = [:]
+    private var stagedPersistPass: Date?
+    private var stagedRoundRobinOffset: Int?
+    private var pendingUpserts: [FamilyBaseline] = []
+
+    private(set) var writeCount = 0
 
     init(db: SQLiteDatabase) {
         self.db = db
     }
 
-    func baselines(for signatureIDs: [String]) throws -> [String: FamilyBaseline] {
+    var hasPendingWrites: Bool {
+        !pendingUpserts.isEmpty
+    }
+
+    /// Baselines learned but not written yet.
+    var deferredCount: Int {
+        dirty.count
+    }
+
+    func baselines(for signatureIDs: [String], at date: Date? = nil) throws -> [String: FamilyBaseline] {
         guard !signatureIDs.isEmpty else {
             return [:]
         }
@@ -37,7 +73,11 @@ final class BaselineBook {
                 result[signatureID] = pending
             } else if let cached = cache[signatureID] {
                 result[signatureID] = cached
-            } else if !knownMissing.contains(signatureID) {
+            } else if knownMissing[signatureID] != nil {
+                if let date {
+                    knownMissing[signatureID] = date
+                }
+            } else {
                 missing.append(signatureID)
             }
         }
@@ -62,29 +102,58 @@ final class BaselineBook {
                 let baseline = RadarStoreRows.baseline(from: row)
                 let signatureID = baseline.signature.id
                 cache[signatureID] = baseline
-                knownMissing.remove(signatureID)
+                knownMissing[signatureID] = nil
                 result[signatureID] = baseline
                 found.insert(signatureID)
             }
 
             for signatureID in chunk where !found.contains(signatureID) {
-                knownMissing.insert(signatureID)
+                knownMissing[signatureID] = date ?? .distantPast
             }
             start = end
         }
         return result
     }
 
+    /// Learns one model into the staged baselines. Nothing is written.
     func learn(from families: [ProcessFamily], at date: Date) throws {
         let candidates = updateCandidates(from: families)
-        let existing = try baselines(for: candidates.map(\.signature.id))
+        let existing = try baselines(for: candidates.map(\.signature.id), at: date)
         let learner = FamilyBaselineLearner()
         for family in candidates {
-            let baseline = learner.updated(
-                existing: existing[family.signature.id],
-                family: family,
-                now: date
-            )
+            let signatureID = family.signature.id
+            let previous = existing[signatureID]
+            let baseline = learner.updated(existing: previous, family: family, now: date)
+            guard baseline != previous else { continue }
+            staged[signatureID] = baseline
+            if currentDirty(signatureID) == nil {
+                stagedDirty[signatureID] = Dirty(persistedSampleCount: previous?.sampleCount ?? 0, since: date)
+            }
+        }
+    }
+
+    /// Queues the dirty baselines that are due. `force` queues every one,
+    /// for shutdown.
+    func stagePersist(now: Date, force: Bool) {
+        if !force, let last = stagedPersistPass ?? lastPersistPass, now.timeIntervalSince(last) < Self.persistPassInterval {
+            return
+        }
+        var due: [FamilyBaseline] = []
+        for signatureID in Set(dirty.keys).union(stagedDirty.keys) {
+            guard let state = currentDirty(signatureID),
+                  let baseline = staged[signatureID] ?? cache[signatureID] else { continue }
+            let learned = baseline.sampleCount - state.persistedSampleCount
+            if force || learned >= Self.persistEverySamples || now.timeIntervalSince(state.since) >= Self.persistAfter {
+                due.append(baseline)
+                stagedDirty[signatureID] = .some(nil)
+            }
+        }
+        stagedPersistPass = now
+        pendingUpserts = due.sorted { $0.signature.id < $1.signature.id }
+    }
+
+    func writeStaged() throws {
+        for baseline in pendingUpserts {
             try upsert(baseline)
         }
     }
@@ -92,13 +161,41 @@ final class BaselineBook {
     func commitStaged() {
         for (signatureID, baseline) in staged {
             cache[signatureID] = baseline
-            knownMissing.remove(signatureID)
+            knownMissing[signatureID] = nil
         }
-        staged.removeAll(keepingCapacity: true)
+        for (signatureID, state) in stagedDirty {
+            dirty[signatureID] = state
+        }
+        if let stagedPersistPass {
+            lastPersistPass = stagedPersistPass
+        }
+        if let stagedRoundRobinOffset {
+            roundRobinOffset = stagedRoundRobinOffset
+        }
+        writeCount += pendingUpserts.count
+        discardStaged()
     }
 
     func discardStaged() {
         staged.removeAll(keepingCapacity: true)
+        stagedDirty.removeAll(keepingCapacity: true)
+        stagedPersistPass = nil
+        stagedRoundRobinOffset = nil
+        pendingUpserts.removeAll(keepingCapacity: true)
+    }
+
+    /// Forgets clean rows and misses not seen since `cutoff`; a signature that
+    /// comes back reloads from disk.
+    func evict(notSeenSince cutoff: Date) {
+        cache = cache.filter { dirty[$0.key] != nil || $0.value.lastSeenAt >= cutoff }
+        knownMissing = knownMissing.filter { $0.value >= cutoff }
+    }
+
+    private func currentDirty(_ signatureID: String) -> Dirty? {
+        if let staged = stagedDirty[signatureID] {
+            return staged
+        }
+        return dirty[signatureID]
     }
 
     private func updateCandidates(from families: [ProcessFamily]) -> [ProcessFamily] {
@@ -113,8 +210,8 @@ final class BaselineBook {
 
         // Always spend part of the budget on families that can affect the
         // current diagnosis. Quiet families still learn through a rotating
-        // slice, so a huge process table cannot turn into thousands of SQLite
-        // upserts every flush.
+        // slice, so a huge process table cannot turn into thousands of
+        // updates every flush.
         let priorityLimit = maximumUpdates / 2
         var selected: [ProcessFamily] = []
         selected.reserveCapacity(maximumUpdates)
@@ -134,12 +231,12 @@ final class BaselineBook {
             return selected
         }
 
-        let start = roundRobinOffset % quiet.count
+        let start = (stagedRoundRobinOffset ?? roundRobinOffset) % quiet.count
         let remaining = maximumUpdates - selected.count
         for offset in 0..<min(remaining, quiet.count) {
             selected.append(quiet[(start + offset) % quiet.count])
         }
-        roundRobinOffset = (start + remaining) % quiet.count
+        stagedRoundRobinOffset = (start + remaining) % quiet.count
         return selected
     }
 
@@ -178,6 +275,5 @@ final class BaselineBook {
             .double(baseline.lastSeenAt.timeIntervalSince1970),
             .int64(Int64(baseline.measurementVersion ?? 0))
         )
-        staged[baseline.signature.id] = baseline
     }
 }

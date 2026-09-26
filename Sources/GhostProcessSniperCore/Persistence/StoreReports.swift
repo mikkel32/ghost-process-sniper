@@ -24,23 +24,20 @@ extension RadarStore {
         let health = storeHealth()
         let rules = try loadRules(settings: settings)
         let incidents = try recentIncidents(limit: 12)
-        let forecasts = try recentForecasts(limit: 12)
-        let alerts = try recentPredictiveAlerts(limit: 12)
         let kills = try recentKillOperations(limit: 5)
         return [
             "Ghost Process Sniper Store Diagnostics",
             "URL: \(url.path)",
-            "Backlog: \(health.backlogCount), actions: \(health.pendingActionCount), dropped models: \(health.droppedModelCount)",
+            "Backlog: \(health.backlogCount), dropped models: \(health.droppedModelCount)",
             "Last flush: \(health.lastFlushDate?.formatted() ?? "none")",
             "Last flush cost: \(Int(health.lastFlushMilliseconds.rounded())) ms",
             "Last context cost: \(Int(health.lastContextMilliseconds.rounded())) ms",
             "Skipped settings writes: \(health.skippedSettingsWriteCount)",
-            "Forecast writes: \(health.coalescingStats.forecastWrites)/\(health.coalescingStats.forecastCandidates)",
-            "Recommendation writes: \(health.coalescingStats.recommendationWrites), skipped: \(health.coalescingStats.recommendationSkippedCount)",
-            "Last prune: \(health.lastPruneDate?.formatted() ?? "none")",
+            "Baseline writes: \(health.writeStats.baselineWrites), deferred: \(health.writeStats.baselinesDeferred)",
+            "Flushes without a transaction: \(health.writeStats.transactionsSkipped)",
+            "Last maintenance: \(health.lastPruneDate?.formatted() ?? "none")",
             "Rules: \(rules.count)",
             "Recent incidents: \(incidents.count)",
-            "Forecasts: \(forecasts.count), predictive alerts: \(alerts.count)",
             "Recent kills: \(kills.count)",
             "Last kill: \(kills.first?.summary ?? "none")",
             "Error: \(health.errorMessage ?? "none")",

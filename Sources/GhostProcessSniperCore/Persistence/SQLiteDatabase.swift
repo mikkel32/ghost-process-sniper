@@ -108,6 +108,9 @@ final class SQLiteDatabase {
             sqlite3_busy_timeout(opened, busyTimeoutMilliseconds)
             try exec("PRAGMA journal_mode = WAL")
             try exec("PRAGMA synchronous = NORMAL")
+            // A burst of writes may grow the WAL; truncate it back after
+            // checkpoints instead of keeping the high-water mark on disk.
+            try exec("PRAGMA journal_size_limit = 4194304")
         } catch {
             close()
             throw error
@@ -143,6 +146,10 @@ final class SQLiteDatabase {
             version = Int32(truncatingIfNeeded: row.int64(0))
         }
         return version
+    }
+
+    func hasTables() throws -> Bool {
+        try string("SELECT name FROM sqlite_master WHERE type = 'table' LIMIT 1") != nil
     }
 
     func hasColumn(_ column: String, in table: String) throws -> Bool {
@@ -265,6 +272,11 @@ final class SQLiteDatabase {
 
     var changes: Int {
         handle.map { Int(sqlite3_changes($0)) } ?? 0
+    }
+
+    /// Rows inserted, updated or deleted since the connection opened.
+    var totalChanges: Int {
+        handle.map { Int(sqlite3_total_changes($0)) } ?? 0
     }
 
     /// Cached per SQL text; reused with its bindings cleared.

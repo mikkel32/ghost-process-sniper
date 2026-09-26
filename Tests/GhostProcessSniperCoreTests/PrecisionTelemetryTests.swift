@@ -122,6 +122,8 @@ final class PrecisionTelemetryTests: XCTestCase {
         let model = RadarModel(families: [f], summary: .empty, incidents: [], rules: [], health: .starting, generatedAt: now)
         _ = try await store.enqueue(model: model, settings: .smart)
         try await store.flush()
+        // Baselines are written behind; closing persists what was learned.
+        await store.close()
         let reopened = RadarStore(url: url)
         let loaded = try await reopened.context(for: [f], settings: .smart, now: now)
         XCTAssertEqual(loaded.baselines[f.signature.id]?.measurementVersion, 1)

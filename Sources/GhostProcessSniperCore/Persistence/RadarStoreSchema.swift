@@ -1,6 +1,10 @@
 import Foundation
 
 enum RadarStoreSchema {
+    /// The version that drops the write-only tables; the store backs the file
+    /// up before migrating past it.
+    static let slimVersion: Int32 = 3
+
     /// Append new versions; never edit a version that has shipped.
     static let migrations = [
         // Version 1 is the schema from before versioning. Its statements are
@@ -20,14 +24,28 @@ enum RadarStoreSchema {
                 "DROP INDEX IF EXISTS incidents_signature_started",
                 "CREATE INDEX IF NOT EXISTS incidents_signature_started_resolved ON incidents(signature_id, started_at, resolved_at)"
             ]
+        ),
+        // Tables nothing reads, and indexes no query uses. The kill detail
+        // tables stay until kill learning stops writing them.
+        SQLiteMigration(
+            version: slimVersion,
+            statements: [
+                "DROP TABLE IF EXISTS samples",
+                "DROP TABLE IF EXISTS forecasts",
+                "DROP TABLE IF EXISTS recommendation_history",
+                "DROP TABLE IF EXISTS predictive_alerts",
+                "DROP TABLE IF EXISTS actions",
+                "DROP INDEX IF EXISTS kill_operations_signature_time",
+                "DROP INDEX IF EXISTS kill_calibration_signature_kind_strategy"
+            ]
         )
     ]
 
     /// Tables whose rows expire `incidentRetention` after `created_at`.
     static let createdAtRetentionTables = [
-        "actions", "kill_operations", "kill_operation_events", "kill_outcome_history",
+        "kill_operations", "kill_operation_events", "kill_outcome_history",
         "kill_strategy_history", "kill_signal_outcomes", "kill_graph_deltas",
-        "kill_reclaim_calibration", "kill_exit_events", "predictive_alerts", "recommendation_history"
+        "kill_reclaim_calibration", "kill_exit_events"
     ]
 
     /// Connection pragmas (WAL, synchronous, busy timeout) are applied by
@@ -350,20 +368,6 @@ enum RadarStoreQueries {
         SET resolved_at = ?, last_seen_at = MAX(last_seen_at, ?),
             max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?)
         WHERE id = ?
-        """
-
-    static let recentForecasts = """
-        SELECT signature_id, state, confidence, eta_seconds, why_now, generated_at
-        FROM forecasts
-        ORDER BY generated_at DESC
-        LIMIT ?
-        """
-
-    static let recentPredictiveAlerts = """
-        SELECT id, signature_id, state, message, created_at
-        FROM predictive_alerts
-        ORDER BY created_at DESC
-        LIMIT ?
         """
 
     static let recentKillOperations = """

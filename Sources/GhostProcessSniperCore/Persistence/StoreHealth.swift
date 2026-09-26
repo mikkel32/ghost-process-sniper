@@ -8,7 +8,7 @@ public struct StoreHealth: Equatable, Sendable {
     public let lastFlushMilliseconds: Double
     public let lastContextMilliseconds: Double
     public let skippedSettingsWriteCount: Int
-    public let coalescingStats: StoreCoalescingStats
+    public let writeStats: StoreWriteStats
     public let rulesCacheHitCount: Int
     public let errorMessage: String?
     public let lastKillOperationSummary: String?
@@ -25,7 +25,7 @@ public struct StoreHealth: Equatable, Sendable {
         lastFlushMilliseconds: 0,
         lastContextMilliseconds: 0,
         skippedSettingsWriteCount: 0,
-        coalescingStats: .empty,
+        writeStats: .empty,
         rulesCacheHitCount: 0,
         errorMessage: nil,
         lastKillOperationSummary: nil
@@ -39,7 +39,7 @@ public struct StoreHealth: Equatable, Sendable {
         lastFlushMilliseconds: Double = 0,
         lastContextMilliseconds: Double = 0,
         skippedSettingsWriteCount: Int = 0,
-        coalescingStats: StoreCoalescingStats = .empty,
+        writeStats: StoreWriteStats = .empty,
         rulesCacheHitCount: Int = 0,
         errorMessage: String?,
         lastKillOperationSummary: String? = nil,
@@ -53,7 +53,7 @@ public struct StoreHealth: Equatable, Sendable {
         self.lastFlushMilliseconds = lastFlushMilliseconds
         self.lastContextMilliseconds = lastContextMilliseconds
         self.skippedSettingsWriteCount = skippedSettingsWriteCount
-        self.coalescingStats = coalescingStats
+        self.writeStats = writeStats
         self.rulesCacheHitCount = rulesCacheHitCount
         self.errorMessage = errorMessage
         self.lastKillOperationSummary = lastKillOperationSummary
@@ -62,28 +62,20 @@ public struct StoreHealth: Equatable, Sendable {
     }
 }
 
-public struct StoreCoalescingStats: Equatable, Sendable {
-    public let forecastCandidates: Int
-    public let forecastWrites: Int
-    public let recommendationWrites: Int
-    public let recommendationSkippedCount: Int
+/// How much the write-behind store avoided writing.
+public struct StoreWriteStats: Equatable, Sendable {
+    /// Baseline rows written this session.
+    public let baselineWrites: Int
+    /// Baselines learned in memory and waiting for their next write.
+    public let baselinesDeferred: Int
+    /// Flushes that had nothing due and skipped the transaction entirely.
+    public let transactionsSkipped: Int
 
-    public static let empty = StoreCoalescingStats(
-        forecastCandidates: 0,
-        forecastWrites: 0,
-        recommendationWrites: 0,
-        recommendationSkippedCount: 0
-    )
+    public static let empty = StoreWriteStats(baselineWrites: 0, baselinesDeferred: 0, transactionsSkipped: 0)
 
-    public init(
-        forecastCandidates: Int,
-        forecastWrites: Int,
-        recommendationWrites: Int,
-        recommendationSkippedCount: Int
-    ) {
-        self.forecastCandidates = forecastCandidates
-        self.forecastWrites = forecastWrites
-        self.recommendationWrites = recommendationWrites
-        self.recommendationSkippedCount = recommendationSkippedCount
+    public init(baselineWrites: Int, baselinesDeferred: Int, transactionsSkipped: Int) {
+        self.baselineWrites = baselineWrites
+        self.baselinesDeferred = baselinesDeferred
+        self.transactionsSkipped = transactionsSkipped
     }
 }
