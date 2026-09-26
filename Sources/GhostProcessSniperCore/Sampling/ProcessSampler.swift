@@ -199,8 +199,7 @@ public actor NativeProcessSampler: ProcessSampling {
                 totalProcessorSeconds: totalProcessorSeconds,
                 cpu: cpu,
                 isPriority: isPriority,
-                telemetry: nil,
-                forensics: nil
+                session: liteRecord.session(cachedSessionID: cachedRecord?.process.sessionID)
             )
 
             // TELEMETRY CACHE CHECK
@@ -418,7 +417,8 @@ public actor NativeProcessSampler: ProcessSampling {
                 forensics: forensics,
                 measurementStatus: sampleItem.measurementStatus,
                 cpuMeasurementStatus: sampleItem.cpuMeasurementStatus,
-                gpuMeasurementStatus: gpuMeasurementStatus
+                gpuMeasurementStatus: gpuMeasurementStatus,
+                session: sampleItem.session
             )
 
             scanCache.update(ProcessRecord(identity: identity, process: process, telemetryRefreshedAt: telemetry.refreshedAt))

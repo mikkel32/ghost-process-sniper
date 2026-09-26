@@ -30,6 +30,9 @@ public struct ProcessMetrics: Identifiable, Equatable, Sendable {
     public let cpuMeasurementStatus: ProcessMeasurementStatus
     public let gpuMeasurementStatus: ProcessMeasurementStatus
     public let forensics: ProcessForensics
+    /// Process group, session, terminal and run state; `.unknown` when the
+    /// sampler did not read them.
+    public let session: ProcessSessionInfo
 
     public var measurementDate: Date? {
         date(for: measurementStatus)
@@ -47,6 +50,14 @@ public struct ProcessMetrics: Identifiable, Equatable, Sendable {
     }
 
     public var pid: Int32 { identity.pid }
+    public var processGroupID: Int32? { session.processGroupID }
+    public var sessionID: Int32? { session.sessionID }
+    public var controllingTerminal: UInt32? { session.controllingTerminal }
+    public var terminalForegroundGroupID: Int32? { session.terminalForegroundGroupID }
+    public var runState: ProcessRunState { session.runState }
+    /// Exited but not yet reaped by its parent: it holds no memory or CPU
+    /// and cannot be killed; only the parent can clear it.
+    public var isZombie: Bool { session.runState == .zombie }
     public var memoryForScoringBytes: UInt64 { max(physicalFootprintBytes, residentMemoryBytes) }
 
     public init(
@@ -69,7 +80,8 @@ public struct ProcessMetrics: Identifiable, Equatable, Sendable {
         forensics: ProcessForensics = .unavailable(reason: "not sampled"),
         measurementStatus: ProcessMeasurementStatus = .fresh,
         cpuMeasurementStatus: ProcessMeasurementStatus? = nil,
-        gpuMeasurementStatus: ProcessMeasurementStatus? = nil
+        gpuMeasurementStatus: ProcessMeasurementStatus? = nil,
+        session: ProcessSessionInfo = .unknown
     ) {
         self.identity = identity
         self.parentPID = parentPID
@@ -91,5 +103,6 @@ public struct ProcessMetrics: Identifiable, Equatable, Sendable {
         self.cpuMeasurementStatus = cpuMeasurementStatus ?? measurementStatus
         self.gpuMeasurementStatus = gpuMeasurementStatus ?? measurementStatus
         self.forensics = forensics
+        self.session = session
     }
 }

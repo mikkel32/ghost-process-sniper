@@ -71,6 +71,24 @@ final class DuplicateScoringTests: XCTestCase {
         XCTAssertFalse(other.suggestions.contains { $0.targetIdentities != nil })
     }
 
+    func testTheCopyInATerminalIsKeptOverANewerDetachedOne() {
+        let script = "/Users/dev/api/server.js"
+        let inTerminal = node(950, parent: 1, script, startedAgo: 7_200)
+        let attached = ProcessMetrics(
+            identity: inTerminal.identity, parentPID: 1, userID: 501, ownerName: "dev", name: "node",
+            executablePath: "/usr/local/bin/node", commandLine: inTerminal.commandLine,
+            residentMemoryBytes: inTerminal.residentMemoryBytes, physicalFootprintBytes: inTerminal.physicalFootprintBytes,
+            virtualMemoryBytes: inTerminal.virtualMemoryBytes, cpuPercent: 1, totalProcessorSeconds: 0, threadCount: 4,
+            isSystemProcess: false, sampledAt: Fixture.now,
+            session: ProcessSessionInfo(processGroupID: 950, sessionID: 940, controllingTerminal: 0x1000002,
+                                        terminalForegroundGroupID: 950, runState: .sleeping)
+        )
+        let newer = node(951, script, startedAgo: 60)
+        let cluster = build([attached, newer]).duplicateClusters.first
+        XCTAssertEqual(cluster?.keepIdentity, attached.identity)
+        XCTAssertEqual(cluster?.keepReason, "the one attached to a terminal")
+    }
+
     func testDifferentScriptsOnOneInterpreterAreNotCopies() {
         let result = build([
             node(1_000, "/Users/dev/web/node_modules/.bin/vite"),

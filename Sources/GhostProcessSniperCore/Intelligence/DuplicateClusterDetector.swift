@@ -23,7 +23,8 @@ public struct DuplicateClusterDetector: Sendable {
         classifications: [Int32: DevClassification],
         byPID: [Int32: ProcessMetrics]? = nil,
         now: Date = Date(),
-        candidateKey: ((ProcessMetrics) -> DuplicateClusterKey?)? = nil
+        candidateKey: ((ProcessMetrics) -> DuplicateClusterKey?)? = nil,
+        lastActive: (ProcessIdentity) -> Date? = { _ in nil }
     ) -> DuplicateClusterSet {
         let started = Date()
         let byPID = byPID ?? Dictionary(processes.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
@@ -55,6 +56,7 @@ public struct DuplicateClusterDetector: Sendable {
                 .max { $0.groupingPriority < $1.groupingPriority }
                 ?? DevClassification(kind: .cliTool, confidence: 0.2, reason: "matching executable")
             let copies = Self.copyRoots(of: members, byPID: byPID)
+            let keep = copies.count >= 2 ? Self.preferredCopy(copies, lastActive: lastActive) : nil
             clusters.append(
                 DuplicateProcessCluster(
                     key: key,
@@ -64,7 +66,8 @@ public struct DuplicateClusterDetector: Sendable {
                     likelyKind: bestClassification.kind,
                     classificationReason: bestClassification.reason,
                     copyRootIdentities: copies.map(\.identity),
-                    keepIdentity: copies.count >= 2 ? Self.preferredCopy(copies)?.identity : nil
+                    keepIdentity: keep?.copy.identity,
+                    keepReason: keep?.reason ?? "the newest copy"
                 )
             )
         }
@@ -105,9 +108,23 @@ public struct DuplicateClusterDetector: Sendable {
         return (independent + pools.values).sorted { $0.pid < $1.pid }
     }
 
-    /// Newest start wins: the older copies are the ones left behind.
-    static func preferredCopy(_ copies: [ProcessMetrics]) -> ProcessMetrics? {
-        copies.max { isOlder($0, than: $1) }
+    /// The copy someone is using: the one in a terminal, else the one that
+    /// did work most recently, else the newest; older idle copies are the
+    /// ones left behind.
+    static func preferredCopy(
+        _ copies: [ProcessMetrics],
+        lastActive: (ProcessIdentity) -> Date?
+    ) -> (copy: ProcessMetrics, reason: String)? {
+        let attached = copies.filter { $0.controllingTerminal != nil }
+        if attached.count == 1, let copy = attached.first {
+            return (copy, "the one attached to a terminal")
+        }
+        let pool = attached.isEmpty ? copies : attached
+        let active = pool.compactMap { copy in lastActive(copy.identity).map { (copy, $0) } }
+        if let latest = active.max(by: { $0.1 < $1.1 }), active.filter({ $0.1 == latest.1 }).count == 1 {
+            return (latest.0, "the most recently active")
+        }
+        return pool.max { isOlder($0, than: $1) }.map { ($0, "the newest copy") }
     }
 
     private static func isOlder(_ lhs: ProcessMetrics, than rhs: ProcessMetrics) -> Bool {

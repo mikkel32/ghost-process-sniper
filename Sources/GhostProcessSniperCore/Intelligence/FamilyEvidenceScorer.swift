@@ -13,6 +13,8 @@ struct FamilyEvidenceScorer: Sendable {
         duplicateCluster: DuplicateProcessCluster?,
         hardwareSignals: [HardwareOffenderSignal],
         trend: TrendMetrics,
+        forgotten: ForgottenAssessment,
+        zombieChildCount: Int,
         settings: ThresholdSettings,
         now: Date
     ) -> GhostScore {
@@ -30,7 +32,7 @@ struct FamilyEvidenceScorer: Sendable {
         let duplicateImpact = copies.map { min(12, Double($0.independentRootCount - 1) * 4) } ?? 0
         let hardwareImpact = min(24, hardwareSignals.reduce(0) { $0 + $1.impact })
         let ageMinutes = max(0, now.timeIntervalSince(Date(timeIntervalSince1970: TimeInterval(root.identity.startTimeSeconds))) / 60)
-        let orphanBonus = confidence >= 0.35 && LaunchOrigin.isDetachedFromLauncher(root) ? 6.0 : 0
+        let forgottenImpact = confidence >= 0.35 && forgotten.likelihood >= 0.45 ? min(8, forgotten.likelihood * 8) : 0
 
         let memoryImpact = memoryRatio * 38
         let cpuImpact = cpuRatio * 34
@@ -111,13 +113,23 @@ struct FamilyEvidenceScorer: Sendable {
                 level: copies.independentRootCount >= 4 ? .hot : .watch
             ))
         }
-        if orphanBonus > 0 {
+        if forgottenImpact > 0 {
             components.append(GhostScoreComponent(
-                slot: "orphan",
+                slot: "forgotten",
                 kind: .background,
-                title: "background dev process",
-                detail: "Detached from its original parent and still running in the background",
-                impact: orphanBonus,
+                title: "likely forgotten",
+                detail: forgotten.facts.isEmpty ? "Nothing suggests anyone is using it" : sentence(forgotten.facts.joined(separator: ", ")),
+                impact: forgottenImpact,
+                level: .watch
+            ))
+        }
+        if zombieChildCount >= 3 {
+            components.append(GhostScoreComponent(
+                slot: "zombies",
+                kind: .system,
+                title: "\(zombieChildCount) unreaped child processes",
+                detail: "The parent never collected its exited children; only restarting the parent clears them",
+                impact: 4,
                 level: .watch
             ))
         }
@@ -184,8 +196,11 @@ struct FamilyEvidenceScorer: Sendable {
         if let copies {
             reasons.append("\(copies.independentRootCount) independent copies")
         }
-        if orphanBonus > 0 {
-            reasons.append("background dev process")
+        if forgottenImpact > 0 {
+            reasons.append("likely forgotten")
+        }
+        if zombieChildCount >= 3 {
+            reasons.append("\(zombieChildCount) zombie children")
         }
         if ageMinutes > 180, confidence >= 0.45 {
             reasons.append("long-running dev session")
@@ -224,5 +239,10 @@ struct FamilyEvidenceScorer: Sendable {
             components: GhostScoreComponentMath.normalized(components, to: value),
             heat: heat
         )
+    }
+
+    private func sentence(_ text: String) -> String {
+        guard let first = text.first else { return text }
+        return String(first).uppercased() + text.dropFirst()
     }
 }

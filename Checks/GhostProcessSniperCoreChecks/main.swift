@@ -142,6 +142,15 @@ private func nativeSamplerSeesCurrentProcess() async throws {
     }
     try check(current.identity.startTimeSeconds > 0, "native sampler should include stable start time")
     try check(!current.name.isEmpty, "native sampler should include process name")
+    // The session facts forgotten-process detection relies on. A CI runner
+    // may have no terminal, so the tty itself is not required.
+    try check(getsid(getpid()) > 0, "getsid should succeed for the checks process")
+    try check(current.sessionID == getsid(getpid()), "native sampler should read the session id")
+    try check(current.processGroupID == getpgrp(), "native sampler should read the process group")
+    try check(current.runState == .running || current.runState == .sleeping, "native sampler should read the run state")
+    if isatty(STDIN_FILENO) != 0 {
+        try check(current.controllingTerminal != nil, "a process with a terminal should report its tty")
+    }
 }
 
 private func nativeKillSnapshotProviderUsesLitePath() async throws {
@@ -847,6 +856,7 @@ private func riskForecasterSuppressesQuietNoise() throws {
 }
 
 private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
+    // Forgotten needs watched idleness, not just age and launchd as parent.
     let stale = forecastFamily(
         pid: 207,
         parentPID: 1,
@@ -854,7 +864,8 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
         memory: 650 * 1_048_576,
         cpu: 0,
         trend: .empty,
-        score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"])
+        score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"]),
+        cpuActivity: FamilyCPUActivity(buckets: [], lastActiveAt: nil, firstSeen: Date(timeIntervalSince1970: 12_000))
     )
     let staleForecast = forecastWithFreshMeasurements(
         family: stale,
@@ -3748,7 +3759,8 @@ private func forecastFamily(
     trend: TrendMetrics,
     score: GhostScore,
     baseline: FamilyBaseline? = nil,
-    recentIncidentCount: Int = 0
+    recentIncidentCount: Int = 0,
+    cpuActivity: FamilyCPUActivity = .empty
 ) -> ProcessFamily {
     let root = sample(
         pid: pid,
@@ -3773,7 +3785,8 @@ private func forecastFamily(
         ownedIdentities: [root.identity],
         protectedPIDs: [],
         baseline: baseline,
-        recentIncidentCount: recentIncidentCount
+        recentIncidentCount: recentIncidentCount,
+        cpuActivity: cpuActivity
     )
 }
 
@@ -3912,5 +3925,5 @@ private func freshMeasurements(_ family: ProcessFamily, at date: Date) -> Proces
         suggestions: family.suggestions, alertState: family.alertState,
         recentIncidentCount: family.recentIncidentCount, forecast: family.forecast,
         lastScoredAt: date, classification: family.classification, duplicateCluster: family.duplicateCluster,
-        hardwareSignals: family.hardwareSignals)
+        hardwareSignals: family.hardwareSignals, cpuActivity: family.cpuActivity, forgotten: family.forgotten)
 }

@@ -214,7 +214,8 @@ public struct RadarIntelligence: Sendable {
         let finalSuggestions: [RadarActionSuggestion]
         if finalSuppression.isEmpty {
             finalSuggestions = mergedSuggestions(
-                finalRules + forecastSuggestion(for: heatResolvedFamily) + duplicateSuggestion(for: heatResolvedFamily, now: now)
+                finalRules + forecastSuggestion(for: heatResolvedFamily) + duplicateSuggestion(for: heatResolvedFamily, now: now) +
+                    zombieSuggestion(for: heatResolvedFamily, now: now)
             )
         } else {
             // Muted families keep their underlying diagnostics, but should not
@@ -324,6 +325,21 @@ public struct RadarIntelligence: Sendable {
                 detail: "\(cluster.independentRootCount) copies of \(cluster.displayName) are running; keeps PID \(keep.pid), \(cluster.keepReason).",
                 createdAt: now,
                 targetIdentities: redundant
+            )
+        ]
+    }
+
+    /// Zombies cannot be killed; only the parent that never reaps them can
+    /// be fixed.
+    private func zombieSuggestion(for family: ProcessFamily, now: Date) -> [RadarActionSuggestion] {
+        guard family.zombieChildCount >= 3 else { return [] }
+        return [
+            RadarActionSuggestion(
+                id: RadarActionSuggestion.stableID(scope: "zombies", type: .inspect),
+                type: .inspect,
+                title: "Restart \(family.displayName) to clear \(family.zombieChildCount) zombies",
+                detail: "Exited children are waiting for their parent to reap them; stopping them does nothing.",
+                createdAt: now
             )
         ]
     }

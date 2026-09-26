@@ -37,6 +37,14 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     /// The family whose member launched this family's root, e.g. the editor
     /// behind a language server. Nil for independent families.
     public private(set) var parentFamilyKey: String?
+    /// CPU minutes and last activity from the activity ledger; empty for
+    /// families built without history.
+    public let cpuActivity: FamilyCPUActivity
+    /// The builder's forgotten-process judgment; nil for hand-built
+    /// families, which are judged on demand (see forgottenAssessment).
+    public let forgotten: ForgottenAssessment?
+    /// Exited children the root never reaped.
+    public let zombieChildCount: Int
 
     public var displayName: String { root.name }
     public var childCount: Int { max(0, members.count - 1) }
@@ -70,7 +78,10 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         duplicateCluster: DuplicateProcessCluster? = nil,
         hardwareSignals: [HardwareOffenderSignal] = [],
         coverage: FamilyMeasurementCoverage? = nil,
-        parentFamilyKey: String? = nil
+        parentFamilyKey: String? = nil,
+        cpuActivity: FamilyCPUActivity = .empty,
+        forgotten: ForgottenAssessment? = nil,
+        zombieChildCount: Int? = nil
     ) {
         self.root = root
         self.members = members
@@ -102,6 +113,23 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.hardwareSignals = hardwareSignals
         self.coverage = coverage ?? FamilyMeasurementCoverage(members: members, root: root, at: lastScoredAt ?? root.sampledAt)
         self.parentFamilyKey = parentFamilyKey
+        self.cpuActivity = cpuActivity
+        self.forgotten = forgotten
+        self.zombieChildCount = zombieChildCount ?? members.filter { $0.isZombie && $0.identity != root.identity }.count
+    }
+
+    /// The forgotten-process judgment: the builder's, or one made now from
+    /// what the family carries (no session liveness or directory checks).
+    public var forgottenAssessment: ForgottenAssessment {
+        if let forgotten { return forgotten }
+        return ForgottenProcessAssessor.assess(
+            root: root,
+            context: LaunchContextResolver.resolve(root: root, livePIDs: Set(members.map(\.pid))),
+            activity: cpuActivity,
+            forensics: forensics,
+            workingDirectoryMissing: false,
+            now: lastScoredAt ?? root.sampledAt
+        )
     }
 
     /// One concrete instance of a signature: the signature plus the root.
@@ -165,7 +193,7 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         return copy
     }
 
-    private static func aggregateForensics(from members: [ProcessMetrics]) -> ProcessForensics {
+    static func aggregateForensics(from members: [ProcessMetrics]) -> ProcessForensics {
         let root = members.first?.forensics
         let openFiles = members.compactMap(\.forensics.openFileCount).reduce(0, +)
         let sockets = members.compactMap(\.forensics.socketCount).reduce(0, +)

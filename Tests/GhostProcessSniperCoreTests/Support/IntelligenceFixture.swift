@@ -54,7 +54,8 @@ enum IntelligenceFixture {
         trend: TrendMetrics = .empty,
         level: GhostLevel = .quiet,
         heat: GhostHeat? = nil,
-        devConfidence: Double = 0.9
+        devConfidence: Double = 0.9,
+        activity: FamilyCPUActivity = .empty
     ) -> ProcessFamily {
         let members = members ?? [root]
         let score = GhostScore(value: level == .quiet ? 5 : 70, level: level, reasons: [], heat: heat)
@@ -64,7 +65,7 @@ enum IntelligenceFixture {
             totalPhysicalFootprintBytes: members.reduce(0) { $0 + $1.memoryForScoringBytes },
             totalCPUPercent: members.reduce(0) { $0 + $1.cpuPercent },
             devConfidence: devConfidence, commandHints: [root.commandLine], trend: trend, score: score,
-            ownedIdentities: members.map(\.identity), protectedPIDs: [], lastScoredAt: now
+            ownedIdentities: members.map(\.identity), protectedPIDs: [], lastScoredAt: now, cpuActivity: activity
         )
     }
 

@@ -26,7 +26,7 @@ public struct FamilyRiskForecaster: Sendable {
         let etaKind: ForecastETAKind = eta == nil ? .none : .memoryLimit
         let horizon = trustedHorizon(ForecastHorizon.from(etaSeconds: eta), trend: family.trend)
         let recurrenceRisk = min(1, Double(baseline.recurrenceCount) / 5)
-        let staleLikelihood = staleLikelihood(family: family, now: now)
+        let staleLikelihood = family.forgottenAssessment.likelihood
         let projectedMemory = projectedMemoryBytes(family: family, velocity: memoryVelocity, horizonMinutes: 10)
         let projectedCPU = min(999, family.totalCPUPercent + cpuSlope * 10)
         let cpuEvidence = cpuEvidence(family: family, settings: settings)
@@ -330,18 +330,6 @@ public struct FamilyRiskForecaster: Sendable {
         let first = samples[range.lowerBound].date.timeIntervalSince1970
         let last = samples[range.upperBound - 1].date.timeIntervalSince1970
         return Date(timeIntervalSince1970: (first + last) / 2)
-    }
-
-    private func staleLikelihood(family: ProcessFamily, now: Date) -> Double {
-        let start = Date(timeIntervalSince1970: TimeInterval(family.root.identity.startTimeSeconds))
-        let ageMinutes = max(0, now.timeIntervalSince(start) / 60)
-        var value = 0.0
-        if LaunchOrigin.isDetachedFromLauncher(family.root) { value += 0.35 }
-        if ageMinutes >= 180 { value += 0.25 }
-        if family.devConfidence >= 0.45 { value += 0.2 }
-        if family.totalCPUPercent < 5, family.totalPhysicalFootprintBytes > 512 * 1_048_576 { value += 0.15 }
-        if family.forensics.isPartial { value -= 0.05 }
-        return min(1, max(0, value))
     }
 
     private func projectedMemoryBytes(family: ProcessFamily, velocity: Double, horizonMinutes: Double) -> UInt64 {

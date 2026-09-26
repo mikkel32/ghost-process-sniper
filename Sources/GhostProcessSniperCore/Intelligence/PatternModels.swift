@@ -284,13 +284,10 @@ public struct FamilyVerdict: Equatable, Sendable {
 
     // Only the facts that actually hold; the stale state guarantees idle CPU.
     private static func staleDetail(family: ProcessFamily) -> String {
-        let now = family.lastScoredAt ?? family.root.sampledAt
-        let started = Date(timeIntervalSince1970: TimeInterval(family.root.identity.startTimeSeconds))
-        let hours = now.timeIntervalSince(started) / 3_600
-        var facts: [String] = []
-        if hours >= 3 { facts.append("running for \(Int(hours)) h") }
-        if LaunchOrigin.isDetachedFromLauncher(family.root) { facts.append("detached from the shell that started it") }
-        facts.append("idle CPU")
+        var facts = family.forgottenAssessment.facts
+        if !facts.contains(where: { $0.hasPrefix("no CPU use") }) {
+            facts.append("idle CPU")
+        }
         if family.totalPhysicalFootprintBytes > 512 * 1_048_576 {
             facts.append("still holding \(RadarFormat.bytes(family.totalPhysicalFootprintBytes))")
         }

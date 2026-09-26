@@ -32,9 +32,11 @@ enum ProcessProbeReader {
                 plan.includeForensicsFor.contains(identity) || plan.includeForensicsForPIDs.contains(Int32(pid)) ||
                 plan.probePolicy.richMetricIdentities.contains(identity) || plan.probePolicy.richMetricPIDs.contains(Int32(pid))
             let hinted = isDeveloperName(name)
+            let terminal = terminalFields(info)
             let lite = ProcessLiteRecord(identity: identity, parentPID: Int32(info.pbi_ppid),
                 userID: info.pbi_uid, name: name, processGroupID: Int32(info.pbi_pgid), status: info.pbi_status,
-                flags: info.pbi_flags, openFileCount: Int(info.pbi_nfiles), sampledAt: plan.sampledAt)
+                flags: info.pbi_flags, openFileCount: Int(info.pbi_nfiles), sampledAt: plan.sampledAt,
+                controllingTerminal: terminal.device, terminalForegroundGroupID: terminal.foregroundGroup)
             priorities.append(requested ? 2 : hinted ? 1 : 0)
             samples.append(RawProcessSample(pid: pid, liteRecord: lite, taskInfo: nil, usage: nil,
                 preliminaryPriority: requested || hinted))
@@ -82,6 +84,16 @@ enum ProcessProbeReader {
                 return name.isEmpty ? "pid-\(pid)" : name
             }
         }
+    }
+
+    /// e_tdev is NODEV (all ones) without a controlling terminal.
+    private static func terminalFields(_ info: proc_bsdinfo) -> (device: UInt32?, foregroundGroup: Int32?) {
+        #if os(macOS)
+        guard info.e_tdev != UInt32.max else { return (nil, nil) }
+        return (info.e_tdev, info.e_tpgid == 0 ? nil : Int32(bitPattern: info.e_tpgid))
+        #else
+        return (nil, nil)
+        #endif
     }
 
     private static func isDeveloperName(_ name: String) -> Bool {

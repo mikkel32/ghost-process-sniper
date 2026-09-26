@@ -71,6 +71,7 @@ public struct RadarPipeline: Sendable {
     private let builder: ProcessFamilyBuilder
     private let intelligence: RadarIntelligence
     private var trendWindow = TrendWindow()
+    private var history = RadarHistory()
     private var differ = RadarSnapshotDiffer()
     private var hysteresis = RadarHysteresis()
     private var continuity = RadarContinuity()
@@ -123,6 +124,7 @@ public struct RadarPipeline: Sendable {
             from: processes,
             settings: settings,
             trendWindow: &trendWindow,
+            history: &history,
             now: now
         )
         return RadarPipelineBuildOutput(

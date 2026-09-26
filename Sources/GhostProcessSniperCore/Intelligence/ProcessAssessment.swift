@@ -40,7 +40,9 @@ public struct FamilyMeasurementCoverage: Equatable, Sendable {
         var fresh = 0
         var counted = 0
         var newest: Date?
-        for member in members {
+        // A zombie holds nothing and is never measured; it is the parent's
+        // problem, not a gap in the family's readings.
+        for member in members where !member.isZombie {
             let measuredAt = member.measurementDate
             let isFresh = measuredAt.map { (0...maximumAge).contains(now.timeIntervalSince($0)) } ?? false
             if measuredAt == nil {

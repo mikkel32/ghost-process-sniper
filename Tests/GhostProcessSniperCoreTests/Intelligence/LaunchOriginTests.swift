@@ -20,14 +20,18 @@ final class LaunchOriginTests: XCTestCase {
     func testIdleDetachedDevServerIsStale() {
         let vite = Fixture.process(name: "node", command: "node node_modules/.bin/vite", megabytes: 300, cpu: 0, started: fourHoursAgo)
         let trend = Fixture.trend(megabytes: [300, 300, 300, 300, 300], cpu: [0, 1, 0, 0, 0])
-        let forecast = FamilyRiskForecaster().forecast(family: Fixture.family(vite, trend: trend), settings: .smart, now: Fixture.now)
+        // Watched for two hours without doing any work.
+        let idle = FamilyCPUActivity(buckets: [], lastActiveAt: nil, firstSeen: Fixture.now.addingTimeInterval(-7_200))
+        let family = Fixture.family(vite, trend: trend, activity: idle)
+        let forecast = FamilyRiskForecaster().forecast(family: family, settings: .smart, now: Fixture.now)
         XCTAssertEqual(forecast.state, .stale)
 
-        let verdict = FamilyVerdict.synthesize(family: Fixture.family(vite, trend: trend).enriched(forecast: forecast),
+        let verdict = FamilyVerdict.synthesize(family: family.enriched(forecast: forecast),
                                                pattern: trend.resolvedPattern)
         XCTAssertEqual(verdict.headline, "Probably forgotten")
         XCTAssertTrue(verdict.detail.localizedCaseInsensitiveContains("running for 4 h"), verdict.detail)
-        XCTAssertTrue(verdict.detail.contains("detached"), verdict.detail)
+        XCTAssertTrue(verdict.detail.localizedCaseInsensitiveContains("detached"), verdict.detail)
+        XCTAssertTrue(verdict.detail.contains("no CPU use for 2 h"), verdict.detail)
     }
 
     func testBusyDetachedDevServerIsNotStale() {

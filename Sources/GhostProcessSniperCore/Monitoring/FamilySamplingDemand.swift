@@ -35,6 +35,19 @@ struct FamilySamplingDemand: Sendable {
                 candidateIdentities.formUnion(family.members.lazy.map(\.identity))
             }
         }
+        // A forgotten server is quiet, so it is never hot enough for
+        // forensics; one idle unattended dev root per pass gets them so its
+        // working directory and ports are known.
+        let unattended = families.filter { family in
+            family.devConfidence >= 0.35 && family.forensics.currentDirectory == nil &&
+                (family.forgotten?.launchContext.isUnattended ?? false) &&
+                (family.forgotten?.idleSeconds ?? 0) >= ForgottenProcessAssessor.idleThreshold
+        }
+        if !unattended.isEmpty {
+            let family = unattended[Int(pass % UInt64(unattended.count))]
+            forensicsPIDs.insert(family.root.pid)
+            forensicsIdentities.insert(family.root.identity)
+        }
         for family in families {
             let escalates = family.forecastIsCredibleEscalation
             highestLevel = max(highestLevel,
