@@ -75,6 +75,7 @@ final class RiskAwareKillTests: XCTestCase {
         XCTAssertEqual(report.respawnedBy, "PM2")
         XCTAssertTrue(report.summary.contains("Stop PM2 instead"), report.summary)
         XCTAssertEqual(sleeps.all.suffix(1), [150_000_000], "found on the first look, 150 ms after the stop")
+        XCTAssertEqual(report.realizedMemoryReclaimBytes, 0, "the restarted copy takes the memory back")
     }
 
     func testNodemonChildIsNotReportedAsRespawn() async {

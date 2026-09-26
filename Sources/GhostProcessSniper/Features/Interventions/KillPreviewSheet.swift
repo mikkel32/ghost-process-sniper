@@ -380,7 +380,7 @@ struct KillPreviewSheet: View {
                     "hints \(report.reactorReport.watcherHints.count)",
                     "verify \(report.verificationSnapshotCount)",
                     "saved \(String(format: "%.2f", report.reactorReport.earlyExitSavingsSeconds))s",
-                    RadarFormat.bytes(report.realizedMemoryReclaimBytes)
+                    "Freed about \(RadarFormat.bytes(report.realizedMemoryReclaimBytes))"
                 ]
             )
             if !report.respawnedPIDs.isEmpty {

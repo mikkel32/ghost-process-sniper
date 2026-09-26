@@ -229,10 +229,6 @@ public final class ProcessKiller: Sendable {
                 $0.updating(state: $1.state, reason: $0.reason)
             } + walk.reportedLate
             report.leftRunning = await orphanedByStop(preflight.locked + walk.reportedLate)
-            report.realizedMemoryReclaimBytes = reclaimEstimator.realizedEstimate(
-                from: preflight.preview.reclaimEstimate,
-                targets: report.targetResults
-            )
             report.timeline = KillExecutionTimeline(
                 preflightMilliseconds: preflightSnapshot.elapsedMilliseconds,
                 signalMilliseconds: signalMilliseconds,
@@ -253,9 +249,6 @@ public final class ProcessKiller: Sendable {
                 drift: report.targetDiff
             )
             report.verificationSnapshotCount = report.verificationPasses.count
-            report.calibratedReclaimBytes = report.realizedMemoryReclaimBytes > 0 ?
-                report.realizedMemoryReclaimBytes :
-                UInt64(Double(report.estimatedMemoryReclaimBytes) * (1 - preflight.preview.survivorRisk))
             watcherTask?.cancel()
             report.watcherEvents = await operationState.exitEventSnapshot()
             report.reactorReport = await reactor.report()
@@ -273,10 +266,20 @@ public final class ProcessKiller: Sendable {
                 completeVerificationCount: report.reactorReport.verificationModeCounts[KillVerificationMode.completeArena.rawValue, default: 0],
                 eventTriggeredVerificationCount: report.reactorReport.verificationModeCounts[KillVerificationMode.eventTriggeredComplete.rawValue, default: 0]
             )
+            var respawned: [KillProcessLite] = []
             if let supervisor = preflight.preview.riskAssessment.supervisor,
                report.survivorPIDs.isEmpty, report.partiallySucceeded {
-                await detectRespawn(of: targets, by: supervisor, since: walk.lastSignalAt, operationID: operationID, report: &report, eventSink: eventSink)
+                respawned = await detectRespawn(of: targets, by: supervisor, since: walk.lastSignalAt, operationID: operationID,
+                                                report: &report, eventSink: eventSink)
             }
+            report.realizedMemoryReclaimBytes = reclaimEstimator.realizedEstimate(
+                from: preflight.preview.reclaimEstimate,
+                targets: report.targetResults,
+                respawnedNames: respawned.map(\.name)
+            )
+            report.calibratedReclaimBytes = report.realizedMemoryReclaimBytes > 0 ?
+                report.realizedMemoryReclaimBytes :
+                UInt64(Double(report.estimatedMemoryReclaimBytes) * (1 - preflight.preview.survivorRisk))
             appendEvent(.completed, operationID: operationID, message: report.summary, report: &report, eventSink: eventSink)
             RadarLogger.kill.info("Kill operation \(operationID.rawValue, privacy: .public) \(plan.displayName, privacy: .public) finished in \(report.timeline.totalMilliseconds, privacy: .public)ms, forced \(report.forcedPIDs.count, privacy: .public), survivors \(report.survivorPIDs.count, privacy: .public)")
             return report

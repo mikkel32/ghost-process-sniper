@@ -166,6 +166,15 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
     }
 
     public func updating(state: KillTargetState, reason: String) -> KillTarget {
+        updating(state: state, reason: reason, cpuPercent: cpuPercent)
+    }
+
+    /// The same target with the radar's CPU, which a kill snapshot cannot measure.
+    func updating(cpuPercent: Double) -> KillTarget {
+        updating(state: state, reason: reason, cpuPercent: cpuPercent)
+    }
+
+    private func updating(state: KillTargetState, reason: String, cpuPercent: Double) -> KillTarget {
         KillTarget(
             identity: identity,
             parentPID: parentPID,

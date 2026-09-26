@@ -342,6 +342,7 @@ public struct KillProcessLite: Identifiable, Equatable, Sendable {
             residentMemoryBytes: residentMemoryBytes,
             physicalFootprintBytes: physicalFootprintBytes,
             virtualMemoryBytes: virtualMemoryBytes,
+            cpuPercent: cpuPercent,
             totalProcessorSeconds: totalProcessorSeconds,
             threadCount: threadCount,
             isSystemProcess: isSystemProcess,

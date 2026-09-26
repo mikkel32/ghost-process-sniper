@@ -40,6 +40,7 @@ extension ProcessKiller {
 
     /// Looks for a restart, only for supervisors that restart on exit; a
     /// file watcher waits for the next save, and saying so beats waiting.
+    /// Returns the restarted processes.
     func detectRespawn(
         of targets: [KillTarget],
         by supervisor: KillSupervisor,
@@ -47,14 +48,14 @@ extension ProcessKiller {
         operationID: KillOperationID,
         report: inout KillReport,
         eventSink: (@Sendable (KillOperationEvent) -> Void)?
-    ) async {
+    ) async -> [KillProcessLite] {
         switch supervisor.kind.restartPolicy {
         case .onFileChange:
             report.notes.append("\(supervisor.name) is waiting for file changes; it will start the app again the next time you save. Stop \(supervisor.name) to prevent that.")
-            return
+            return []
         case .stopsSiblings:
             report.notes.append("\(supervisor.name) stops the other processes it runs when this one exits.")
-            return
+            return []
         case .onExit:
             break
         }
@@ -62,7 +63,7 @@ extension ProcessKiller {
             await sleeper(delay)
             guard let snapshot = try? await snapshotProvider.snapshot(request: KillSnapshotRequest(
                 policy: .verify, includeHeavyMetricsForTargets: false, requiresCompleteGraph: true, conversionBudget: .targetsOnly
-            )) else { return }
+            )) else { return [] }
             let respawned = KillRespawnDetector.respawned(in: snapshot.liteArena.processes, targets: targets, supervisor: supervisor,
                                                           since: lastSignal, currentUserID: currentUserID)
             guard !respawned.isEmpty else { continue }
@@ -71,7 +72,8 @@ extension ProcessKiller {
             appendEvent(.verified, operationID: operationID,
                         message: "\(supervisor.name) restarted it as PID \(report.respawnedPIDs.map(String.init).joined(separator: ", ")).",
                         report: &report, eventSink: eventSink)
-            return
+            return respawned
         }
+        return []
     }
 }

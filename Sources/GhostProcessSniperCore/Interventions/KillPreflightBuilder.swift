@@ -103,6 +103,11 @@ struct KillPreflightBuilder: Sendable {
         recycled.sort { $0.pid < $1.pid }
 
         let reclaim = reclaimEstimator.estimate(plan: plan, targets: targets)
+        let radarCPU = KillReclaimEstimator.radarCPU(plan)
+        targets = targets.map { target in
+            guard target.cpuPercent <= 0, let reading = radarCPU[target.identity] else { return target }
+            return target.updating(cpuPercent: reading)
+        }
         let nearby = slice.nearbyCandidates
         let diff = deltaEngine.diff(plan: plan, targets: targets, stale: stale, recycled: recycled, locked: locked, treeIdentities: treeIdentities)
         let scopePreview = KillScopePreview(
