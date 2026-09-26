@@ -4,21 +4,18 @@ import SwiftUI
 struct RadarConsoleView: View {
     @Bindable var session: RadarConsoleSession
 
-    @SceneStorage("GhostProcessSniper.Console.selection") private var storedSelection = "overview"
-    @SceneStorage("GhostProcessSniper.Console.searchText") private var storedSearchText = ""
-    @SceneStorage("GhostProcessSniper.Console.familyFilter") private var storedFamilyFilter = RadarFilter.all.rawValue
-    @SceneStorage("GhostProcessSniper.Console.familySort") private var storedFamilySort = RadarSort.smart.rawValue
-    @SceneStorage("GhostProcessSniper.Console.incidentText") private var storedIncidentText = ""
-    @SceneStorage("GhostProcessSniper.Console.incidentFilter") private var storedIncidentFilter = RadarIncidentFilter.all.rawValue
-    @SceneStorage("GhostProcessSniper.Console.incidentSort") private var storedIncidentSort = RadarIncidentSort.recent.rawValue
-    @SceneStorage("GhostProcessSniper.Console.showInspector") private var storedShowInspector = false
-    @State private var searchDraft = ""
+    @State private var searchDraft: String
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var handledSearchFocusToken = 0
-    @State private var restoredSceneState = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var searchFocused: Bool
+
+    init(session: RadarConsoleSession) {
+        self.session = session
+        // The session outlives the window, so a reopened console resumes its query.
+        _searchDraft = State(initialValue: session.state.searchText)
+    }
 
     private var decoratedConsole: some View {
         // Keep a single structural identity for the split view. Toggling the
@@ -36,12 +33,16 @@ struct RadarConsoleView: View {
             RadarConsoleToolbar(session: session)
         }
         .overlay(alignment: .bottom) {
-            if let toast = session.toast {
-                RadarToastView(toast: toast)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            // Animate only the toast; list and selection changes in the same
+            // transaction must not pick up the spring.
+            ZStack {
+                if let toast = session.toast {
+                    RadarToastView(toast: toast)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .animation(reduceMotion ? nil : .spring(duration: 0.32), value: session.toast)
         }
-        .animation(reduceMotion ? nil : .spring(duration: 0.32), value: session.toast)
         .onChange(of: session.toast) { _, toast in
             toastDismissTask?.cancel()
             guard toast != nil else {
@@ -66,14 +67,8 @@ struct RadarConsoleView: View {
             }
         }
         .onAppear {
-            if !restoredSceneState {
-                restoreSceneState()
-                searchDraft = session.state.searchText
-                restoredSceneState = true
-            }
-            session.startPresentation()
-            session.updateFocusedFamilies()
-            session.refresh()
+            // Showing the window already starts a fresh sample (setConsoleVisible).
+            session.setVisible(true)
             // ⌘F can fire before this view attaches (window just created):
             // catch any focus request we missed.
             if showsGlobalSearch, session.searchFocusToken != handledSearchFocusToken {
@@ -82,7 +77,6 @@ struct RadarConsoleView: View {
             }
         }
         .onChange(of: session.state.focusedSelection) { _, selection in
-            storedSelection = selection.storageValue
             Task { @MainActor in
                 await Task.yield()
                 guard session.state.focusedSelection == selection else {
@@ -101,7 +95,6 @@ struct RadarConsoleView: View {
                session.state.focusedSelection != .processes, session.state.focusedSelection != .duplicates {
                 session.focus(.processes)
             }
-            storedSearchText = value
             searchDebounceTask?.cancel()
             searchDebounceTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 140_000_000)
@@ -121,7 +114,6 @@ struct RadarConsoleView: View {
             // Invalidate a pending keystroke even when the committed query is already empty.
             searchDebounceTask?.cancel()
             searchDraft = ""
-            storedSearchText = ""
         }
         .task(id: showsGlobalSearch) {
             if showsGlobalSearch, session.searchFocusToken > 0 {
@@ -133,27 +125,24 @@ struct RadarConsoleView: View {
     private var persistedConsole: some View {
         searchedConsole
         .onChange(of: session.state.familyFilter) { _, value in
-            storedFamilyFilter = value.rawValue
+            ConsolePreferences.familyFilter = value
             session.updateFocusedFamilies()
         }
         .onChange(of: session.state.familySort) { _, value in
-            storedFamilySort = value.rawValue
+            ConsolePreferences.familySort = value
             session.updateFocusedFamilies()
         }
-        .onChange(of: session.state.incidentQuery.filter) { _, value in
-            storedIncidentFilter = value.rawValue
+        .onChange(of: session.state.incidentQuery.filter) { _, _ in
             session.scheduleQueryUpdate()
         }
-        .onChange(of: session.state.incidentQuery.text) { _, value in
-            storedIncidentText = value
+        .onChange(of: session.state.incidentQuery.text) { _, _ in
             session.scheduleQueryUpdate()
         }
-        .onChange(of: session.state.incidentQuery.sort) { _, value in
-            storedIncidentSort = value.rawValue
+        .onChange(of: session.state.incidentQuery.sort) { _, _ in
             session.scheduleQueryUpdate()
         }
         .onChange(of: session.state.showInspector) { _, value in
-            storedShowInspector = value
+            ConsolePreferences.showInspector = value
         }
     }
 
@@ -181,7 +170,7 @@ struct RadarConsoleView: View {
             RadarQuickGuideView()
         }
         .onDisappear {
-            session.stopPresentation()
+            session.setVisible(false)
             searchDebounceTask?.cancel()
             toastDismissTask?.cancel()
         }
@@ -214,18 +203,5 @@ struct RadarConsoleView: View {
         case .incidents, .rules, .engine:
             false
         }
-    }
-
-    private func restoreSceneState() {
-        if !session.hasNavigationIntent {
-            session.state.focusedSelection = RadarFocusedSelection(storageValue: storedSelection)
-        }
-        session.state.searchText = storedSearchText
-        session.state.familyFilter = RadarFilter(rawValue: storedFamilyFilter) ?? .all
-        session.state.familySort = RadarSort(rawValue: storedFamilySort) ?? .smart
-        session.state.incidentQuery.text = storedIncidentText
-        session.state.incidentQuery.filter = RadarIncidentFilter(rawValue: storedIncidentFilter) ?? .all
-        session.state.incidentQuery.sort = RadarIncidentSort(rawValue: storedIncidentSort) ?? .recent
-        session.state.showInspector = storedShowInspector
     }
 }

@@ -12,7 +12,7 @@ struct RadarConsoleDetail: View {
             case .processes:
                 ProcessBrowserView(session: session)
             case .family(let familyKey):
-                if let family = session.monitor.family(signatureID: familyKey) {
+                if let family = session.family(forKey: familyKey) {
                     FamilyDetailConsoleView(
                         family: family,
                         detail: session.monitor.detailViewModel(signatureID: familyKey),
