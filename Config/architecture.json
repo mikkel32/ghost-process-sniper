@@ -17,5 +17,12 @@
     "GhostProcessSniperCore/Configuration/SettingsPerformanceModels.swift": 771,
     "GhostProcessSniperCore/Intelligence/ForecastModels.swift": 767,
     "GhostProcessSniperCore/Monitoring/RadarEngine.swift": 605
+  },
+  "test_roots": {
+    "roots": ["Tests/GhostProcessSniperCoreTests", "Checks/GhostProcessSniperCoreChecks"],
+    "legacy_line_budgets": {
+      "Checks/GhostProcessSniperCoreChecks/main.swift": 3918,
+      "Tests/GhostProcessSniperCoreTests/AdaptiveIntelligenceTests.swift": 605
+    }
   }
 }
