@@ -196,8 +196,9 @@ public extension QuickStopAction {
 public extension KillReport {
     /// The confirmation after a stop that did everything it promised; nil
     /// when the user should stay on the result: something survived, came
-    /// back, was refused by macOS, still holds a port, started during the
-    /// stop and was left running, or launchd refused the bootout.
+    /// back, was refused by macOS or locked (another user's process left
+    /// running), still holds a port, started during the stop and was left
+    /// running, or launchd refused the bootout.
     var cleanStopToastText: String? {
         guard succeeded, respawnedPIDs.isEmpty, signalDeniedPIDs.isEmpty, !appStillOpen,
               !portOutcomes.contains(where: { $0.holderPID != nil }),

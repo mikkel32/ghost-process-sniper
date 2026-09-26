@@ -61,6 +61,13 @@ public struct KillPreview: Equatable, Sendable {
         !targets.isEmpty && readiness != .locked
     }
 
+    /// Why Confirm is disabled, in one line; nil while it can stop.
+    public var confirmBlockedReason: String? {
+        guard !canKill else { return nil }
+        if targets.isEmpty { return "Nothing left to stop" }
+        return decisionScore.factors.first { $0.kind == .blocking }?.detail ?? riskSummary
+    }
+
     public var riskSummary: String {
         if !canKill {
             return "No owned live processes match this kill plan."

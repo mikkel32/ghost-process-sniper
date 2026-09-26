@@ -7,7 +7,10 @@ import ThinkingOrbsKit
 /// two ways to cut it short.
 struct KillProgressPanel: View {
     let progress: KillLiveProgress
-    let preview: KillPreview
+    /// The processes this run acts on, before their live states.
+    let targets: [KillTarget]
+    /// Processes the preview left out: not yours, or already gone.
+    let skippedCount: Int
     let forceHeld: Bool
     let waitingStopped: Bool
     let holdForce: () -> Void
@@ -33,7 +36,7 @@ struct KillProgressPanel: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Processes")
                     .font(.headline)
-                KillTargetRows(rows: progress.rows(for: preview.targets))
+                KillTargetRows(rows: progress.rows(for: targets))
                 if skippedCount > 0 {
                     Text("\(skippedCount) skipped (not yours or already gone)")
                         .font(.caption)
@@ -51,8 +54,9 @@ struct KillProgressPanel: View {
             do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
             withAnimation(.easeIn(duration: 0.25)) { orbVisible = true }
         }
-        .onChange(of: progress.headline) { _, headline in
-            AccessibilityNotification.Announcement(headline).post()
+        // Once per stage: a force stage retitles itself for every process.
+        .onChange(of: progress.stage) { _, _ in
+            AccessibilityNotification.Announcement(progress.headline).post()
         }
     }
 
@@ -124,9 +128,5 @@ struct KillProgressPanel: View {
             }
         }
         .font(.caption2.monospacedDigit())
-    }
-
-    private var skippedCount: Int {
-        preview.lockedTargets.count + preview.staleTargets.count + preview.recycledTargets.count + preview.exitedTargets.count
     }
 }

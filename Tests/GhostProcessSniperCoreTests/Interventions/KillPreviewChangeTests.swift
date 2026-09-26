@@ -48,6 +48,20 @@ final class KillPreviewChangeTests: XCTestCase {
                        "a new process behind an old PID is a new target")
     }
 
+    func testDisabledConfirmSaysWhyNotTheStrategy() {
+        XCTAssertNil(preview([target(100, "vite", root: true)]).confirmBlockedReason)
+        XCTAssertEqual(preview([]).confirmBlockedReason, "Nothing left to stop", "not the strategy's 'Standard stop.'")
+        let protected = KillPreview(
+            displayName: "vite", rootPID: 100, protectedPIDs: [], forceKillDelay: 2, targets: [target(100, "vite", root: true)],
+            readiness: .locked,
+            decisionScore: KillDecisionScore(value: 10, confidence: 1, factors: [
+                KillDecisionFactor(kind: .whyWait, title: "Tree drift", detail: "1 exited", weight: -5),
+                KillDecisionFactor(kind: .blocking, title: "Protected", detail: "Ghost runs inside vite.", weight: -35)
+            ])
+        )
+        XCTAssertEqual(protected.confirmBlockedReason, "Ghost runs inside vite.")
+    }
+
     private func target(_ pid: Int32, _ name: String, root: Bool = false) -> KillTarget {
         KillTarget(identity: ProcessIdentity(pid: pid, startTimeSeconds: 1_000, startTimeMicroseconds: 0), parentPID: root ? 1 : 100,
                    name: name, ownerName: "me", depth: root ? 0 : 1, memoryBytes: 0, cpuPercent: 0, state: .ready,

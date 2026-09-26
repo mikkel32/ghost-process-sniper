@@ -101,6 +101,13 @@ public struct KillLiveProgress: Equatable, Sendable {
         }
     }
 
+    /// The phase without the force stage's running count: a new stage is
+    /// worth announcing, each further forced process is not.
+    public var stage: KillLivePhase {
+        if case .forcing = phase { return .forcing(0) }
+        return phase
+    }
+
     public var headline: String {
         switch phase {
         case .starting:
