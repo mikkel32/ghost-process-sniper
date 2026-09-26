@@ -46,6 +46,9 @@ struct DiagnosticsSettingsTab: View {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(report, forType: .string)
                             copied = true
+                            // Back to the plain label so the next copy shows fresh feedback.
+                            try? await Task.sleep(nanoseconds: 2_000_000_000)
+                            copied = false
                         }
                     }
                     .help("Copy the full engine report for a bug report")
