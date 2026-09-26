@@ -31,12 +31,22 @@ public struct ConsoleProjectionRequest: Sendable {
 
 public protocol ConsoleProjecting: Sendable {
     func project(_ request: ConsoleProjectionRequest) async throws -> ConsoleDerivedSnapshot
+    /// The detail panel for any family in the request, prepared or not.
+    func panel(familyKey: String, request: ConsoleProjectionRequest) async throws -> FamilyDetailPanelModel?
 }
 
 /// Sorting, filtering, formatting and sidebar partitioning run on this actor,
 /// never as a side effect of reading a SwiftUI view's body.
 public actor ConsoleProjectionWorker: ConsoleProjecting {
     private var cache = ConsoleDerivedSnapshotCache()
+    private var panelCache: (key: PanelKey, panel: FamilyDetailPanelModel?)?
+    public private(set) var panelBuildCount = 0
+
+    private struct PanelKey: Equatable {
+        let familyKey: String
+        let contentRevision: SnapshotContentRevision
+        let sampleRevision: UInt64
+    }
 
     public init() {}
 
@@ -46,6 +56,46 @@ public actor ConsoleProjectionWorker: ConsoleProjecting {
         try Task.checkCancellation()
         return result
     }
+
+    /// Panels the refresh prepared come straight from the snapshot. Any other
+    /// family is built here, off the main actor, as soon as it is selected
+    /// instead of on the next refresh.
+    public func panel(familyKey: String, request: ConsoleProjectionRequest) throws -> FamilyDetailPanelModel? {
+        if let prepared = request.source.detailPanel(for: familyKey) {
+            return prepared
+        }
+        let key = PanelKey(familyKey: familyKey, contentRevision: request.source.contentRevision, sampleRevision: request.sampleRevision)
+        if let panelCache, panelCache.key == key {
+            return panelCache.panel
+        }
+        try Task.checkCancellation()
+        panelBuildCount += 1
+        let previous = panelCache?.key.familyKey == familyKey ? panelCache?.panel : nil
+        let panel = Self.buildPanel(familyKey: familyKey, request: request, reusing: previous)
+        panelCache = (key, panel)
+        return panel
+    }
+
+    static func buildPanel(
+        familyKey: String,
+        request: ConsoleProjectionRequest,
+        reusing previous: FamilyDetailPanelModel? = nil
+    ) -> FamilyDetailPanelModel? {
+        if let prepared = request.source.detailPanel(for: familyKey) {
+            return prepared
+        }
+        guard let family = request.families.first(where: { $0.familyKey == familyKey }) else {
+            return nil
+        }
+        // The panel follows every sample; the stop assessment only changes
+        // with the process tree.
+        if let previous, let risk = previous.stopRisk,
+           previous.workloadKey == FamilyDetailPanelModel.workloadKey(for: family) {
+            return FamilyDetailPanelModel(family: family, stopRisk: risk)
+        }
+        let processesByPID = Dictionary(request.processes.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
+        return FamilyDetailPanelModel(family: family, processesByPID: processesByPID)
+    }
 }
 
 /// Owns the last complete presentation. Late or cancelled queries cannot
@@ -54,9 +104,12 @@ public actor ConsoleProjectionWorker: ConsoleProjecting {
 @Observable
 public final class ConsoleQueryStore {
     public private(set) var snapshot: ConsoleDerivedSnapshot = .empty
+    /// The selected family's panel when the refresh did not prepare one.
+    public private(set) var selectedPanel: FamilyDetailPanelModel?
     public private(set) var isUpdating = false
     public private(set) var errorMessage: String?
     @ObservationIgnored private var generation: UInt64 = 0
+    @ObservationIgnored private var panelGeneration: UInt64 = 0
     @ObservationIgnored private let projector: any ConsoleProjecting
 
     public init(projector: any ConsoleProjecting = ConsoleProjectionWorker()) {
@@ -85,8 +138,28 @@ public final class ConsoleQueryStore {
         }
     }
 
+    /// Same publication rules as `update`: only the newest request may
+    /// replace the panel.
+    @discardableResult
+    public func updatePanel(familyKey: String, request: ConsoleProjectionRequest) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        panelGeneration &+= 1
+        let ticket = panelGeneration
+        do {
+            let panel = try await projector.panel(familyKey: familyKey, request: request)
+            guard ticket == panelGeneration, !Task.isCancelled else { return false }
+            if selectedPanel != panel {
+                selectedPanel = panel
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
     public func cancel() {
         generation &+= 1
+        panelGeneration &+= 1
         isUpdating = false
     }
 }

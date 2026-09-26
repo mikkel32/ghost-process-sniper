@@ -32,9 +32,13 @@ public struct FamilyForensicsSummary: Equatable, Sendable {
         openFileText = family.forensics.openFileCount.map { "\($0)" } ?? "locked"
         socketText = family.forensics.socketCount.map { "\($0)" } ?? "locked"
         portsText = family.forensics.listeningPorts.isEmpty ? "none" : family.forensics.listeningPorts.map(String.init).joined(separator: ", ")
-        freshnessText = family.forensicsFreshness?.formatted(date: .omitted, time: .standard) ?? "deferred"
+        freshnessText = Self.freshnessText(family.forensicsFreshness)
         isPartial = family.forensics.isPartial
         notes = family.forensics.notes
+    }
+
+    public static func freshnessText(_ date: Date?) -> String {
+        date?.formatted(date: .omitted, time: .standard) ?? "deferred"
     }
 }
 
@@ -112,10 +116,33 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
     public let hasOwnedTargets: Bool
     public let protectedPIDs: [Int32]
     public let lastScoredText: String
+    /// What stopping this family would do. Nil when the panel was built
+    /// without a process sample, which the supervisor lookup needs.
+    public let stopRisk: KillRiskAssessment?
+    /// Identifies the stop workload, so an unchanged tree can reuse `stopRisk`.
+    let workloadKey: Int
 
+    /// Panels are stateless, so a panel built for one refresh can be reused
+    /// by any later one with the same content.
     public init(
         family: ProcessFamily,
-        previous: FamilyDetailPanelModel?,
+        processesByPID: [Int32: ProcessMetrics]? = nil,
+        classifier: DevProcessClassifier = DevProcessClassifier(),
+        classification: DevClassification? = nil,
+        culprit: CulpritAnalysis? = nil
+    ) {
+        self.init(
+            family: family,
+            stopRisk: processesByPID.map { Self.stopRisk(for: family, processesByPID: $0) },
+            classifier: classifier,
+            classification: classification,
+            culprit: culprit
+        )
+    }
+
+    init(
+        family: ProcessFamily,
+        stopRisk: KillRiskAssessment?,
         classifier: DevProcessClassifier = DevProcessClassifier(),
         classification providedClassification: DevClassification? = nil,
         culprit providedCulprit: CulpritAnalysis? = nil
@@ -164,7 +191,7 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         forecastRecommendationTitle = family.forecast.recommendedAction.title
         forecastRecommendationDetail = family.forecast.recommendedAction.detail
         forecastCards = Self.forecastCards(for: family)
-        change = Self.change(current: family, previous: previous)
+        change = Self.change(trend: family.trend.samples)
         scoreComponents = family.score.components.sorted { $0.impact > $1.impact }
         culprit = providedCulprit ?? CulpritAnalysis(family: family, classifier: classifier, classification: classification)
         suggestions = family.suggestions
@@ -185,7 +212,32 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         isKillable = family.isKillable
         hasOwnedTargets = !family.ownedIdentities.isEmpty
         protectedPIDs = family.protectedPIDs
-        lastScoredText = family.lastScoredAt?.formatted(date: .omitted, time: .standard) ?? "warming"
+        lastScoredText = Self.lastScoredText(family.lastScoredAt)
+        self.stopRisk = stopRisk
+        workloadKey = Self.workloadKey(for: family)
+    }
+
+    /// Views format live dates with these, because a reused panel's strings
+    /// freeze at the time it was built.
+    public static func lastScoredText(_ date: Date?) -> String {
+        date?.formatted(date: .omitted, time: .standard) ?? "warming"
+    }
+
+    static func stopRisk(for family: ProcessFamily, processesByPID: [Int32: ProcessMetrics]) -> KillRiskAssessment {
+        KillRiskAssessor().assess(KillWorkloadProfile(family: family, processesByPID: processesByPID))
+    }
+
+    /// Everything the stop assessment reads from the family itself; names
+    /// and command lines only change with membership.
+    static func workloadKey(for family: ProcessFamily) -> Int {
+        var hasher = Hasher()
+        hasher.combine(family.root.identity)
+        hasher.combine(family.root.parentPID)
+        for member in family.members {
+            hasher.combine(member.identity)
+            hasher.combine(member.forensics.listeningPorts)
+        }
+        return hasher.finalize()
     }
 
     private static func baselineCards(for family: ProcessFamily) -> [FamilyMetricCard] {
@@ -216,40 +268,50 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         ]
     }
 
-    private static func change(current: ProcessFamily, previous: FamilyDetailPanelModel?) -> FamilyChangeSummary {
-        guard let previous else {
+    /// Compares the newest trend sample with the newest one at least
+    /// `changeWindow` older, so the delta means the same on every panel,
+    /// however recently the panel was built.
+    static let changeWindow: TimeInterval = 30
+
+    static func change(trend samples: [TrendSample]) -> FamilyChangeSummary {
+        guard samples.count >= 2, let latest = samples.last else {
             return .warming
         }
-        let memoryDelta = Int64(clamping: current.totalPhysicalFootprintBytes) - Int64(clamping: previous.memoryBytes)
-        let cpuDelta = current.totalCPUPercent - previous.cpuPercent
-        let childDelta = current.childCount - previous.childCount
+        let reference = samples.last { latest.date.timeIntervalSince($0.date) >= changeWindow } ?? samples[0]
+        let memoryDelta = Int64(clamping: latest.memoryBytes) - Int64(clamping: reference.memoryBytes)
+        let cpuDelta = latest.cpuPercent - reference.cpuPercent
         let level: GhostLevel
-        if memoryDelta > 256 * 1_048_576 || cpuDelta > 25 || childDelta >= 4 {
+        if memoryDelta > 256 * 1_048_576 || cpuDelta > 25 {
             level = .hot
-        } else if memoryDelta > 64 * 1_048_576 || cpuDelta > 8 || childDelta > 0 {
+        } else if memoryDelta > 64 * 1_048_576 || cpuDelta > 8 {
             level = .watch
         } else {
             level = .quiet
         }
 
         var parts: [String] = []
-        if memoryDelta != 0 {
+        if abs(memoryDelta) >= 1_048_576 {
             parts.append("memory \(RadarFormat.signedBytes(memoryDelta))")
         }
         if abs(cpuDelta) >= 1 {
             parts.append("CPU \(RadarFormat.signedPercent(cpuDelta))")
         }
-        if childDelta != 0 {
-            parts.append("children \(childDelta > 0 ? "+" : "")\(childDelta)")
-        }
-        let summary = parts.isEmpty ? "No material change since last refresh" : parts.joined(separator: ", ")
+        let window = windowText(latest.date.timeIntervalSince(reference.date))
+        let summary = parts.isEmpty
+            ? "No material change in the last \(window)"
+            : "\(parts.joined(separator: ", ")) in the last \(window)"
         return FamilyChangeSummary(
             memoryDeltaBytes: memoryDelta,
             cpuDelta: cpuDelta,
-            childDelta: childDelta,
+            childDelta: 0,
             summary: summary,
             level: level
         )
+    }
+
+    private static func windowText(_ seconds: TimeInterval) -> String {
+        let rounded = max(1, Int(seconds.rounded()))
+        return rounded < 90 ? "\(rounded) s" : "\(Int((seconds / 60).rounded())) min"
     }
 }
 

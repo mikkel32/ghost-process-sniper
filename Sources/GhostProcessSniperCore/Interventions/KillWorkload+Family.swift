@@ -4,6 +4,12 @@ public extension KillWorkloadProfile {
     /// Captures a family's members and, from the full sample, the chain of
     /// processes above its root, where supervisors such as nodemon live.
     init(family: ProcessFamily, sample: [ProcessMetrics]) {
+        self.init(family: family, processesByPID: Dictionary(sample.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first }))
+    }
+
+    /// Same as `init(family:sample:)`, for callers profiling several families
+    /// against one sample: the PID index is built once.
+    init(family: ProcessFamily, processesByPID byPID: [Int32: ProcessMetrics]) {
         let members = [family.root] + family.members.filter { $0.identity != family.root.identity }
         let processes = members.map { process in
             KillWorkloadProcess(
@@ -16,7 +22,6 @@ public extension KillWorkloadProfile {
                 isRoot: process.identity == family.root.identity
             )
         }
-        let byPID = Dictionary(sample.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
         var ancestors: [KillWorkloadAncestor] = []
         var cursor = family.root.parentPID
         var visited: Set<Int32> = [family.root.pid]

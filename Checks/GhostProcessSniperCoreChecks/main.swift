@@ -497,7 +497,7 @@ private func familyBuilderSurfacesGPUHardwareSignals() throws {
         throw CheckFailure(message: "GPU-heavy unknown process should become a visible family")
     }
     let triage = FamilyTriageViewModel(family: family)
-    let panel = FamilyDetailPanelModel(family: family, previous: nil)
+    let panel = FamilyDetailPanelModel(family: family)
 
     try check(family.totalGPUPercent == 64, "family should aggregate GPU usage")
     try check(family.hardwareSignals.contains { $0.kind == .gpuPressure }, "family should carry GPU hardware signal")
@@ -1100,7 +1100,7 @@ private func familyVerdictSynthesizesJudgment() throws {
         now: Date(timeIntervalSince1970: 12_500)
     )
     let family = base.enriched(forecast: forecast)
-    let panel = FamilyDetailPanelModel(family: family, previous: nil)
+    let panel = FamilyDetailPanelModel(family: family)
     try check(panel.memoryPattern.pattern == .sawtooth, "detail panel should expose the memory pattern")
     try check(panel.verdict.headline == "Churning, not leaking", "verdict should call out churn instead of leak")
     try check(!panel.verdict.detail.isEmpty, "verdict should carry a detail sentence")
@@ -1211,7 +1211,7 @@ private func decliningFamiliesEaseOff() throws {
     try check(forecast.whyNow.contains("released"), "recovery should be explained")
 
     let family = base.enriched(forecast: forecast)
-    let panel = FamilyDetailPanelModel(family: family, previous: nil)
+    let panel = FamilyDetailPanelModel(family: family)
     try check(panel.verdict.headline == "Recovering", "verdict should recognize recovery")
 }
 
@@ -2125,7 +2125,7 @@ private func culpritAnalysisExplainsLikelyCause() throws {
     try check(bunAnalysis.kind == .bunServer, "culprit analysis should classify Bun family")
     try check(bunAnalysis.likelyCause.lowercased().contains("bun"), "culprit analysis should explain likely cause for Bun")
 
-    let panel = FamilyDetailPanelModel(family: family, previous: nil)
+    let panel = FamilyDetailPanelModel(family: family)
     try check(panel.culprit.kind == .nodeServer, "detail panel should precompute culprit analysis")
 }
 

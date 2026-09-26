@@ -25,6 +25,7 @@ final class RadarConsoleSession {
     @ObservationIgnored private let commands = RadarCommandCoordinator()
     @ObservationIgnored private var presentationObserverID: UUID?
     @ObservationIgnored private var queryTask: Task<Void, Never>?
+    @ObservationIgnored private var panelTask: Task<Void, Never>?
     @ObservationIgnored private var requestedQueryKey: ConsoleDerivedSnapshotKey?
     @ObservationIgnored private var lastFocusedFamilySignatures: Set<String> = []
     @ObservationIgnored private var nextRefreshCostSequence: UInt64 = 0
@@ -39,12 +40,22 @@ final class RadarConsoleSession {
     }
 
     var selectedPanel: FamilyDetailPanelModel? {
-        state.focusedSelection.familyKey.flatMap { monitor.consoleSnapshot.detailPanel(for: $0) }
+        guard let key = state.focusedSelection.familyKey else { return nil }
+        return monitor.consoleSnapshot.detailPanel(for: key) ?? selectedFamily.flatMap { workerPanel(for: $0.familyKey) }
     }
 
-    /// Resolve once per body: the fallback build is not free for large trees.
+    /// Resolve once per body. The refresh prepares panels for the top rows;
+    /// any other selection gets one from the projection worker, so this
+    /// builds on the main actor only for the frame before that arrives.
     func detailPanel(for family: ProcessFamily) -> FamilyDetailPanelModel {
-        monitor.consoleSnapshot.detailPanel(for: family.familyKey) ?? FamilyDetailPanelModel(family: family, previous: nil)
+        monitor.consoleSnapshot.detailPanel(for: family.familyKey)
+            ?? workerPanel(for: family.familyKey)
+            ?? FamilyDetailPanelModel(family: family)
+    }
+
+    private func workerPanel(for familyKey: String) -> FamilyDetailPanelModel? {
+        guard let panel = queries.selectedPanel, panel.familyKey == familyKey else { return nil }
+        return panel
     }
 
     var familyItems: [FamilyTriageViewModel] {
@@ -160,6 +171,8 @@ final class RadarConsoleSession {
         presentationObserverID = nil
         queryTask?.cancel()
         queryTask = nil
+        panelTask?.cancel()
+        panelTask = nil
         requestedQueryKey = nil
         queries.cancel()
     }
@@ -169,6 +182,28 @@ final class RadarConsoleSession {
         if navigationSubtitle != title { navigationSubtitle = title }
         recordEngineSample()
         scheduleQueryUpdate()
+        schedulePanelUpdate()
+    }
+
+    /// A selected family the refresh did not prepare gets its panel from the
+    /// worker now, and again with every sample while it stays unprepared.
+    private func schedulePanelUpdate() {
+        guard presentationObserverID != nil, let family = selectedFamily,
+              monitor.consoleSnapshot.detailPanel(for: family.familyKey) == nil else { return }
+        let request = ConsoleProjectionRequest(
+            source: monitor.consoleSnapshot,
+            incidents: [],
+            state: state.coreState,
+            families: monitor.families,
+            processes: monitor.sampledProcesses,
+            sampleRevision: monitor.sampleRevision
+        )
+        panelTask?.cancel()
+        let queries = queries
+        let familyKey = family.familyKey
+        panelTask = Task {
+            _ = await queries.updatePanel(familyKey: familyKey, request: request)
+        }
     }
 
     /// Returns the projection task for the current state, so callers that
@@ -217,12 +252,14 @@ final class RadarConsoleSession {
             direction: direction
         )
         updateFocusedFamilies()
+        schedulePanelUpdate()
     }
 
     func focus(_ selection: RadarFocusedSelection) {
         hasNavigationIntent = true
         state.focusedSelection = selection
         updateFocusedFamilies()
+        schedulePanelUpdate()
     }
 
     func updateFocusedFamilies() {

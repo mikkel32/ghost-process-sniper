@@ -149,7 +149,8 @@ public struct RadarPublishPayload: Equatable, Sendable {
         performance: RadarPerformanceMetrics,
         previous: RadarConsoleSnapshot?,
         generatedAt: Date,
-        detailSignatures: Set<String>? = nil
+        detailSignatures: Set<String>? = nil,
+        processes: [ProcessMetrics] = []
     ) -> RadarPublishPayload {
         let contentRevision = SnapshotContentRevision.compute(
             families: families,
@@ -223,7 +224,7 @@ public struct RadarPublishPayload: Equatable, Sendable {
             families: families, duplicateClusters: duplicateClusters, summary: summary,
             incidents: incidents, rules: rules, metrics: revisedPerformance, health: health,
             storeHealth: storeHealth, storeError: storeError, previous: previous,
-            generatedAt: generatedAt, detailSignatures: detailSignatures,
+            generatedAt: generatedAt, detailSignatures: detailSignatures, processes: processes,
             contentRevision: contentRevision
         )
         let triage = snapshot.families

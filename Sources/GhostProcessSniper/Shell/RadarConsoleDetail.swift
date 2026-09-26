@@ -13,15 +13,18 @@ struct RadarConsoleDetail: View {
                 ProcessBrowserView(session: session)
             case .family(let familyKey):
                 if let family = session.monitor.family(signatureID: familyKey) {
+                    let panel = session.detailPanel(for: family)
                     FamilyDetailConsoleView(
                         family: family,
-                        panel: session.detailPanel(for: family),
+                        panel: panel,
                         onSnooze: { minutes in session.snoozeSelected(minutes: minutes) },
                         onIgnore: { session.ignoreSelected() },
                         onKill: { session.prepareKill(family) },
                         thermals: session.monitor.thermals,
                         onPreviewProcess: { session.prepareKill(family, member: $0) },
-                        stopRisk: KillRiskAssessor().assess(
+                        // Panels carry the assessment, built off the main actor;
+                        // assessing here only covers a first frame without one.
+                        stopRisk: panel.stopRisk ?? KillRiskAssessor().assess(
                             KillWorkloadProfile(family: family, sample: session.monitor.sampledProcesses)
                         )
                     )

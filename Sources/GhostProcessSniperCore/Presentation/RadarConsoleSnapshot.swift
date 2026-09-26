@@ -70,13 +70,14 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
         storeError: String?,
         previous: RadarConsoleSnapshot?,
         generatedAt: Date,
-        detailSignatures: Set<String>? = nil
+        detailSignatures: Set<String>? = nil,
+        processes: [ProcessMetrics] = []
     ) -> RadarConsoleSnapshot {
         build(
             families: families, duplicateClusters: duplicateClusters, summary: summary,
             incidents: incidents, rules: rules, metrics: metrics, health: health,
             storeHealth: storeHealth, storeError: storeError, previous: previous,
-            generatedAt: generatedAt, detailSignatures: detailSignatures,
+            generatedAt: generatedAt, detailSignatures: detailSignatures, processes: processes,
             contentRevision: SnapshotContentRevision.compute(
                 families: families,
                 summary: summary,
@@ -88,7 +89,8 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
     }
 
     /// `contentRevision` must be the revision of exactly these inputs; the
-    /// publish payload computes it once and passes it here.
+    /// publish payload computes it once and passes it here. `processes` is
+    /// the whole sample, which stop assessments search for supervisors.
     static func build(
         families: [ProcessFamily],
         duplicateClusters: [DuplicateProcessCluster],
@@ -102,6 +104,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
         previous: RadarConsoleSnapshot?,
         generatedAt: Date,
         detailSignatures: Set<String>?,
+        processes: [ProcessMetrics],
         contentRevision: SnapshotContentRevision
     ) -> RadarConsoleSnapshot {
         let engine = EngineDiagnosticsViewModel(
@@ -148,6 +151,21 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             }
             wantedKeys = keys
         }
+        // The PID index is built at most once, and only when a tree changed
+        // since the previous snapshot assessed it.
+        var processesByPID: [Int32: ProcessMetrics]?
+        func stopRisk(for family: ProcessFamily) -> KillRiskAssessment? {
+            guard !processes.isEmpty else {
+                return nil
+            }
+            if let previous = previousPanels[family.familyKey], let risk = previous.stopRisk,
+               previous.workloadKey == FamilyDetailPanelModel.workloadKey(for: family) {
+                return risk
+            }
+            let index = processesByPID ?? Dictionary(processes.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
+            processesByPID = index
+            return FamilyDetailPanelModel.stopRisk(for: family, processesByPID: index)
+        }
         var detailPanels: [String: FamilyDetailPanelModel] = [:]
         detailPanels.reserveCapacity((wantedKeys?.count ?? families.count) * 2)
         for family in families where wantedKeys?.contains(family.familyKey) ?? true {
@@ -155,7 +173,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             let culprit = CulpritAnalysis(family: family, classifier: classifier, classification: classification)
             let panel = FamilyDetailPanelModel(
                 family: family,
-                previous: previousPanels[family.familyKey],
+                stopRisk: stopRisk(for: family),
                 classifier: classifier,
                 classification: classification,
                 culprit: culprit

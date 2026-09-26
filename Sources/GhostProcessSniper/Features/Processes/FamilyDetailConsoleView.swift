@@ -41,7 +41,7 @@ struct FamilyDetailConsoleView: View {
 
                 Spacer()
 
-                Label(panelModel.lastScoredText, systemImage: "clock")
+                Label(FamilyDetailPanelModel.lastScoredText(family.lastScoredAt), systemImage: "clock")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -60,7 +60,7 @@ struct FamilyDetailConsoleView: View {
                         ThermalDashboardView(snapshot: thermals)
                         FamilySummaryPanel(panel: panelModel)
                         FamilyForecastPanel(panel: panelModel)
-                        FamilyTrendPanel(panel: panelModel)
+                        FamilyTrendPanel(panel: panelModel, lastScoredAt: family.lastScoredAt)
 
                     case .signals:
                         FamilyScorePanel(panel: panelModel)
@@ -74,7 +74,7 @@ struct FamilyDetailConsoleView: View {
                         FamilyActionsPanel(panel: panelModel, risk: stopRisk, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
 
                     case .forensics:
-                        FamilyForensicsPanel(panel: panelModel)
+                        FamilyForensicsPanel(panel: panelModel, freshness: family.forensicsFreshness)
                         FamilyActionsPanel(panel: panelModel, risk: stopRisk, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
                     }
                 }
@@ -349,6 +349,7 @@ private struct FamilyScorePanel: View {
 
 private struct FamilyTrendPanel: View {
     let panel: FamilyDetailPanelModel
+    let lastScoredAt: Date?
 
     @State private var hoveredSample: TrendSample?
 
@@ -373,7 +374,7 @@ private struct FamilyTrendPanel: View {
     var body: some View {
         RadarSection(
             title: "Memory Trend",
-            subtitle: "\(panel.memoryPattern.pattern.label) · \(panel.lastScoredText)",
+            subtitle: "\(panel.memoryPattern.pattern.label) · \(FamilyDetailPanelModel.lastScoredText(lastScoredAt))",
             systemImage: "chart.xyaxis.line",
             tip: RadarTip(
                 title: "Memory Trend",
@@ -644,6 +645,7 @@ private struct FamilyProcessTreePanel: View {
 
 private struct FamilyForensicsPanel: View {
     let panel: FamilyDetailPanelModel
+    let freshness: Date?
 
     var body: some View {
         RadarSection(
@@ -656,7 +658,7 @@ private struct FamilyForensicsPanel: View {
             )
         ) {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 10)], spacing: 10) {
-                forensic("Fresh", panel.forensics.freshnessText)
+                forensic("Fresh", FamilyForensicsSummary.freshnessText(freshness))
                 forensic("CWD", panel.forensics.currentDirectory)
                 forensic("Root", panel.forensics.rootDirectory)
                 forensic("Files", panel.forensics.openFileText)
@@ -703,36 +705,32 @@ struct FamilyInspectorView: View {
     let family: ProcessFamily
     let panel: FamilyDetailPanelModel
 
-    private var panelModel: FamilyDetailPanelModel {
-        panel
-    }
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 RadarSection(title: "Selection") {
                     VStack(alignment: .leading, spacing: 8) {
-                        row("Kind", panelModel.kind.label)
-                        row("Score", panelModel.scoreText)
-                        row("Status", panelModel.statusText)
-                        row("Forecast", "\(panelModel.forecastStateText), \(panelModel.forecastETA)")
-                        row("Why now", panelModel.forecastWhyNow)
-                        row("Changed", panelModel.change.summary)
+                        row("Kind", panel.kind.label)
+                        row("Score", panel.scoreText)
+                        row("Status", panel.statusText)
+                        row("Forecast", "\(panel.forecastStateText), \(panel.forecastETA)")
+                        row("Why now", panel.forecastWhyNow)
+                        row("Changed", panel.change.summary)
                     }
                 }
 
                 RadarSection(title: "Forensics") {
                     VStack(alignment: .leading, spacing: 8) {
-                        row("Fresh", panelModel.forensics.freshnessText)
-                        row("CWD", panelModel.forensics.currentDirectory)
-                        row("Files", panelModel.forensics.openFileText)
-                        row("Ports", panelModel.forensics.portsText)
+                        row("Fresh", FamilyForensicsSummary.freshnessText(family.forensicsFreshness))
+                        row("CWD", panel.forensics.currentDirectory)
+                        row("Files", panel.forensics.openFileText)
+                        row("Ports", panel.forensics.portsText)
                     }
                 }
 
                 RadarSection(title: "Tree") {
                     VStack(alignment: .leading, spacing: 7) {
-                        ForEach(panelModel.members.prefix(10)) { process in
+                        ForEach(panel.members.prefix(10)) { process in
                             HStack(spacing: 8) {
                                 Text(process.identity == family.root.identity ? "root" : "child")
                                     .font(.caption2.monospacedDigit())
