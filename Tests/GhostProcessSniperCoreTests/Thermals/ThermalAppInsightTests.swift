@@ -16,7 +16,8 @@ final class ThermalAppInsightTests: XCTestCase {
     func testCoolActiveAppDoesNotReceiveAnOverheatingWarning() {
         let result = insight(activity: activity(cpu: 200), temperature: 60)
         XCTAssertEqual(result.title, "Most active: Editor")
-        XCTAssertEqual(result.badge, "Observed workload")
+        // The badge describes evidence strength; only the title depends on temperature.
+        XCTAssertEqual(result.badge, "Current workload observed")
     }
 
     func testOneBusyCoreRemainsSignificantOnManyCoreMac() {
