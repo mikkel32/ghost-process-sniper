@@ -297,12 +297,6 @@ public struct KillRiskAssessor: Sendable {
         }
     }
 
-    /// Apps are asked to quit, and LaunchServices rather than a launchd
-    /// job keeps them running.
-    public func isAppMainBinary(_ process: KillWorkloadProcess) -> Bool {
-        Fingerprint(process).isAppMainBinary
-    }
-
     private static func launchdAdvice(_ job: LaunchdJob) -> String {
         let restarts = "launchd keeps it running (KeepAlive in \(job.plistName)), so a normal stop is undone within seconds."
         if job.homebrewFormula != nil {
@@ -552,9 +546,15 @@ private extension String {
     }
 }
 
-// The duplicate cull plan asks the same questions of a copy before offering
-// to stop it, so the plan and the stop preview agree.
+// The launchd resolver and the duplicate cull plan ask the same questions of
+// a process before acting on it, so they and the stop preview agree.
 extension KillRiskAssessor {
+    /// Apps are asked to quit, and LaunchServices rather than a launchd
+    /// job keeps them running.
+    public func isAppMainBinary(_ process: KillWorkloadProcess) -> Bool {
+        Fingerprint(process).isAppMainBinary
+    }
+
     static func isLaunchdManagedService(path: String) -> Bool {
         Fingerprint(name: "", path: path, command: "").isLaunchdManagedService
     }

@@ -133,9 +133,9 @@ public extension QuickStopAction {
         }
     }
 
-    /// Actions for the few families on screen. One PID index serves every
-    /// candidate, and each family's workload sees only its own ancestor
-    /// chain, so the cost does not grow with the sample per family.
+    /// Actions for the few families on screen. One sample index serves every
+    /// candidate, and each family's workload is its own stop set and
+    /// ancestor chain, so the cost does not grow with the sample per family.
     static func actions(
         for candidates: [Candidate],
         families: [ProcessFamily],
@@ -148,13 +148,13 @@ public extension QuickStopAction {
             if byKey[family.familyKey] == nil { byKey[family.familyKey] = family }
             if byKey[family.signature.id] == nil { byKey[family.signature.id] = family }
         }
-        let byPID = Dictionary(processes.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
+        let index = KillSampleIndex(processes)
         var ownedFamilyByPID: [Int32: ProcessFamily]?
 
         var result: [String: QuickStopAction] = [:]
         for candidate in candidates where result[candidate.familyKey] == nil {
             guard let family = byKey[candidate.familyKey] else { continue }
-            let risk = assessor.assess(KillWorkloadProfile(family: family, sample: ancestorChain(of: family, in: byPID)))
+            let risk = assessor.assess(KillWorkloadProfile(root: family.root, index: index, family: family))
             var supervisorFamilyKey: String?
             if let pid = risk.supervisor?.pid {
                 if ownedFamilyByPID == nil { ownedFamilyByPID = ownedFamiliesByPID(families) }
@@ -172,18 +172,6 @@ public extension QuickStopAction {
             )
         }
         return result
-    }
-
-    /// Nearest parent first, as KillWorkloadProfile walks it.
-    private static func ancestorChain(of family: ProcessFamily, in byPID: [Int32: ProcessMetrics]) -> [ProcessMetrics] {
-        var chain: [ProcessMetrics] = []
-        var cursor = family.root.parentPID
-        var visited: Set<Int32> = [family.root.pid]
-        while cursor > 1, chain.count < 8, let parent = byPID[cursor], visited.insert(parent.pid).inserted {
-            chain.append(parent)
-            cursor = parent.parentPID
-        }
-        return chain
     }
 
     /// A supervisor is only worth redirecting to when it is a tracked family
