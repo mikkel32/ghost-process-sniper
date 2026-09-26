@@ -91,7 +91,9 @@ struct KillPreflightBuilder: Sendable {
             locked.append(contentsOf: additions.map { $0.updating(state: .locked, reason: "Not included in the confirmed preview") })
             targets.removeAll { !approved.contains($0.identity) }
         }
-        targets = targets.sorted(by: ProcessKiller.signalOrder)
+        targets = targets.sorted(by: ProcessKiller.signalOrder).map {
+            $0.condition == .suspended ? $0.updating(state: .ready, reason: "Suspended (Ctrl-Z) \u{2014} still holds its ports") : $0
+        }
         locked.sort { $0.pid < $1.pid }
         stale.sort { $0.pid < $1.pid }
         recycled.sort { $0.pid < $1.pid }
@@ -131,6 +133,9 @@ struct KillPreflightBuilder: Sendable {
         )
         evidence += protectionFloor.cautions.map { KillDecisionEvidence(kind: $0.severity == .info ? .info : .caution, title: $0.title, detail: $0.detail) }
         evidence += zombies.exited.map { KillDecisionEvidence(kind: .info, title: "Already exited", detail: $0.reason) }
+        if targets.contains(where: { $0.condition == .suspended }) {
+            evidence.append(KillDecisionEvidence(kind: .info, title: "Paused job (Ctrl-Z)", detail: "Ghost resumes it so it can exit cleanly."))
+        }
         if let reason = protectionFloor.rootReason {
             // Stopping the rest of the tree without its root is not what
             // anyone asked for, so the whole plan becomes inspect-only.

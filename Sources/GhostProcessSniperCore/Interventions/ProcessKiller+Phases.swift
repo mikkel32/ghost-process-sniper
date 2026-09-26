@@ -94,7 +94,11 @@ extension ProcessKiller {
         if action == .quitRequest {
             // A quitting app saves its state and closes its own helpers;
             // signalling them now would race that.
-            if let pid = context.appQuitPID, let app = recipients.first(where: { $0.pid == pid }),
+            let app = context.appQuitPID.flatMap { pid in recipients.first { $0.pid == pid } }
+            if let app, app.condition == .suspended {
+                resume(app, operationID: context.operationID, report: &report, eventSink: context.eventSink)
+            }
+            if let app, let pid = context.appQuitPID,
                await requestQuit(app, operationID: context.operationID, report: &report, eventSink: context.eventSink) {
                 quitAccepted = pid
                 signalled = []
@@ -109,6 +113,9 @@ extension ProcessKiller {
                                    report: &report, eventSink: context.eventSink)
                 if outcome == .refused || outcome == .recycled {
                     dropped.insert(target.identity)
+                }
+                if outcome == .sent, signal != SIGKILL, target.condition == .suspended {
+                    resume(target, operationID: context.operationID, report: &report, eventSink: context.eventSink)
                 }
             }
         }
@@ -140,6 +147,9 @@ extension ProcessKiller {
         }
         let signaler = signaler
         let operationState = context.operationState
+        // A process in a debugger only pauses there; waiting on it would
+        // just burn the grace.
+        let group = group.filter { $0.condition != .traced }
         let result = await KillGraceCoordinator().wait(
             seconds: phase.waitAfterSeconds,
             sleeper: sleeper,

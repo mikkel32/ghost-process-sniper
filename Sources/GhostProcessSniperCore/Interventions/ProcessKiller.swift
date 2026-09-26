@@ -210,6 +210,7 @@ public final class ProcessKiller: Sendable {
                 report.verificationPasses.append(finalVerification.pass)
                 appendUnique(survivors: finalVerification.recycled.map(\.pid), to: &report.recycledPIDs)
                 report.survivorPIDs = finalVerification.live.map(\.pid).sorted()
+                report.stuckExitingPIDs = finalVerification.exiting.map(\.pid).sorted()
                 exitedIdentities = Set(finalVerification.exited.map(\.identity))
             }
             report.appStillOpen = walk.quitAcceptedPID.map(report.survivorPIDs.contains) ?? false

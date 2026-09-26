@@ -102,6 +102,8 @@ public enum KillPhaseAction: Codable, Equatable, Sendable {
         case .signal(SIGINT): "SIGINT"
         case .signal(SIGTERM): "SIGTERM"
         case .signal(SIGKILL): "SIGKILL"
+        case .signal(SIGSTOP): "SIGSTOP"
+        case .signal(SIGCONT): "SIGCONT"
         case .signal(let signal): "SIG\(signal)"
         }
     }

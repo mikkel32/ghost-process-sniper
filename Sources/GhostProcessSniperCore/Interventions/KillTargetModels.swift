@@ -44,6 +44,31 @@ public enum KillTargetState: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// What a process was doing when the stop looked at it.
+public enum KillTargetCondition: String, Sendable {
+    case running
+    /// Stopped with Ctrl-Z: a polite signal waits until it runs again.
+    case suspended
+    /// A debugger is attached; a polite signal pauses it in the debugger.
+    case traced
+    /// Already exiting in the kernel; no signal changes that.
+    case exiting
+
+    init(status: UInt32, flags: UInt32) {
+        // A debugger also stops what it traces, and SIGCONT does not undo
+        // that, so being traced outranks being stopped.
+        if flags & KillProcessLite.exitingFlag != 0 {
+            self = .exiting
+        } else if flags & KillProcessLite.tracedFlag != 0 {
+            self = .traced
+        } else if status == KillProcessLite.stoppedStatus {
+            self = .suspended
+        } else {
+            self = .running
+        }
+    }
+}
+
 public struct KillTarget: Identifiable, Equatable, Sendable {
     public var id: String {
         "\(identity.pid)-\(identity.startTimeSeconds)-\(identity.startTimeMicroseconds)-\(state.rawValue)"
@@ -59,6 +84,7 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
     public let state: KillTargetState
     public let reason: String
     public let isRoot: Bool
+    public let condition: KillTargetCondition
 
     public var pid: Int32 { identity.pid }
 
@@ -72,7 +98,8 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
         cpuPercent: Double,
         state: KillTargetState,
         reason: String,
-        isRoot: Bool
+        isRoot: Bool,
+        condition: KillTargetCondition = .running
     ) {
         self.identity = identity
         self.parentPID = parentPID
@@ -84,6 +111,7 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
         self.state = state
         self.reason = reason
         self.isRoot = isRoot
+        self.condition = condition
     }
 
     public init(process: ProcessMetrics, depth: Int, state: KillTargetState, reason: String, rootIdentity: ProcessIdentity) {
@@ -112,7 +140,8 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
             cpuPercent: process.cpuPercent,
             state: state,
             reason: reason,
-            isRoot: process.identity == rootIdentity
+            isRoot: process.identity == rootIdentity,
+            condition: KillTargetCondition(status: process.status, flags: process.flags)
         )
     }
 
@@ -143,7 +172,8 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
             cpuPercent: cpuPercent,
             state: state,
             reason: reason,
-            isRoot: isRoot
+            isRoot: isRoot,
+            condition: condition
         )
     }
 }

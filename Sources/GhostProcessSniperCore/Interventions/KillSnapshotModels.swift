@@ -251,6 +251,12 @@ public struct KillProcessLite: Identifiable, Equatable, Sendable {
 
     /// SZOMB in sys/proc.h, which Swift does not import.
     static let zombieStatus: UInt32 = 5
+    /// SSTOP: stopped with Ctrl-Z or SIGSTOP; every signal but SIGKILL and
+    /// SIGCONT waits until it runs again.
+    static let stoppedStatus: UInt32 = 4
+    /// PROC_FLAG_TRACED and PROC_FLAG_INEXIT from libproc.
+    static let tracedFlag: UInt32 = 0x2
+    static let exitingFlag: UInt32 = 0x4
 
     public init(
         identity: ProcessIdentity,

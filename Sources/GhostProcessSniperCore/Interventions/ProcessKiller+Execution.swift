@@ -61,6 +61,23 @@ extension ProcessKiller {
         return true
     }
 
+    /// A job stopped with Ctrl-Z keeps a polite signal pending until it runs
+    /// again, so it would otherwise wait out the whole grace and be forced.
+    /// Never counted as a stop of its own.
+    func resume(
+        _ target: KillTarget,
+        operationID: KillOperationID,
+        report: inout KillReport,
+        eventSink: (@Sendable (KillOperationEvent) -> Void)?
+    ) {
+        guard !report.attempts.contains(where: { $0.pid == target.pid && $0.stage == "resume" }) else { return }
+        let resumed = (try? signaler.send(signal: SIGCONT, to: target.identity)) != nil
+        report.attempts.append(KillAttempt(pid: target.pid, signal: SIGCONT, stage: "resume", succeeded: resumed))
+        guard resumed else { return }
+        appendEvent(.signaled, operationID: operationID, pid: target.pid, signalName: "SIGCONT", targetState: .stopping,
+                    message: "Resumed \(target.name) so it can exit.", report: &report, eventSink: eventSink)
+    }
+
     /// A supervisor restarts what it watches within a moment of its exit.
     /// Looks for a fresh process with a stopped target's name that started
     /// after this operation began.
@@ -170,6 +187,8 @@ extension ProcessKiller {
         let live: [KillTarget]
         let recycled: [KillTarget]
         let exited: [KillTarget]
+        /// Live targets already exiting in the kernel, held up by I/O.
+        let exiting: [KillTarget]
     }
 
     func verify(
@@ -203,6 +222,7 @@ extension ProcessKiller {
         var live: [KillTarget] = []
         var recycled: [KillTarget] = []
         var exited: [KillTarget] = []
+        var exiting: [KillTarget] = []
 
         for target in targets {
             if index.hasRecycledPID(for: target.identity) {
@@ -211,6 +231,7 @@ extension ProcessKiller {
                 // A zombie has exited; it only waits for its parent to
                 // collect it, and no signal can do more.
                 live.append(target)
+                if process.flags & KillProcessLite.exitingFlag != 0 { exiting.append(target) }
             } else {
                 exited.append(target)
             }
@@ -228,7 +249,8 @@ extension ProcessKiller {
             ),
             live: live,
             recycled: recycled,
-            exited: exited
+            exited: exited,
+            exiting: exiting
         )
     }
 

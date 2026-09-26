@@ -135,6 +135,9 @@ public struct InterventionPolicyEngine: Sendable {
         if !stale.isEmpty || !recycled.isEmpty || !diff.isEmpty {
             factors.append(KillDecisionFactor(kind: .whyWait, title: "Tree drift", detail: diff.summary, weight: -min(20, Double(stale.count + recycled.count + diff.reparentedPIDs.count) * 5)))
         }
+        if let debugged = targets.first(where: { $0.condition == .traced }) {
+            factors.append(KillDecisionFactor(kind: .whyWait, title: "Debugger attached", detail: "A debugger is attached to \(debugged.name): a polite stop only pauses it in the debugger. Stop it from the debugger, or allow force.", weight: -6))
+        }
         if nearbyCount > 0 {
             factors.append(KillDecisionFactor(kind: .whyWait, title: "Nearby process group", detail: "\(nearbyCount) same-user neighbor\(nearbyCount == 1 ? "" : "s") shown but not targeted.", weight: -4))
         }

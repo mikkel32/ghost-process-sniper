@@ -42,6 +42,8 @@ public struct KillReport: Equatable, Sendable {
     public var isForceFollowUp = false
     /// The parent an already-exited (zombie) target waits on to collect it.
     public var zombieParentName: String?
+    /// Survivors already exiting in the kernel, held up by disk or network I/O.
+    public var stuckExitingPIDs: [Int32] = []
 
     public var partiallySucceeded: Bool {
         !gracefulPIDs.isEmpty || !forcedPIDs.isEmpty
@@ -60,9 +62,14 @@ public struct KillReport: Equatable, Sendable {
         if !signalDeniedPIDs.isEmpty && !partiallySucceeded {
             return "macOS refused to stop \(displayName) (\(pidLabel) \(refused)). It is protected by security software or a system policy; nothing else was tried."
         }
-        let outcome = outcomeSummary
-        guard !signalDeniedPIDs.isEmpty else { return outcome }
-        return "\(outcome) macOS refused to stop \(pidLabel) \(refused); it is protected by security software or a system policy."
+        var parts = [outcomeSummary]
+        if !signalDeniedPIDs.isEmpty {
+            parts.append("macOS refused to stop \(pidLabel) \(refused); it is protected by security software or a system policy.")
+        }
+        parts += stuckExitingPIDs.sorted().map {
+            "PID \($0) is stuck finishing its exit in the kernel (hung disk or network I/O); it disappears when that I/O completes."
+        }
+        return parts.joined(separator: " ")
     }
 
     private var outcomeSummary: String {

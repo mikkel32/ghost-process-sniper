@@ -360,6 +360,8 @@ extension KillProcessLite {
         userID: UInt32 = 501,
         start: UInt64 = 1_000,
         status: UInt32 = 2,
+        flags: UInt32 = 0,
+        group: Int32? = nil,
         memory: UInt64 = 64 * 1_048_576
     ) -> KillProcessLite {
         KillProcessLite(
@@ -369,8 +371,8 @@ extension KillProcessLite {
             ownerName: userID == 501 ? "me" : "root",
             name: name,
             status: status,
-            flags: 0,
-            processGroupID: pid,
+            flags: flags,
+            processGroupID: group ?? pid,
             openFileCount: 4,
             residentMemoryBytes: memory,
             physicalFootprintBytes: memory,
