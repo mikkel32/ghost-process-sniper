@@ -53,6 +53,26 @@ final class KillTargetAdvisorTests: XCTestCase {
         XCTAssertTrue(preview.alternatives.isEmpty)
     }
 
+    func testRecycledSupervisorPIDIsNotOffered() async {
+        // PM2 exited after the sample and an unrelated process of the same
+        // user took PID 499; the server now hangs off launchd.
+        let (table, server) = supervisedServer(serverParent: 1)
+        let preview = await killer(table).preview(plan: serverPlan(server, supervisor: pm2), forceKillDelay: 2)
+        XCTAssertFalse(preview.alternatives.contains { $0.kind == .stopSupervisor },
+                       "a PID that is no longer the server's ancestor must not become a stop target")
+    }
+
+    func testSupervisorFurtherUpTheChainIsOffered() async throws {
+        let table = FakeProcessTable()
+        table.add(KillProcessLite.fake(pid: 499, name: "node"))
+        table.add(KillProcessLite.fake(pid: 450, parent: 499, name: "sh"))
+        let server = KillProcessLite.fake(pid: 500, parent: 450, name: "node")
+        table.add(server)
+        let preview = await killer(table).preview(plan: serverPlan(server, supervisor: pm2), forceKillDelay: 2)
+        let alternative = try XCTUnwrap(preview.alternatives.first { $0.kind == .stopSupervisor })
+        XCTAssertEqual(alternative.identity.pid, 499)
+    }
+
     func testDominantHelperOffersHelperOnlyStop() async throws {
         let table = FakeProcessTable()
         let gigabyte: UInt64 = 1_073_741_824
@@ -105,10 +125,10 @@ final class KillTargetAdvisorTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    private func supervisedServer(supervisorUser: UInt32 = 501) -> (FakeProcessTable, KillProcessLite) {
+    private func supervisedServer(supervisorUser: UInt32 = 501, serverParent: Int32 = 499) -> (FakeProcessTable, KillProcessLite) {
         let table = FakeProcessTable()
         let supervisor = KillProcessLite.fake(pid: 499, name: "node", userID: supervisorUser)
-        let server = KillProcessLite.fake(pid: 500, parent: 499, name: "node")
+        let server = KillProcessLite.fake(pid: 500, parent: serverParent, name: "node")
         table.add(supervisor)
         table.add(server)
         return (table, server)

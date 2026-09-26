@@ -48,6 +48,8 @@ public struct KillAlternative: Identifiable, Equatable, Sendable {
 public struct KillTargetAdvisor: Sendable {
     /// Share of the family's memory or CPU that makes one member the problem.
     public static let dominantShare = 0.7
+    /// How far up the parent chain a supervisor may sit above the root.
+    static let maxSupervisorHops = 8
 
     public init() {}
 
@@ -74,7 +76,8 @@ public struct KillTargetAdvisor: Sendable {
     ) -> KillAlternative? {
         guard let supervisor = risk.supervisor, let pid = supervisor.pid, Self.restartsOnExit(supervisor.kind) else { return nil }
         let stopping = Set(targets.map(\.identity))
-        guard let process = arena.processes(for: pid).first(where: { $0.userID == currentUserID && !stopping.contains($0.identity) }),
+        guard let process = liveAncestor(pid, of: plan.rootIdentity, in: arena),
+              process.userID == currentUserID, !stopping.contains(process.identity),
               let workload = plan.workload?.rerooted(atAncestor: pid) else { return nil }
         let everyApp = supervisor.kind == .pm2 ? " Stopping PM2 stops every PM2 app." : ""
         return KillAlternative(
@@ -87,6 +90,24 @@ public struct KillTargetAdvisor: Sendable {
             plan: KillPlan(rootIdentity: process.identity, targetIdentities: [process.identity], protectedPIDs: [],
                            displayName: supervisor.name, workload: workload)
         )
+    }
+
+    /// The workload's ancestors were sampled at the last refresh and carry no
+    /// start time, so their PID is trusted only while it is still on the
+    /// root's live parent chain: a recycled PID must never become a target.
+    private func liveAncestor(_ pid: Int32, of root: ProcessIdentity, in arena: KillGraphArena) -> KillProcessLite? {
+        var child = arena.process(for: root)
+        for _ in 0..<Self.maxSupervisorHops {
+            guard let current = child, current.parentPID > 1 else { return nil }
+            // A parent cannot have started after its child.
+            let started = (current.identity.startTimeSeconds, current.identity.startTimeMicroseconds)
+            guard let parent = arena.processes(for: current.parentPID).first(where: {
+                ($0.identity.startTimeSeconds, $0.identity.startTimeMicroseconds) <= started
+            }) else { return nil }
+            if parent.pid == pid { return parent }
+            child = parent
+        }
+        return nil
     }
 
     private func helperAlternative(plan: KillPlan, targets: [KillTarget], risk: KillRiskAssessment) -> KillAlternative? {
