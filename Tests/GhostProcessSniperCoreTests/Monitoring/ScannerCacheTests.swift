@@ -9,9 +9,11 @@ final class ScannerCacheTests: XCTestCase {
 
     func testDeadlineAllowsWorkInsideTheBudgetOnly() {
         let budget = ScannerBudget.budget(for: .batterySaver)
-        let deadline = SamplerDeadline(startedAt: Date(timeIntervalSince1970: 100), budgetMilliseconds: budget.targetMilliseconds)
-        XCTAssertFalse(deadline.isExpired(now: Date(timeIntervalSince1970: 100.001)))
-        XCTAssertTrue(deadline.isExpired(now: Date(timeIntervalSince1970: 101)))
+        let startedAt: UInt64 = 100_000_000_000
+        let deadline = TickDeadline(startedAt: startedAt, budgetMilliseconds: budget.targetMilliseconds)
+        XCTAssertFalse(deadline.isExpired(at: startedAt + 1_000_000))
+        XCTAssertTrue(deadline.isExpired(at: startedAt + 1_000_000_000))
+        XCTAssertFalse(deadline.isExpired(at: startedAt - 1), "a clock read before the start never expires the tick")
         XCTAssertLessThanOrEqual(ScannerBudget.budget(for: .balanced).maxTelemetryRefreshes, 16, "command/path refresh bursts are capped")
     }
 
