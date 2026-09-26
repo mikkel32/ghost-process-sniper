@@ -72,7 +72,6 @@ struct ProcessBrowserTable: View {
     /// the headers and the projection always agree.
     private var sortOrder: Binding<[KeyPathComparator<ProcessBrowserRowModel>]> {
         let state = session.state
-        let session = session
         return Binding(
             get: {
                 let order: SortOrder = state.familySortAscending ? .forward : .reverse

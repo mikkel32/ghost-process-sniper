@@ -154,7 +154,6 @@ struct IncidentsConsoleView: View {
     /// Column headers drive the incident query; most recent first has no column.
     private var sortOrder: Binding<[KeyPathComparator<IncidentRowViewModel>]> {
         let state = session.state
-        let session = session
         return Binding(
             get: {
                 let order: SortOrder = state.incidentQuery.ascending ? .forward : .reverse

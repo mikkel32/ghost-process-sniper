@@ -45,8 +45,8 @@ extension RadarConsoleSession {
 
     /// Deletes a rule and offers Undo, which saves the same rule again.
     func removeRule(_ rule: RadarRule, message: String) {
-        Task { await monitor.deleteRule(id: rule.id) }
         let monitor = monitor
+        Task { await monitor.deleteRule(id: rule.id) }
         showToast(message, systemImage: "trash", action: RadarToast.Action(title: "Undo") {
             Task { await monitor.save(rule: rule) }
         })
@@ -88,9 +88,7 @@ extension RadarConsoleSession {
     private func familyGone() {
         showToast("That process is no longer running", systemImage: "checkmark.circle")
     }
-}
 
-extension RadarConsoleSession {
     /// After a stop that a supervisor undid, stops the supervisor itself:
     /// the parent of the process it started again.
     func prepareKillRespawner(of report: KillReport) {
@@ -103,9 +101,7 @@ extension RadarConsoleSession {
         }
         prepareKill(processIdentity: parent.identity, name: report.respawnedBy ?? parent.name)
     }
-}
 
-extension RadarConsoleSession {
     func snooze(families: [(key: String, name: String)], minutes: TimeInterval) {
         guard families.count > 1 else {
             if let family = families.first { snooze(familyKey: family.key, name: family.name, minutes: minutes) }
