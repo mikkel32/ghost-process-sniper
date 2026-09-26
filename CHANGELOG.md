@@ -2,7 +2,9 @@
 
 All notable changes to Ghost Process Sniper are documented here. The project follows [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [2.0.0] — 2026-09-26
+
+A verdict-first redesign with risk-aware stopping, search across every running process, and a faster, lighter radar. Existing history and settings are migrated on first launch; a copy of the database is kept before any upgrade that drops tables.
 
 ### Search
 - Search reaches every running process, not only tracked families. Apps outside the watch scope appear under *Other running processes* with memory, CPU, PID, and copy/reveal actions.
@@ -160,4 +162,5 @@ First public release.
 - App bundles are staged and signed outside the checkout, so packaging works when the repository lives in an iCloud-synced Desktop or Documents folder.
 - Cleanup tests no longer crash when the repository is checked out in an iCloud-synced folder; fixtures now live in `~/Library/Caches`.
 
+[2.0.0]: https://github.com/mikkel32/ghost-process-sniper/releases/tag/v2.0.0
 [1.0.0]: https://github.com/mikkel32/ghost-process-sniper/releases/tag/v1.0.0

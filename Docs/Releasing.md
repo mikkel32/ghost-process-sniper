@@ -48,7 +48,7 @@ This signs with the hardened runtime and a secure timestamp, notarizes and stapl
 With the [GitHub CLI](https://cli.github.com):
 
 ```sh
-VERSION=1.0.0
+VERSION=2.0.0
 git tag -a "v$VERSION" -m "Ghost Process Sniper $VERSION"
 git push origin main "v$VERSION"
 gh release create "v$VERSION" \

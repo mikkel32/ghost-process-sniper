@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img src="Docs/Assets/screenshot-overview.png" alt="Ghost Process Sniper console: live CPU and GPU temperature, the app doing the most work, and a list of processes that need attention">
+  <img src="Docs/Assets/screenshot-overview.png" alt="Ghost Process Sniper Overview: one recommended action with a Quit button, a risk queue, a warming-up queue, and summary cards for families, leaks, duplicates, and memory">
 </p>
 
 Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a minute. Three copies of the same watcher from terminals you closed yesterday. A fan that spins up and no idea why.
