@@ -154,6 +154,15 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
         listed.first { $0.pid == pid }?.status
     }
 
+    /// A signal from someone other than the engine, such as launchd
+    /// stopping a job it booted out. It is not logged as sent.
+    func signalFromOutside(_ signal: Int32, to pid: Int32) {
+        lock.withLock {
+            guard let identity = listedIdentity(for: pid) else { return }
+            deliver(signal, to: identity)
+        }
+    }
+
     // MARK: - KillSnapshotProviding
 
     func snapshot(request: KillSnapshotRequest) async throws -> KillProcessSnapshot {

@@ -97,7 +97,7 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public func killPlan(
         killHistory: KillHistorySummary? = nil,
         workload: KillWorkloadProfile? = nil,
-        strategyCalibrations: [KillStrategy: KillCalibrationSnapshot] = [:]
+        strategyCalibrations: KillOutcomeHistory = .empty
     ) -> KillPlan {
         KillPlan(
             rootIdentity: root.identity,

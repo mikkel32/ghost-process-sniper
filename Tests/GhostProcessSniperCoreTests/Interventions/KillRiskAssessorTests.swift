@@ -155,6 +155,61 @@ final class KillRiskAssessorTests: XCTestCase {
         XCTAssertNil(orphan.supervisor)
     }
 
+    func testBrewServicesDatabaseWillRestart() async {
+        let folder = LaunchAgentsFolder()
+        defer { folder.remove() }
+        let postgres = folder.linkedExecutable(named: "postgres")
+        folder.write(label: "homebrew.mxcl.postgresql@16", program: [postgres.link, "-D", "/opt/homebrew/var/postgresql@16"],
+                     keepAlive: true, runAtLoad: true)
+        let resolver = LaunchdJobResolver(launchctl: FakeLaunchctl(listStatus: LaunchdJobResolver.launchFailedStatus),
+                                          index: folder.index(), userID: 501)
+        let root = process(97, "postgres", path: postgres.real, command: "\(postgres.real) -D /opt/homebrew/var/postgresql@16")
+        let job = await resolver.job(forPID: 97, executablePath: postgres.real)
+
+        let plain = assess(root: root, parentIsLaunchd: true)
+        XCTAssertNil(plain.supervisor, "the path alone does not say launchd restarts it")
+
+        let risk = assessor.assess(KillWorkloadProfile(processes: [root], ancestors: [], parentIsLaunchd: true, launchdJob: job))
+        XCTAssertEqual(risk.kind, .dataStore)
+        XCTAssertEqual(risk.supervisor, KillSupervisor(pid: nil, name: "homebrew.mxcl.postgresql@16", kind: .launchd))
+        let restart = risk.hazards.first { $0.kind == .respawn }
+        XCTAssertEqual(restart?.detail, "launchd keeps it running (KeepAlive in homebrew.mxcl.postgresql@16.plist), so a normal stop is undone within seconds. Run brew services stop postgresql@16 to keep it stopped.")
+    }
+
+    func testLaunchdJobsAreNeverCalledOrphans() {
+        let root = process(98, "sync-agent", path: "/usr/local/bin/sync-agent")
+        let job = LaunchdJob(label: "com.example.sync", pid: 98, domain: "gui/501", plistPath: nil, keepAlive: false)
+        let risk = assessor.assess(KillWorkloadProfile(processes: [root], ancestors: [], parentIsLaunchd: true, launchdJob: job))
+        XCTAssertNil(risk.supervisor, "without KeepAlive launchd does not restart it")
+        XCTAssertFalse(risk.risks.contains { $0.kind == .orphaned })
+
+        let kept = LaunchdJob(label: "com.example.sync", pid: 98, domain: "gui/501", plistPath: nil, keepAlive: true)
+        let restart = assessor.assess(KillWorkloadProfile(processes: [root], ancestors: [], parentIsLaunchd: true, launchdJob: kept))
+        XCTAssertEqual(restart.hazards.first { $0.kind == .respawn }?.detail,
+                       "launchd keeps it running (KeepAlive in com.example.sync.plist), so a normal stop is undone within seconds. Stop the launchd service instead, or run launchctl bootout gui/501/com.example.sync.")
+    }
+
+    func testKeptAliveSupervisorIsRestartedByLaunchd() {
+        let pm2 = process(99, "PM2 v5.3.0: God Daemon", command: "PM2 v5.3.0: God Daemon (/Users/me/.pm2)", isRoot: true)
+        let app = process(100, "node", command: "node app.js", parent: 99)
+        let job = LaunchdJob(label: "pm2.me", pid: 99, domain: "gui/501", plistPath: nil, keepAlive: true)
+        let risk = assessor.assess(KillWorkloadProfile(processes: [pm2, app], ancestors: [], parentIsLaunchd: true, launchdJob: job))
+        XCTAssertEqual(risk.supervisor?.name, "pm2.me", "pm2 goes down with the stop, but launchd starts it again")
+    }
+
+    func testLongCommandLinesAreReadFromTheirStart() {
+        let padding = String(repeating: "--flag=\u{00e9}t\u{00e9} ", count: 600)
+        XCTAssertEqual(assess(root: process(92, "npm", command: "npm install \(padding)")).kind, .packageManager)
+        let tail = assess(root: process(93, "node", command: "node worker.js \(padding) vite"))
+        XCTAssertEqual(tail.kind, .general, "only the start of argv identifies a workload")
+    }
+
+    func testAppMainBinaryIsTheLastBundleExecutable() {
+        XCTAssertEqual(assess(root: process(94, "Code", path: "/Applications/Visual Studio Code.app/Contents/MacOS/Code")).appQuitPID, 94)
+        XCTAssertNil(assess(root: process(95, "tool", path: "/Applications/Tool.app/Contents/MacOS/bin/tool")).appQuitPID)
+        XCTAssertNil(assess(root: process(96, "Tool", path: "/Applications/Tool.app/Contents/MacOS/")).appQuitPID)
+    }
+
     func testEmptyWorkloadIsNeutral() {
         XCTAssertEqual(assessor.assess(.empty), .none)
     }

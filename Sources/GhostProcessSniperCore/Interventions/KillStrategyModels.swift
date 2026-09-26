@@ -52,6 +52,15 @@ public enum KillDecisionFactorKind: String, Codable, Sendable {
     case blocking
 }
 
+/// Where a reason comes from, so a view can skip what it already shows:
+/// the stop sheet lists the risk assessment's cards separately.
+public enum KillFactorSource: String, Codable, Sendable {
+    case risk
+    case radar
+    case history
+    case tree
+}
+
 public struct KillDecisionFactor: Identifiable, Codable, Equatable, Sendable {
     public var id: String { "\(kind.rawValue)-\(title)-\(Int(weight.rounded()))" }
 
@@ -59,12 +68,14 @@ public struct KillDecisionFactor: Identifiable, Codable, Equatable, Sendable {
     public let title: String
     public let detail: String
     public let weight: Double
+    public let source: KillFactorSource
 
-    public init(kind: KillDecisionFactorKind, title: String, detail: String, weight: Double) {
+    public init(kind: KillDecisionFactorKind, title: String, detail: String, weight: Double, source: KillFactorSource = .tree) {
         self.kind = kind
         self.title = title
         self.detail = detail
         self.weight = weight
+        self.source = source
     }
 }
 
@@ -87,6 +98,21 @@ public struct KillDecisionScore: Codable, Equatable, Sendable {
 
     public var whyWait: [KillDecisionFactor] {
         factors.filter { $0.kind == .whyWait || $0.kind == .blocking }
+    }
+
+    /// The same score with more reasons, their weights applied.
+    func adding(_ extra: [KillDecisionFactor]) -> KillDecisionScore {
+        guard !extra.isEmpty else { return self }
+        return KillDecisionScore(value: value + extra.reduce(0) { $0 + $1.weight }, confidence: confidence, factors: factors + extra)
+    }
+
+    /// Locked only by a blocking reason or nothing to stop; a real reason to
+    /// wait asks for caution, a minor note does not.
+    public func readiness(hasTargets: Bool) -> KillReadiness {
+        if !hasTargets || factors.contains(where: { $0.kind == .blocking }) {
+            return .locked
+        }
+        return factors.contains(where: { $0.kind == .whyWait && $0.weight <= -6 }) ? .caution : .ready
     }
 }
 
@@ -243,131 +269,5 @@ public enum KillReadiness: String, Codable, Comparable, Sendable {
         case .caution: 1
         case .ready: 2
         }
-    }
-}
-
-public enum KillDecisionEvidenceKind: String, Codable, Sendable {
-    case positive
-    case caution
-    case blocking
-    case info
-}
-
-public struct KillDecisionEvidence: Identifiable, Codable, Equatable, Sendable {
-    public var id: String { "\(kind.rawValue)-\(title)-\(detail)" }
-
-    public let kind: KillDecisionEvidenceKind
-    public let title: String
-    public let detail: String
-
-    public init(kind: KillDecisionEvidenceKind, title: String, detail: String) {
-        self.kind = kind
-        self.title = title
-        self.detail = detail
-    }
-}
-
-public struct KillConfidenceModel: Sendable {
-    public init() {}
-
-    public func evidence(
-        plan: KillPlan,
-        targets: [KillTarget],
-        locked: [KillTarget],
-        stale: [KillTarget],
-        recycled: [KillTarget],
-        reclaim: KillReclaimEstimate
-    ) -> [KillDecisionEvidence] {
-        var output: [KillDecisionEvidence] = []
-        if targets.isEmpty {
-            output.append(
-                KillDecisionEvidence(
-                    kind: .blocking,
-                    title: "No owned live targets",
-                    detail: "The selected identity tree has no same-user process to signal."
-                )
-            )
-        } else {
-            output.append(
-                KillDecisionEvidence(
-                    kind: .positive,
-                    title: "Identity verified",
-                    detail: "\(targets.count) owned target\(targets.count == 1 ? "" : "s") matched by PID plus start time."
-                )
-            )
-            output.append(
-                KillDecisionEvidence(
-                    kind: .positive,
-                    title: "Estimated reclaim",
-                    detail: "\(RadarFormat.bytes(reclaim.memoryBytes)) and \(Int(reclaim.cpuPercent.rounded()))% CPU from \(reclaim.sourceText.lowercased())."
-                )
-            )
-        }
-
-        if !locked.isEmpty {
-            output.append(
-                KillDecisionEvidence(
-                    kind: .caution,
-                    title: "Locked descendants",
-                    detail: "\(locked.count) protected or foreign process\(locked.count == 1 ? "" : "es") will stay untouched."
-                )
-            )
-        }
-        if !stale.isEmpty || !recycled.isEmpty {
-            output.append(
-                KillDecisionEvidence(
-                    kind: .caution,
-                    title: "Tree changed",
-                    detail: "\(stale.count) stale and \(recycled.count) recycled PID\(stale.count + recycled.count == 1 ? "" : "s") were excluded."
-                )
-            )
-        }
-        if let metadata = plan.familyMetadata {
-            if metadata.scoreLevel >= .hot || metadata.forecastState >= .leaking {
-                output.append(
-                    KillDecisionEvidence(
-                        kind: .positive,
-                        title: "High-risk family",
-                        detail: "\(metadata.devKindLabel) is \(metadata.scoreLevel.label.lowercased()) with forecast \(metadata.forecastState.label.lowercased())."
-                    )
-                )
-            }
-            if metadata.isBackgroundOrOrphan {
-                output.append(
-                    KillDecisionEvidence(
-                        kind: .positive,
-                        title: "Background candidate",
-                        detail: "The root appears orphaned or backgrounded, which raises kill confidence."
-                    )
-                )
-            }
-            if metadata.devKindLabel.localizedCaseInsensitiveContains("build") && metadata.scoreLevel < .critical {
-                output.append(
-                    KillDecisionEvidence(
-                        kind: .caution,
-                        title: "Active build caution",
-                        detail: "This looks like a build tool; inspect before interrupting unless it is stale."
-                    )
-                )
-            }
-        }
-        return output
-    }
-}
-
-public struct KillSafetyGate: Sendable {
-    public init() {}
-
-    public func readiness(hasTargets: Bool, evidence: [KillDecisionEvidence]) -> KillReadiness {
-        guard hasTargets else {
-            return .locked
-        }
-        if evidence.contains(where: { $0.kind == .blocking }) {
-            return .locked
-        }
-        if evidence.contains(where: { $0.kind == .caution }) {
-            return .caution
-        }
-        return .ready
     }
 }

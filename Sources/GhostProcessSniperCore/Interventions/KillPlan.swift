@@ -25,8 +25,12 @@ public struct KillPlan: Equatable, Sendable {
     public let isForceFollowUp: Bool
     /// Names, paths, command lines, ports and supervisors, for risk-aware stops.
     public let workload: KillWorkloadProfile?
-    /// Local outcomes per strategy, so a strategy is only tuned by its own history.
-    public let strategyCalibrations: [KillStrategy: KillCalibrationSnapshot]
+    /// Outcome posteriors per strategy, for this family and its kind, so a
+    /// strategy is only tuned by its own history.
+    public let strategyCalibrations: KillOutcomeHistory
+    /// Whether confirming boots the root's launchd job out instead of
+    /// signalling a process launchd would restart.
+    public let launchdStop: KillLaunchdStop
 
     public init(
         rootIdentity: ProcessIdentity,
@@ -44,7 +48,8 @@ public struct KillPlan: Equatable, Sendable {
         approvedProfile: KillStrategyProfile? = nil,
         isForceFollowUp: Bool = false,
         workload: KillWorkloadProfile? = nil,
-        strategyCalibrations: [KillStrategy: KillCalibrationSnapshot] = [:]
+        strategyCalibrations: KillOutcomeHistory = .empty,
+        launchdStop: KillLaunchdStop = .none
     ) {
         self.rootIdentity = rootIdentity
         self.targetIdentities = targetIdentities
@@ -62,28 +67,37 @@ public struct KillPlan: Equatable, Sendable {
         self.isForceFollowUp = isForceFollowUp
         self.workload = workload
         self.strategyCalibrations = strategyCalibrations
-    }
-
-    /// History for the strategy about to run; never another strategy's.
-    public func calibration(for strategy: KillStrategy) -> KillCalibrationSnapshot {
-        strategyCalibrations[strategy] ?? .empty
+        self.launchdStop = launchdStop
     }
 
     public func binding(
         to identities: [ProcessIdentity],
         expiresAt: Date,
         profile: KillStrategyProfile? = nil,
-        approvedAt: Date = Date()
+        approvedAt: Date = Date(),
+        launchdStop: KillLaunchdStop = .none
     ) -> KillPlan {
         KillPlan(rootIdentity: rootIdentity, targetIdentities: targetIdentities, protectedPIDs: protectedPIDs,
                  displayName: displayName, gracefulSignal: gracefulSignal, scope: scope,
                  createdAt: createdAt, familyMetadata: familyMetadata, killHistory: killHistory,
                  approvedIdentities: Set(identities), approvalExpiresAt: expiresAt, approvedAt: approvedAt,
-                 approvedProfile: profile, workload: workload, strategyCalibrations: strategyCalibrations)
+                 approvedProfile: profile, workload: workload, strategyCalibrations: strategyCalibrations,
+                 launchdStop: launchdStop)
+    }
+
+    /// The same plan with the root's launchd job attached to its workload.
+    public func withLaunchdJob(_ job: LaunchdJob) -> KillPlan {
+        KillPlan(rootIdentity: rootIdentity, targetIdentities: targetIdentities, protectedPIDs: protectedPIDs,
+                 displayName: displayName, gracefulSignal: gracefulSignal, scope: scope,
+                 createdAt: createdAt, familyMetadata: familyMetadata, killHistory: killHistory,
+                 approvedIdentities: approvedIdentities, approvalExpiresAt: approvalExpiresAt, approvedAt: approvedAt,
+                 approvedProfile: approvedProfile, isForceFollowUp: isForceFollowUp, workload: workload?.withLaunchdJob(job),
+                 strategyCalibrations: strategyCalibrations, launchdStop: launchdStop)
     }
 
     /// A plan that sends SIGKILL now to what a held stop reported still
-    /// running, and to nothing else. Nil when nothing survived.
+    /// running, and to nothing else. Nil when nothing survived. The launchd
+    /// job, if any, was already booted out by the held stop.
     public func forcingSurvivors(of report: KillReport, now: Date = Date()) -> KillPlan? {
         let survivors = report.targetResults.filter { $0.state == .survived }.map(\.identity)
         guard !survivors.isEmpty else { return nil }
@@ -96,10 +110,14 @@ public struct KillPlan: Equatable, Sendable {
     }
 
     public func targetingOnly(_ process: ProcessMetrics) -> KillPlan {
-        KillPlan(rootIdentity: process.identity, targetIdentities: [process.identity], protectedPIDs: protectedPIDs,
-                 displayName: process.name, gracefulSignal: gracefulSignal, scope: .singleRoot,
+        targetingOnly(process.identity, name: process.name)
+    }
+
+    public func targetingOnly(_ identity: ProcessIdentity, name: String) -> KillPlan {
+        KillPlan(rootIdentity: identity, targetIdentities: [identity], protectedPIDs: protectedPIDs,
+                 displayName: name, gracefulSignal: gracefulSignal, scope: .singleRoot,
                  familyMetadata: familyMetadata, killHistory: killHistory,
-                 workload: workload?.restricted(to: process.pid), strategyCalibrations: strategyCalibrations)
+                 workload: workload?.restricted(to: identity.pid), strategyCalibrations: strategyCalibrations)
     }
 }
 
@@ -113,7 +131,8 @@ public struct KillFamilyMetadata: Equatable, Sendable {
     public let memoryBytes: UInt64
     public let cpuPercent: Double
     public let childCount: Int
-    public let isBackgroundOrOrphan: Bool
+    /// The forecast's own words for why the family matters now.
+    public let forecastReason: String
 
     public init(
         signatureID: String,
@@ -125,7 +144,7 @@ public struct KillFamilyMetadata: Equatable, Sendable {
         memoryBytes: UInt64,
         cpuPercent: Double,
         childCount: Int,
-        isBackgroundOrOrphan: Bool
+        forecastReason: String = ""
     ) {
         self.signatureID = signatureID
         self.displayName = displayName
@@ -136,7 +155,7 @@ public struct KillFamilyMetadata: Equatable, Sendable {
         self.memoryBytes = memoryBytes
         self.cpuPercent = cpuPercent
         self.childCount = childCount
-        self.isBackgroundOrOrphan = isBackgroundOrOrphan
+        self.forecastReason = forecastReason
     }
 
     public init(family: ProcessFamily) {
@@ -150,7 +169,7 @@ public struct KillFamilyMetadata: Equatable, Sendable {
             memoryBytes: family.totalPhysicalFootprintBytes,
             cpuPercent: family.totalCPUPercent,
             childCount: family.childCount,
-            isBackgroundOrOrphan: family.root.parentPID == 1
+            forecastReason: family.forecast.whyNow
         )
     }
 }

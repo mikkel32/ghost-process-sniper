@@ -14,7 +14,7 @@ final class KillStopSetTests: XCTestCase {
         // The radar gave postgres a family of its own.
         let family = Self.family(runner, members: [runner, web])
 
-        let workload = KillWorkloadProfile(root: runner, sampleIndex: Dictionary(grouping: sample, by: \.parentPID), family: family)
+        let workload = KillWorkloadProfile(root: runner, index: KillSampleIndex(sample), family: family)
         let table = FakeProcessTable()
         sample.forEach { table.add(KillProcessLite(process: $0, status: 2, processGroupID: $0.pid)) }
         let preview = await table.killer().preview(plan: family.killPlan(workload: workload), forceKillDelay: 2)
@@ -29,7 +29,7 @@ final class KillStopSetTests: XCTestCase {
 
     func testStopSetWorkloadCarriesIdentityAndRadarNumbers() {
         let root = Self.metrics(1510, "node", command: "node server.js", cpu: 250)
-        let workload = KillWorkloadProfile(root: root, sampleIndex: [:], family: Self.family(root, members: [root]))
+        let workload = KillWorkloadProfile(root: root, index: KillSampleIndex([]), family: Self.family(root, members: [root]))
 
         XCTAssertEqual(workload.root?.identity, root.identity)
         XCTAssertEqual(workload.root?.cpuPercent, 250)

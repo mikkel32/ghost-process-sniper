@@ -20,6 +20,9 @@ struct KillPhaseContext: Sendable {
     /// False for a single-process stop or a quitting app: what they start
     /// is only reported.
     let adoptsLateMembers: Bool
+    /// The root whose launchd job was booted out: launchd already asked it
+    /// to stop, so the first phase leaves it alone.
+    let launchdStoppedPID: Int32?
 }
 
 struct KillPhaseWalk {
@@ -69,7 +72,12 @@ extension ProcessKiller {
             if phase.reach == .rootOnly, !phase.isForce {
                 recipients = Self.rootAndOutsiders(of: recipients, tree: targets)
             }
-            guard !recipients.isEmpty else { continue }
+            let launchdStopped = index == 0 && !phase.isForce && live.contains { $0.pid == context.launchdStoppedPID }
+            if launchdStopped {
+                recipients.removeAll { $0.pid == context.launchdStoppedPID }
+            }
+            // The root launchd is stopping still gets its full wait.
+            guard !recipients.isEmpty || launchdStopped else { continue }
             let stage = phase.isForce ? "forced" : index == 0 ? "graceful" : "secondary"
             let dropped: Set<ProcessIdentity>
             if phase.isForce {
@@ -87,6 +95,8 @@ extension ProcessKiller {
                 remaining += force.newborn
                 live += force.newborn
                 dropped = force.dropped
+            } else if recipients.isEmpty {
+                dropped = []
             } else {
                 dropped = await deliver(phase, to: recipients, stage: stage, context: context,
                                         report: &report, quitAccepted: &quitAccepted)
@@ -234,6 +244,11 @@ extension ProcessKiller {
         }
         if result.endedEarly, !result.stoppedByUser, !phase.isForce {
             await context.reactor.recordEarlyExitSavings(max(0, phase.waitAfterSeconds - result.waitedSeconds))
+        }
+        if isGraceful, !phase.isForce {
+            // The family's measured exit time, for the outcome model.
+            report.graceWaitedSeconds = result.waitedSeconds
+            report.graceEndedEarly = result.endedEarly && !result.stoppedByUser
         }
     }
 }

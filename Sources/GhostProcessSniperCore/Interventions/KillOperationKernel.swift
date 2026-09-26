@@ -306,9 +306,6 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
     public let earlyExitSavingsSeconds: TimeInterval
     public let verificationModeCounts: [String: Int]
     public let arenaReuseCount: Int
-    public let calibratedGracefulOdds: Double
-    public let calibratedForceOdds: Double
-    public let calibratedSurvivorOdds: Double
 
     public static let empty = KillReactorReport(
         phaseTimingsMilliseconds: [:],
@@ -316,10 +313,7 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
         signalWaves: [],
         earlyExitSavingsSeconds: 0,
         verificationModeCounts: [:],
-        arenaReuseCount: 0,
-        calibratedGracefulOdds: 0,
-        calibratedForceOdds: 0,
-        calibratedSurvivorOdds: 0
+        arenaReuseCount: 0
     )
 
     public init(
@@ -328,10 +322,7 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
         signalWaves: [KillSignalWave],
         earlyExitSavingsSeconds: TimeInterval,
         verificationModeCounts: [String: Int],
-        arenaReuseCount: Int,
-        calibratedGracefulOdds: Double,
-        calibratedForceOdds: Double,
-        calibratedSurvivorOdds: Double
+        arenaReuseCount: Int
     ) {
         self.phaseTimingsMilliseconds = phaseTimingsMilliseconds
         self.watcherHints = watcherHints
@@ -339,9 +330,6 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
         self.earlyExitSavingsSeconds = max(0, earlyExitSavingsSeconds)
         self.verificationModeCounts = verificationModeCounts
         self.arenaReuseCount = max(0, arenaReuseCount)
-        self.calibratedGracefulOdds = min(1, max(0, calibratedGracefulOdds))
-        self.calibratedForceOdds = min(1, max(0, calibratedForceOdds))
-        self.calibratedSurvivorOdds = min(1, max(0, calibratedSurvivorOdds))
     }
 }
 
@@ -354,9 +342,6 @@ public actor KillInterventionReactor {
     private var verificationModeCounts: [String: Int] = [:]
     private var earlyExitSavingsSeconds: TimeInterval = 0
     private var arenaReuseCount = 0
-    private var calibratedGracefulOdds = 0.0
-    private var calibratedForceOdds = 0.0
-    private var calibratedSurvivorOdds = 0.0
 
     public init(operationID: KillOperationID) {
         self.operationID = operationID
@@ -396,12 +381,6 @@ public actor KillInterventionReactor {
         arenaReuseCount += stats.arenaReuseCount
     }
 
-    public func recordCalibration(_ simulation: KillStrategySimulation) {
-        calibratedGracefulOdds = simulation.expectedGracefulSuccess
-        calibratedForceOdds = simulation.forceProbability
-        calibratedSurvivorOdds = simulation.survivorRisk
-    }
-
     public func hintSnapshot() -> [KillWatcherHint] {
         hints
     }
@@ -413,10 +392,7 @@ public actor KillInterventionReactor {
             signalWaves: waves,
             earlyExitSavingsSeconds: earlyExitSavingsSeconds,
             verificationModeCounts: verificationModeCounts,
-            arenaReuseCount: arenaReuseCount,
-            calibratedGracefulOdds: calibratedGracefulOdds,
-            calibratedForceOdds: calibratedForceOdds,
-            calibratedSurvivorOdds: calibratedSurvivorOdds
+            arenaReuseCount: arenaReuseCount
         )
     }
 }

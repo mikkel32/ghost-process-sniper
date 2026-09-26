@@ -18,11 +18,10 @@ struct KillPreflightBuilder: Sendable {
     let currentUserID: UInt32
     let usesDarwinProcessNamespace: Bool
     let protection: KillProtectionPolicy
-    private let confidenceModel = KillConfidenceModel()
-    private let safetyGate = KillSafetyGate()
     private let reclaimEstimator = KillReclaimEstimator()
     private let policyEngine = InterventionPolicyEngine()
     private let deltaEngine = KillGraphDeltaEngine()
+    private let advisor = KillTargetAdvisor()
 
     func build(
         plan: KillPlan,
@@ -126,33 +125,25 @@ struct KillPreflightBuilder: Sendable {
             recycled: recycled,
             reclaim: reclaim,
             diff: diff,
-            nearbyCount: nearby.count,
             forceKillDelay: profile.forceKillDelay
         )
-        let decisionScore = policy.decisionScore
         var strategy = policy.recommendation
         var strategyProfile = policy.profile
-        var evidence = decisionScore.factors.map(Self.evidence(from:)) + confidenceModel.evidence(
-            plan: plan,
-            targets: targets,
-            locked: locked,
-            stale: stale,
-            recycled: recycled,
-            reclaim: reclaim
-        )
-        evidence += protectionFloor.cautions.map { KillDecisionEvidence(kind: $0.severity == .info ? .info : .caution, title: $0.title, detail: $0.detail) }
-        evidence += zombies.exited.map { KillDecisionEvidence(kind: .info, title: "Already exited", detail: $0.reason) }
-        if targets.contains(where: { $0.condition == .suspended }) {
-            evidence.append(KillDecisionEvidence(kind: .info, title: "Paused job (Ctrl-Z)", detail: "Ghost resumes it so it can exit cleanly."))
-        }
+        var forecast = policy.forecast
+        // The floor's warnings are risk cards too; as factors they weigh on
+        // readiness like the assessor's own.
+        var decisionScore = policy.decisionScore.adding(protectionFloor.cautions.map {
+            KillDecisionFactor(kind: .whyWait, title: $0.title, detail: $0.detail, weight: $0.severity == .info ? -1 : -6, source: .risk)
+        })
         if let reason = protectionFloor.rootReason {
             // Stopping the rest of the tree without its root is not what
             // anyone asked for, so the whole plan becomes inspect-only.
             strategy = KillStrategyRecommendation(strategy: .inspectOnly, confidence: 1, reasons: [reason], previewText: reason)
             strategyProfile = KillStrategyProfile(strategy: .inspectOnly, confidence: 1, phases: [], summary: reason)
-            evidence.append(KillDecisionEvidence(kind: .blocking, title: "Protected", detail: reason))
+            forecast = .none
+            decisionScore = decisionScore.adding([KillDecisionFactor(kind: .blocking, title: "Protected", detail: reason, weight: -35)])
         }
-        let readiness = safetyGate.readiness(hasTargets: !targets.isEmpty, evidence: evidence)
+        let readiness = decisionScore.readiness(hasTargets: !targets.isEmpty)
         let performanceReport = KillPerformanceReport(snapshot: snapshot)
 
         let preview = KillPreview(
@@ -168,17 +159,18 @@ struct KillPreflightBuilder: Sendable {
             readiness: readiness,
             usedCheapSnapshot: snapshot.usedCheapPath,
             reclaimEstimate: reclaim,
-            decisionEvidence: evidence,
             scopePreview: scopePreview,
             strategyRecommendation: strategy,
             targetDiff: diff,
             decisionScore: decisionScore,
             strategyProfile: strategyProfile,
             performanceReport: performanceReport,
-            strategySimulation: policy.simulation,
+            strategyForecast: forecast,
             watcherAvailable: !targets.isEmpty && usesDarwinProcessNamespace,
             arenaStats: arena.stats,
-            riskAssessment: policy.risk.merging(protectionFloor.cautions, headline: protectionFloor.rootReason)
+            riskAssessment: policy.risk.merging(protectionFloor.cautions, headline: protectionFloor.rootReason),
+            alternatives: advisor.alternatives(plan: plan, arena: arena, targets: targets, risk: policy.risk, currentUserID: currentUserID),
+            launchdJob: plan.workload?.launchdJob
         )
         return KillPreflight(preview: preview, targets: targets, locked: locked, stale: stale, recycled: recycled,
                              exited: zombies.exited, zombieParentName: zombies.parentName)
@@ -302,14 +294,5 @@ struct KillPreflightBuilder: Sendable {
                 locked.append(KillTarget(process: process, depth: 0, state: .locked, reason: "Owned by \(process.ownerName)", rootIdentity: plan.rootIdentity))
             }
         }
-    }
-
-    private static func evidence(from factor: KillDecisionFactor) -> KillDecisionEvidence {
-        let kind: KillDecisionEvidenceKind = switch factor.kind {
-        case .whyKill: .positive
-        case .whyWait: .caution
-        case .blocking: .blocking
-        }
-        return KillDecisionEvidence(kind: kind, title: factor.title, detail: factor.detail)
     }
 }

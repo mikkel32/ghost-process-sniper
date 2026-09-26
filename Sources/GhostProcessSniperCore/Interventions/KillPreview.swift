@@ -17,18 +17,23 @@ public struct KillPreview: Equatable, Sendable {
     public let readiness: KillReadiness
     public let usedCheapSnapshot: Bool
     public let reclaimEstimate: KillReclaimEstimate
-    public let decisionEvidence: [KillDecisionEvidence]
     public let scopePreview: KillScopePreview
     public let strategyRecommendation: KillStrategyRecommendation
     public let targetDiff: KillTargetDiff
     public let decisionScore: KillDecisionScore
     public let strategyProfile: KillStrategyProfile
     public let performanceReport: KillPerformanceReport
-    public let strategySimulation: KillStrategySimulation
+    /// What this family's past stops predict for the recommended strategy.
+    public let strategyForecast: KillStrategyForecast
     public let watcherAvailable: Bool
     public let arenaStats: KillGraphArenaStats
     /// What the stop interrupts and what could go wrong.
     public let riskAssessment: KillRiskAssessment
+    /// Better stops than this one: the supervisor that restarts it, or only
+    /// the helper that holds most of it.
+    public let alternatives: [KillAlternative]
+    /// The launchd job that runs the root, when launchd started it.
+    public let launchdJob: LaunchdJob?
 
     public var targetIdentities: [ProcessIdentity] { targets.map(\.identity) }
     public var targetPIDs: [Int32] { targets.map(\.pid) }
@@ -43,10 +48,14 @@ public struct KillPreview: Equatable, Sendable {
     public var whyKillEvidence: [KillDecisionFactor] { decisionScore.whyKill }
     public var whyWaitEvidence: [KillDecisionFactor] { decisionScore.whyWait }
     public var recommendedGraceSeconds: TimeInterval { strategyProfile.graceSeconds }
-    public var expectedGracefulSuccess: Double { strategySimulation.expectedGracefulSuccess }
-    public var forceProbability: Double { strategySimulation.forceProbability }
-    public var survivorRisk: Double { strategySimulation.survivorRisk }
     public var verificationPlanText: String { Self.verificationPlanText }
+    public var recommendedAlternative: KillAlternative? { alternatives.first(where: \.isRecommended) }
+    /// launchd restarts the root, and the job is known by its live PID, so
+    /// stopping the job itself is the stop that lasts.
+    public var offersLaunchdStop: Bool {
+        guard let launchdJob, launchdJob.keepAlive, launchdJob.pid == rootPID else { return false }
+        return canKill
+    }
 
     public var canKill: Bool {
         !targets.isEmpty && readiness != .locked
@@ -76,17 +85,18 @@ public struct KillPreview: Equatable, Sendable {
         readiness: KillReadiness = .ready,
         usedCheapSnapshot: Bool = false,
         reclaimEstimate: KillReclaimEstimate = .empty,
-        decisionEvidence: [KillDecisionEvidence] = [],
         scopePreview: KillScopePreview = .empty,
         strategyRecommendation: KillStrategyRecommendation = .standard,
         targetDiff: KillTargetDiff = .empty,
         decisionScore: KillDecisionScore = .empty,
         strategyProfile: KillStrategyProfile = .standard,
         performanceReport: KillPerformanceReport = .empty,
-        strategySimulation: KillStrategySimulation = .standard,
+        strategyForecast: KillStrategyForecast = .none,
         watcherAvailable: Bool = false,
         arenaStats: KillGraphArenaStats = .empty,
-        riskAssessment: KillRiskAssessment = .none
+        riskAssessment: KillRiskAssessment = .none,
+        alternatives: [KillAlternative] = [],
+        launchdJob: LaunchdJob? = nil
     ) {
         self.displayName = displayName
         self.rootPID = rootPID
@@ -100,16 +110,17 @@ public struct KillPreview: Equatable, Sendable {
         self.readiness = readiness
         self.usedCheapSnapshot = usedCheapSnapshot
         self.reclaimEstimate = reclaimEstimate
-        self.decisionEvidence = decisionEvidence
         self.scopePreview = scopePreview
         self.strategyRecommendation = strategyRecommendation
         self.targetDiff = targetDiff
         self.decisionScore = decisionScore
         self.strategyProfile = strategyProfile
         self.performanceReport = performanceReport
-        self.strategySimulation = strategySimulation
+        self.strategyForecast = strategyForecast
         self.watcherAvailable = watcherAvailable
         self.arenaStats = arenaStats
         self.riskAssessment = riskAssessment
+        self.alternatives = alternatives
+        self.launchdJob = launchdJob
     }
 }

@@ -2748,7 +2748,7 @@ private func processKillerReportsReclaimEstimate() async throws {
     )
 
     try check(preview.reclaimEstimate.memoryBytes == 256 * 1_048_576, "preview should estimate memory reclaim from cheap target metrics")
-    try check(!preview.decisionEvidence.isEmpty, "preview should include decision evidence")
+    try check(!preview.decisionScore.factors.isEmpty, "preview should include decision factors")
     try check(report.realizedMemoryReclaimBytes == 256 * 1_048_576, "report should carry realized reclaim estimate for terminated targets")
 }
 
@@ -2928,10 +2928,9 @@ private func interventionPolicyEngineSimulatesStrategies() throws {
         devKindLabel: "Node server",
         memoryBytes: 512 * 1_048_576,
         cpuPercent: 35,
-        childCount: 0,
-        isBackgroundOrOrphan: false
+        childCount: 0
     )
-    let plan = KillPlan(rootIdentity: target.identity, targetIdentities: [target.identity], protectedPIDs: [], displayName: "vite", familyMetadata: metadata)
+    let plan = KillPlan(rootIdentity: target.identity, targetIdentities: [target.identity], protectedPIDs: [], displayName: "vite", familyMetadata: metadata, workload: viteWorkload(pid: 174))
     let evaluation = engine.evaluate(
         plan: plan,
         targets: [target],
@@ -2940,12 +2939,12 @@ private func interventionPolicyEngineSimulatesStrategies() throws {
         recycled: [],
         reclaim: KillReclaimEstimate(memoryBytes: 512 * 1_048_576, cpuPercent: 35, confidence: 0.8, sourceText: "test"),
         diff: .empty,
-        nearbyCount: 0,
         forceKillDelay: 2
     )
 
     try check(evaluation.recommendation.strategy == .gentleDevServer, "policy engine should recommend gentle dev-server strategy for Node/Vite")
-    try check(evaluation.simulation.expectedGracefulSuccess > evaluation.simulation.survivorRisk, "strategy simulation should estimate higher graceful success than survivor risk")
+    try check(evaluation.forecast.strategy == .gentleDevServer && evaluation.forecast.pClean > 0.5, "the outcome forecast should cover the recommended strategy")
+    try check(evaluation.forecast.evidenceText.hasPrefix("No history yet"), "a forecast without history should say so")
     try check(evaluation.profile.phases.map(\.signalName).prefix(2) == ["SIGINT", "SIGTERM"], "policy profile should model SIGINT then SIGTERM")
 }
 
@@ -2958,19 +2957,13 @@ private func interventionPolicyEngineAppliesCalibration() throws {
         reason: "owned",
         rootIdentity: ProcessIdentity(pid: 179, startTimeSeconds: 1, startTimeMicroseconds: 0)
     )
-    let calibration = KillCalibrationSnapshot(
-        signatureID: "node|api",
-        devKind: "nodeServer",
-        strategy: .gentleDevServer,
-        operationCount: 6,
-        gracefulSuccessRate: 0.92,
-        forceRate: 0.03,
-        survivorRate: 0.01,
-        averageGraceSeconds: 0.72,
-        reclaimAccuracy: 0.9,
-        denialPenalty: 0,
-        updatedAt: Date(timeIntervalSince1970: 25)
-    )
+    var learned = KillOutcomePosterior.empty
+    for index in 0..<6 {
+        learned = learned.updating(
+            with: KillOutcomeObservation(strategy: .gentleDevServer, outcome: .clean, latencySeconds: 0.3, censored: false),
+            at: Date(timeIntervalSince1970: Double(index))
+        )
+    }
     let metadata = KillFamilyMetadata(
         signatureID: "node|api",
         displayName: "Node API",
@@ -2980,8 +2973,7 @@ private func interventionPolicyEngineAppliesCalibration() throws {
         devKindLabel: "Node server",
         memoryBytes: 300_000_000,
         cpuPercent: 20,
-        childCount: 0,
-        isBackgroundOrOrphan: false
+        childCount: 0
     )
     let plan = KillPlan(
         rootIdentity: target.identity,
@@ -2989,7 +2981,8 @@ private func interventionPolicyEngineAppliesCalibration() throws {
         protectedPIDs: [],
         displayName: "node",
         familyMetadata: metadata,
-        strategyCalibrations: [.gentleDevServer: calibration]
+        workload: viteWorkload(pid: 179),
+        strategyCalibrations: KillOutcomeHistory(signature: [.gentleDevServer: learned])
     )
 
     let evaluation = engine.evaluate(
@@ -3000,14 +2993,13 @@ private func interventionPolicyEngineAppliesCalibration() throws {
         recycled: [],
         reclaim: KillReclaimEstimate(memoryBytes: 300_000_000, cpuPercent: 20, confidence: 0.8, sourceText: "test"),
         diff: .empty,
-        nearbyCount: 0,
         forceKillDelay: 2
     )
 
-    try check(evaluation.calibration.operationCount == 6, "policy evaluation should carry calibration input")
-    try check(evaluation.simulation.expectedGracefulSuccess > 0.76, "local graceful history should raise calibrated graceful odds")
-    try check(evaluation.profile.graceSeconds < 2, "calibrated grace should tune below the generic force delay")
-    try check(evaluation.profile.summary.contains("calibrated"), "strategy profile should explain local grace calibration")
+    try check(evaluation.forecast.observationCount == 6, "policy evaluation should carry the family's outcomes")
+    try check(evaluation.forecast.pClean > 0.76, "local clean exits should raise the clean-exit odds above the prior")
+    try check(evaluation.profile.graceSeconds >= 1.2, "learning never shortens grace below the strategy default")
+    try check(evaluation.forecast.evidenceText.hasPrefix("Stopped cleanly 6 of 6 times"), "the forecast should state its evidence")
 }
 
 private func processKillerRecommendsGentleDevServerStrategy() async throws {
@@ -3021,8 +3013,7 @@ private func processKillerRecommendsGentleDevServerStrategy() async throws {
         devKindLabel: "Node server",
         memoryBytes: 512 * 1_048_576,
         cpuPercent: 35,
-        childCount: 0,
-        isBackgroundOrOrphan: false
+        childCount: 0
     )
     let provider = ScriptedKillSnapshotProvider(snapshots: [
         KillProcessSnapshot(processes: [target], policy: .preflight, usedCheapPath: true)
@@ -3035,7 +3026,8 @@ private func processKillerRecommendsGentleDevServerStrategy() async throws {
             targetIdentities: [target.identity],
             protectedPIDs: [],
             displayName: "vite",
-            familyMetadata: metadata
+            familyMetadata: metadata,
+            workload: viteWorkload(pid: 184)
         ),
         forceKillDelay: 0
     )
@@ -3057,6 +3049,13 @@ private func killHistoryChangesStrategyRecommendation() async throws {
         averageReclaimBytes: 400_000_000,
         commonDenialCount: 0
     )
+    var ignoredSigterm = KillOutcomePosterior.empty
+    for index in 0..<4 {
+        ignoredSigterm = ignoredSigterm.updating(
+            with: KillOutcomeObservation(strategy: .standard, outcome: .dirty, latencySeconds: 2, censored: true),
+            at: Date(timeIntervalSince1970: Double(index))
+        )
+    }
     let provider = ScriptedKillSnapshotProvider(snapshots: [
         KillProcessSnapshot(processes: [target], policy: .preflight, usedCheapPath: true)
     ])
@@ -3068,12 +3067,15 @@ private func killHistoryChangesStrategyRecommendation() async throws {
             targetIdentities: [target.identity],
             protectedPIDs: [],
             displayName: "generic",
-            killHistory: history
+            killHistory: history,
+            strategyCalibrations: KillOutcomeHistory(signature: [.standard: ignoredSigterm], kind: [.standard: ignoredSigterm])
         ),
-        forceKillDelay: 0
+        forceKillDelay: 2
     )
 
-    try check(preview.strategyRecommendation.strategy == .stubbornRunaway, "force-heavy kill history should recommend stubborn runaway strategy")
+    try check(preview.strategyRecommendation.strategy == .stubbornRunaway, "stops that never exited on SIGTERM should recommend stubborn runaway strategy")
+    try check(preview.recommendedGraceSeconds == 0.5, "a proven stubborn family gets a short wait before force")
+    try check(preview.canKill, "history should inform a stop, never lock it")
     try check(preview.whyWaitEvidence.contains { $0.title == "Force history" }, "preview should explain history-driven caution")
 }
 
@@ -3156,16 +3158,6 @@ private func killInterventionReactorRecordsHintsWavesAndModes() async throws {
             presortedNeighborBucketCount: 1
         )
     )
-    await reactor.recordCalibration(
-        KillStrategySimulation(
-            strategy: .standard,
-            expectedGracefulSuccess: 0.7,
-            forceProbability: 0.2,
-            survivorRisk: 0.04,
-            expectedDurationSeconds: 1,
-            summary: "test"
-        )
-    )
     await reactor.endPhase("signal")
     let report = await reactor.report()
 
@@ -3174,7 +3166,6 @@ private func killInterventionReactorRecordsHintsWavesAndModes() async throws {
     try check(report.verificationModeCounts[KillVerificationMode.eventTriggeredComplete.rawValue] == 1, "reactor should count event-triggered verification")
     try check(report.earlyExitSavingsSeconds == 0.4, "reactor should accumulate early grace savings")
     try check(report.arenaReuseCount == 1, "reactor should aggregate arena reuse stats")
-    try check(report.calibratedGracefulOdds == 0.7, "reactor should retain calibrated odds for diagnostics")
 }
 
 private func processKillerStreamsOperationEventsInOrder() async throws {
@@ -3337,8 +3328,12 @@ private func radarStoreRecordsKillEventsAndLearning() async throws {
         rootPID: 98,
         gracefulPIDs: [98],
         forcedPIDs: [98],
-        deniedPIDs: [199],
+        deniedPIDs: [199, 197],
         survivorPIDs: [198],
+        attempts: [
+            KillAttempt(pid: 98, signal: SIGTERM, stage: "graceful", succeeded: true),
+            KillAttempt(pid: 199, signal: SIGTERM, stage: "graceful", succeeded: false, message: "Operation not permitted")
+        ],
         timeline: KillExecutionTimeline(preflightMilliseconds: 1, signalMilliseconds: 2, verificationMilliseconds: 3, totalMilliseconds: 6),
         realizedMemoryReclaimBytes: 900_000_000,
         eventHistory: [
@@ -3350,13 +3345,14 @@ private func radarStoreRecordsKillEventsAndLearning() async throws {
         scopeUsed: .ownedFamily
     )
 
-    try await store.recordKillOperation(report: report, family: family, at: Date(timeIntervalSince1970: 22))
+    var refused = report
+    refused.signalDeniedPIDs = [199]
+    try await store.recordKillOperation(report: refused, family: family, at: Date(timeIntervalSince1970: 22))
     let events = try await store.recentKillEvents(operationID: operationID)
-    let history = try await store.killHistorySummary(signatureID: family.signature.id)
-    let strategyHistory = try await store.killStrategyHistory(
-        signatureID: family.signature.id,
-        devKind: family.classification?.kind.rawValue
-    )
+    let history = try await store.killHistorySummary(signatureID: family.signature.id, now: Date(timeIntervalSince1970: 30))
+    let strategyHistory = try await store.killStrategyHistory(signatureID: family.signature.id, now: Date(timeIntervalSince1970: 30))
+    let unrelated = try await store.killStrategyHistory(signatureID: "other-family-of-the-same-kind", now: Date(timeIntervalSince1970: 30))
+    let expired = try await store.killStrategyHistory(signatureID: family.signature.id, now: Date(timeIntervalSince1970: 22 + 31 * 24 * 60 * 60))
     let diagnostics = try await store.exportKillDiagnostics()
 
     try check(events.map(\.kind) == [.queued, .signaled, .completed], "store should persist kill operation event history")
@@ -3364,8 +3360,10 @@ private func radarStoreRecordsKillEventsAndLearning() async throws {
     try check(history.operationCount == 1, "store should persist kill outcome learning rows")
     try check(history.forceRate == 1, "kill history should learn force rate")
     try check(history.survivorRate == 1, "kill history should learn survivor rate")
-    try check(history.commonDenialCount == 1, "kill history should learn denial counts")
-    try check(strategyHistory.operationCount == 1 && strategyHistory.forceRate == 1, "strategy history should query by signature/dev kind")
+    try check(history.commonDenialCount == 1, "kill history should count only signals the kernel refused, not preflight locks")
+    try check(strategyHistory.operationCount == 1 && strategyHistory.forceRate == 1, "strategy history should query by signature")
+    try check(unrelated.operationCount == 0, "strategy history should not pool other families of the same kind")
+    try check(expired.operationCount == 0, "strategy history should only use the last 30 days")
     try check(diagnostics.contains("Ghost Process Sniper Kill Diagnostics"), "store should export compact kill diagnostics")
 }
 
@@ -3421,6 +3419,7 @@ private func radarStoreRecordsKillCalibrationAggregates() async throws {
         displayName: "node",
         rootPID: 100,
         gracefulPIDs: [100],
+        attempts: [KillAttempt(pid: 100, signal: SIGINT, stage: "graceful", succeeded: true)],
         timeline: KillExecutionTimeline(preflightMilliseconds: 1, signalMilliseconds: 400, verificationMilliseconds: 2, totalMilliseconds: 403),
         estimatedMemoryReclaimBytes: 500_000_000,
         realizedMemoryReclaimBytes: 450_000_000,
@@ -3433,24 +3432,31 @@ private func radarStoreRecordsKillCalibrationAggregates() async throws {
         gracefulPIDs: [100],
         forcedPIDs: [100],
         survivorPIDs: [100],
+        attempts: [KillAttempt(pid: 100, signal: SIGKILL, stage: "forced", succeeded: true)],
         timeline: KillExecutionTimeline(preflightMilliseconds: 1, signalMilliseconds: 800, verificationMilliseconds: 2, totalMilliseconds: 803),
         estimatedMemoryReclaimBytes: 500_000_000,
         realizedMemoryReclaimBytes: 100_000_000,
         strategyUsed: .gentleDevServer
     )
 
-    try await store.recordKillOperation(report: first, family: family, at: Date(timeIntervalSince1970: 24))
-    try await store.recordKillOperation(report: second, family: family, at: Date(timeIntervalSince1970: 25))
-    let calibration = try await store.killCalibrationSnapshot(
+    var cleanFirst = first
+    cleanFirst.graceEndedEarly = true
+    cleanFirst.graceWaitedSeconds = 0.4
+    var forcedSecond = second
+    forcedSecond.graceWaitedSeconds = 1.2
+    try await store.recordKillOperation(report: cleanFirst, family: family, at: Date(timeIntervalSince1970: 24))
+    try await store.recordKillOperation(report: forcedSecond, family: family, at: Date(timeIntervalSince1970: 25))
+    let outcomes = try await store.killOutcomeHistory(
         signatureID: family.signature.id,
-        devKind: family.classification?.kind.rawValue,
-        strategy: .gentleDevServer
+        devKind: family.classification?.kind.rawValue
     )
+    let posterior = outcomes.signature[.gentleDevServer] ?? .empty
 
-    try check(calibration.operationCount == 2, "store should update compact calibration aggregates additively")
-    try check(calibration.forceRate > 0 && calibration.survivorRate > 0, "calibration aggregate should learn force and survivor rates")
-    try check(calibration.averageGraceSeconds > 0, "calibration aggregate should learn observed grace timing")
-    try check(calibration.reclaimAccuracy < 1, "calibration aggregate should track reclaim accuracy")
+    try check(posterior.observationCount == 2, "store should update outcome posteriors additively")
+    try check(abs(posterior.cleanWeight - 0.9) < 1e-9 && abs(posterior.totalWeight - 1.9) < 1e-9, "outcome posteriors should decay older stops")
+    try check(posterior.censoredRun == 1, "a forced stop should be recorded as a wait that ran out")
+    try check((posterior.latencyQuantile(0.5) ?? 0) > 0, "outcome posteriors should learn exit times")
+    try check(family.classification == nil || outcomes.kind[.gentleDevServer]?.observationCount == 2, "the family's kind should learn the same stops")
 }
 
 private struct CheckFailure: Error, CustomStringConvertible {
@@ -3705,6 +3711,16 @@ private func process(pid: Int32, parentPID: Int32, userID: UInt32, start: UInt64
         commandLine: "node server.js",
         memory: 128,
         cpu: 0
+    )
+}
+
+/// What the risk assessor needs to recognize a dev server: its real argv.
+private func viteWorkload(pid: Int32) -> KillWorkloadProfile {
+    KillWorkloadProfile(
+        processes: [KillWorkloadProcess(pid: pid, parentPID: 1, name: "node", executablePath: "/usr/local/bin/node",
+                                        commandLine: "node /app/node_modules/.bin/vite --port 5173", isRoot: true)],
+        ancestors: [],
+        parentIsLaunchd: true
     )
 }
 

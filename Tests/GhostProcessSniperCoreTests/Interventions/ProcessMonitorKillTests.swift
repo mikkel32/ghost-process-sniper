@@ -29,13 +29,15 @@ final class ProcessMonitorKillTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         let store = try RadarStore(url: url)
         let family = Self.family(KillProcessLite.fake(pid: 810, name: "cruncher").asProcessMetrics())
-        var report = KillReport(displayName: "cruncher", rootPID: 810, forcedPIDs: [810])
+        // A real SIGKILL went out, so only the follow-up flag keeps it from being learned.
+        var report = KillReport(displayName: "cruncher", rootPID: 810, forcedPIDs: [810],
+                                attempts: [KillAttempt(pid: 810, signal: SIGKILL, stage: "forced", succeeded: true)])
         report.isForceFollowUp = true
 
         try await store.recordKillOperation(report: report, family: family)
 
         let recorded = try await store.recentKillOperations()
-        let history = try await store.killStrategyHistory(signatureID: family.signature.id, devKind: nil)
+        let history = try await store.killStrategyHistory(signatureID: family.signature.id)
         XCTAssertEqual(recorded.count, 1, "the stop stays in the audit trail")
         XCTAssertEqual(history.operationCount, 0, "forcing a held stop's survivors teaches nothing about the strategy")
     }

@@ -39,230 +39,182 @@ public struct KillHistorySummary: Codable, Equatable, Sendable {
     }
 }
 
-public struct KillCalibrationSnapshot: Codable, Equatable, Sendable {
-    public let signatureID: String?
-    public let devKind: String?
-    public let strategy: KillStrategy?
-    public let operationCount: Int
-    public let gracefulSuccessRate: Double
-    public let forceRate: Double
-    public let survivorRate: Double
-    public let averageGraceSeconds: TimeInterval
-    public let reclaimAccuracy: Double
-    public let denialPenalty: Double
-    public let updatedAt: Date?
+/// What one stop says about how the family stops. Only stops that signalled
+/// and ran their course count: a held force, a refused signal or a
+/// supervisor restarting the process says nothing about SIGTERM.
+public struct KillOutcomeObservation: Equatable, Sendable {
+    public enum Outcome: Equatable, Sendable {
+        /// Every target exited within the grace, without force.
+        case clean
+        /// Something needed force, survived or failed.
+        case dirty
+        /// A supervisor started it again; counted apart.
+        case respawned
+        /// Nothing to learn from.
+        case excluded
+    }
 
-    public static let empty = KillCalibrationSnapshot(
-        signatureID: nil,
-        devKind: nil,
-        strategy: nil,
-        operationCount: 0,
-        gracefulSuccessRate: 0,
-        forceRate: 0,
-        survivorRate: 0,
-        averageGraceSeconds: 0,
-        reclaimAccuracy: 1,
-        denialPenalty: 0,
-        updatedAt: nil
+    public let strategy: KillStrategy
+    public let outcome: Outcome
+    /// How long the graceful wait lasted.
+    public let latencySeconds: TimeInterval
+    /// The wait ran out: the true exit time is longer than the latency.
+    public let censored: Bool
+
+    public init(strategy: KillStrategy, outcome: Outcome, latencySeconds: TimeInterval, censored: Bool) {
+        self.strategy = strategy
+        self.outcome = outcome
+        self.latencySeconds = max(0, latencySeconds)
+        self.censored = censored
+    }
+
+    public init(report: KillReport) {
+        let outcome: Outcome
+        if report.attempts.isEmpty || report.strategyUsed == .inspectOnly || report.skipForceRequested || !report.signalDeniedPIDs.isEmpty {
+            outcome = .excluded
+        } else if !report.respawnedPIDs.isEmpty {
+            outcome = .respawned
+        } else if report.forcedPIDs.isEmpty, report.survivorPIDs.isEmpty, report.failures.isEmpty, report.graceEndedEarly {
+            outcome = .clean
+        } else {
+            outcome = .dirty
+        }
+        self.init(strategy: report.strategyUsed, outcome: outcome, latencySeconds: report.graceWaitedSeconds,
+                  censored: !report.graceEndedEarly)
+    }
+}
+
+/// A Beta posterior over "stops cleanly" plus a histogram of exit times,
+/// both decayed so recent stops weigh more than old ones.
+public struct KillOutcomePosterior: Codable, Equatable, Sendable {
+    public static let decay = 0.9
+    /// Upper edges of the exit-time buckets; the last bucket is open.
+    public static let latencyEdges: [TimeInterval] = [0.25, 0.5, 1, 2, 4, 8, 16]
+    static let openBucketCeiling: TimeInterval = 32
+
+    public private(set) var observationCount: Int
+    /// Clean stops, undecayed, so the evidence can state a true count.
+    public private(set) var cleanCount: Int
+    public private(set) var cleanWeight: Double
+    public private(set) var totalWeight: Double
+    public private(set) var latencyBuckets: [Double]
+    /// Stops in a row that a supervisor undid.
+    public private(set) var respawnRun: Int
+    /// Stops in a row whose wait ran out.
+    public private(set) var censoredRun: Int
+    public private(set) var updatedAt: Date?
+
+    public static let empty = KillOutcomePosterior(
+        observationCount: 0, cleanCount: 0, cleanWeight: 0, totalWeight: 0, latencyBuckets: [], respawnRun: 0, censoredRun: 0, updatedAt: nil
     )
 
     public init(
-        signatureID: String?,
-        devKind: String?,
-        strategy: KillStrategy?,
-        operationCount: Int,
-        gracefulSuccessRate: Double,
-        forceRate: Double,
-        survivorRate: Double,
-        averageGraceSeconds: TimeInterval,
-        reclaimAccuracy: Double,
-        denialPenalty: Double,
+        observationCount: Int,
+        cleanCount: Int,
+        cleanWeight: Double,
+        totalWeight: Double,
+        latencyBuckets: [Double],
+        respawnRun: Int,
+        censoredRun: Int,
         updatedAt: Date?
     ) {
-        self.signatureID = signatureID
-        self.devKind = devKind
-        self.strategy = strategy
-        self.operationCount = max(0, operationCount)
-        self.gracefulSuccessRate = min(1, max(0, gracefulSuccessRate))
-        self.forceRate = min(1, max(0, forceRate))
-        self.survivorRate = min(1, max(0, survivorRate))
-        self.averageGraceSeconds = max(0, averageGraceSeconds)
-        self.reclaimAccuracy = min(1.5, max(0, reclaimAccuracy))
-        self.denialPenalty = min(1, max(0, denialPenalty))
+        self.observationCount = max(0, observationCount)
+        self.cleanCount = min(self.observationCount, max(0, cleanCount))
+        self.totalWeight = max(0, totalWeight)
+        self.cleanWeight = min(self.totalWeight, max(0, cleanWeight))
+        let count = Self.latencyEdges.count + 1
+        self.latencyBuckets = latencyBuckets.count == count ? latencyBuckets.map { max(0, $0) } : Array(repeating: 0, count: count)
+        self.respawnRun = max(0, respawnRun)
+        self.censoredRun = max(0, censoredRun)
         self.updatedAt = updatedAt
     }
-}
 
-public struct KillStrategySimulation: Codable, Equatable, Sendable {
-    public let strategy: KillStrategy
-    public let expectedGracefulSuccess: Double
-    public let forceProbability: Double
-    public let survivorRisk: Double
-    public let expectedDurationSeconds: TimeInterval
-    public let summary: String
+    public var hasEvidence: Bool { totalWeight > 0 }
 
-    public static let standard = KillStrategySimulation(
-        strategy: .standard,
-        expectedGracefulSuccess: 0.62,
-        forceProbability: 0.28,
-        survivorRisk: 0.06,
-        expectedDurationSeconds: 2.35,
-        summary: "Balanced SIGTERM-first intervention."
-    )
-
-    public init(
-        strategy: KillStrategy,
-        expectedGracefulSuccess: Double,
-        forceProbability: Double,
-        survivorRisk: Double,
-        expectedDurationSeconds: TimeInterval,
-        summary: String
-    ) {
-        self.strategy = strategy
-        self.expectedGracefulSuccess = min(1, max(0, expectedGracefulSuccess))
-        self.forceProbability = min(1, max(0, forceProbability))
-        self.survivorRisk = min(1, max(0, survivorRisk))
-        self.expectedDurationSeconds = max(0, expectedDurationSeconds)
-        self.summary = summary
-    }
-}
-
-public struct KillStrategySimulator: Sendable {
-    public init() {}
-
-    public func simulate(
-        recommendation: KillStrategyRecommendation,
-        profile: KillStrategyProfile,
-        plan: KillPlan,
-        targets: [KillTarget],
-        locked: [KillTarget],
-        decisionScore: KillDecisionScore
-    ) -> KillStrategySimulation {
-        let history = plan.killHistory ?? .empty
-        let baseGrace: Double
-        let baseForce: Double
-        let baseSurvivor: Double
-        let baseDuration: TimeInterval
-
-        switch recommendation.strategy {
-        case .gentleDevServer:
-            baseGrace = 0.76
-            baseForce = 0.18
-            baseSurvivor = 0.05
-            baseDuration = profile.graceSeconds + profile.secondaryGraceSeconds + 0.2
-        case .stubbornRunaway:
-            baseGrace = 0.42
-            baseForce = 0.54
-            baseSurvivor = 0.08
-            baseDuration = profile.graceSeconds + profile.settleSeconds
-        case .quitApp:
-            // Apps answer a quit request well, but may pause on a save prompt.
-            baseGrace = 0.84
-            baseForce = 0.08
-            baseSurvivor = 0.1
-            baseDuration = profile.graceSeconds * 0.4 + profile.secondaryGraceSeconds
-        case .carefulShutdown:
-            baseGrace = 0.8
-            baseForce = 0.12
-            baseSurvivor = 0.08
-            baseDuration = profile.graceSeconds * 0.5 + profile.settleSeconds
-        case .inspectOnly:
-            return KillStrategySimulation(
-                strategy: .inspectOnly,
-                expectedGracefulSuccess: 0,
-                forceProbability: 0,
-                survivorRisk: 0,
-                expectedDurationSeconds: 0,
-                summary: "No signal recommended; inspect the family before intervening."
-            )
-        case .standard:
-            baseGrace = 0.62
-            baseForce = 0.28
-            baseSurvivor = 0.06
-            baseDuration = profile.graceSeconds + profile.settleSeconds
+    public func updating(with observation: KillOutcomeObservation, at date: Date) -> KillOutcomePosterior {
+        var next = self
+        switch observation.outcome {
+        case .excluded:
+            return self
+        case .respawned:
+            next.respawnRun += 1
+        case .clean, .dirty:
+            let clean = observation.outcome == .clean
+            next.observationCount += 1
+            next.cleanCount += clean ? 1 : 0
+            next.cleanWeight = cleanWeight * Self.decay + (clean ? 1 : 0)
+            next.totalWeight = totalWeight * Self.decay + 1
+            next.latencyBuckets = latencyBuckets.map { $0 * Self.decay }
+            next.latencyBuckets[Self.bucket(for: observation)] += 1
+            next.censoredRun = observation.censored ? censoredRun + 1 : 0
+            next.respawnRun = 0
         }
-
-        let targetPenalty = min(0.18, Double(max(0, targets.count - 1)) * 0.025)
-        let lockedPenalty = min(0.22, Double(locked.count) * 0.055)
-        let scoreBoost = min(0.12, max(0, decisionScore.value - 55) / 400)
-        let historyGrace = history.operationCount > 0 ? history.gracefulSuccessRate : baseGrace
-        let historyForce = history.operationCount > 0 ? history.forceRate : baseForce
-        let historySurvivor = history.operationCount > 0 ? history.survivorRate : baseSurvivor
-
-        let graceful = (baseGrace * 0.68) + (historyGrace * 0.24) + scoreBoost - targetPenalty - lockedPenalty
-        let force = (baseForce * 0.7) + (historyForce * 0.25) + targetPenalty + lockedPenalty
-        let survivor = (baseSurvivor * 0.72) + (historySurvivor * 0.22) + lockedPenalty * 0.5
-
-        return KillStrategySimulation(
-            strategy: recommendation.strategy,
-            expectedGracefulSuccess: graceful,
-            forceProbability: force,
-            survivorRisk: survivor,
-            expectedDurationSeconds: baseDuration,
-            summary: "Expected graceful \(Int((min(1, max(0, graceful)) * 100).rounded()))%, force \(Int((min(1, max(0, force)) * 100).rounded()))%, survivor \(Int((min(1, max(0, survivor)) * 100).rounded()))%."
-        )
-    }
-}
-
-public struct KillStrategyCalibrator: Sendable {
-    public init() {}
-
-    public func calibratedSimulation(
-        base: KillStrategySimulation,
-        calibration: KillCalibrationSnapshot
-    ) -> KillStrategySimulation {
-        guard calibration.operationCount > 0 else {
-            return base
-        }
-        let weight = min(0.42, Double(calibration.operationCount) / 10 * 0.42)
-        let graceful = base.expectedGracefulSuccess * (1 - weight) + calibration.gracefulSuccessRate * weight - calibration.denialPenalty * 0.08
-        let force = base.forceProbability * (1 - weight) + calibration.forceRate * weight + calibration.denialPenalty * 0.04
-        let survivor = base.survivorRisk * (1 - weight) + calibration.survivorRate * weight + calibration.denialPenalty * 0.08
-        let duration = calibration.averageGraceSeconds > 0
-            ? base.expectedDurationSeconds * 0.72 + calibration.averageGraceSeconds * 0.28
-            : base.expectedDurationSeconds
-        return KillStrategySimulation(
-            strategy: base.strategy,
-            expectedGracefulSuccess: graceful,
-            forceProbability: force,
-            survivorRisk: survivor,
-            expectedDurationSeconds: duration,
-            summary: "Calibrated graceful \(Int((min(1, max(0, graceful)) * 100).rounded()))%, force \(Int((min(1, max(0, force)) * 100).rounded()))%, survivor \(Int((min(1, max(0, survivor)) * 100).rounded()))% from \(calibration.operationCount) local outcome\(calibration.operationCount == 1 ? "" : "s")."
-        )
+        next.updatedAt = date
+        return next
     }
 
-    public func tunedProfile(
-        base: KillStrategyProfile,
-        calibration: KillCalibrationSnapshot,
-        forceKillDelay: TimeInterval
-    ) -> KillStrategyProfile {
-        guard calibration.operationCount > 0, base.strategy != .inspectOnly else {
-            return base
-        }
-        let learnedGrace = calibration.averageGraceSeconds > 0 ? calibration.averageGraceSeconds : base.graceSeconds
-        let forceBias = calibration.forceRate >= 0.45 || calibration.survivorRate >= 0.25
-        let reclaimBias = calibration.reclaimAccuracy < 0.45
-        // Apps and databases get their clean-shutdown time as a floor: the
-        // wait ends as soon as they exit, so a long ceiling costs nothing when
-        // history says they are quick, and learning never cuts it short.
-        let lowerBound: Double = switch base.strategy {
-        case .quitApp, .carefulShutdown: base.graceSeconds
-        case .gentleDevServer: 0.45
-        default: 0.25
-        }
-        let upperBound = max(lowerBound, forceKillDelay)
-        let tunedGrace = min(upperBound, max(lowerBound, forceBias || reclaimBias ? learnedGrace * 0.8 : learnedGrace * 1.08))
-        let phases = base.phases.map { phase in
-            guard phase.order == 0, !phase.isForce else {
-                return phase
+    /// Clean exits at the observed time; a wait that ran out in the first
+    /// bucket above its grace, since the exit would have come later.
+    static func bucket(for observation: KillOutcomeObservation) -> Int {
+        let latency = observation.latencySeconds
+        let index = observation.censored
+            ? latencyEdges.firstIndex { $0 > latency }
+            : latencyEdges.firstIndex { latency <= $0 }
+        return index ?? latencyEdges.count
+    }
+
+    /// Exit time below which `fraction` of the stops fall, interpolated
+    /// within its bucket. Nil without evidence.
+    public func latencyQuantile(_ fraction: Double) -> TimeInterval? {
+        let total = latencyBuckets.reduce(0, +)
+        guard total > 0 else { return nil }
+        let target = min(1, max(0, fraction)) * total
+        var below = 0.0
+        for (index, weight) in latencyBuckets.enumerated() where weight > 0 {
+            if below + weight >= target {
+                let lower = index == 0 ? 0 : Self.latencyEdges[index - 1]
+                let upper = index < Self.latencyEdges.count ? Self.latencyEdges[index] : Self.openBucketCeiling
+                return lower + (target - below) / weight * (upper - lower)
             }
-            return phase.waiting(tunedGrace)
+            below += weight
         }
-        return KillStrategyProfile(
-            strategy: base.strategy,
-            confidence: min(1, base.confidence + min(0.08, Double(calibration.operationCount) * 0.01)),
-            phases: phases,
-            summary: "\(base.summary) Grace calibrated to \(String(format: "%.2f", tunedGrace))s from local outcomes."
+        return Self.openBucketCeiling
+    }
+
+    /// Stubborn stops count toward SIGTERM's record: their clean exits do,
+    /// their quick SIGKILLs do not, so a family can earn its way back to a
+    /// normal grace.
+    func addingCleanExits(of stubborn: KillOutcomePosterior) -> KillOutcomePosterior {
+        guard stubborn.observationCount > 0 else { return self }
+        let allCensored = stubborn.censoredRun == stubborn.observationCount
+        return KillOutcomePosterior(
+            observationCount: observationCount + stubborn.cleanCount,
+            cleanCount: cleanCount + stubborn.cleanCount,
+            cleanWeight: cleanWeight + stubborn.cleanWeight,
+            totalWeight: totalWeight + stubborn.cleanWeight,
+            latencyBuckets: latencyBuckets,
+            respawnRun: respawnRun,
+            censoredRun: allCensored ? censoredRun + stubborn.censoredRun : stubborn.censoredRun,
+            updatedAt: [updatedAt, stubborn.updatedAt].compactMap { $0 }.max()
         )
+    }
+}
+
+/// Outcome posteriors for one family, per strategy, and for its kind of
+/// family, which serves as the prior while the family itself is new.
+public struct KillOutcomeHistory: Equatable, Sendable {
+    public var signature: [KillStrategy: KillOutcomePosterior]
+    public var kind: [KillStrategy: KillOutcomePosterior]
+
+    public static let empty = KillOutcomeHistory(signature: [:], kind: [:])
+
+    public init(signature: [KillStrategy: KillOutcomePosterior] = [:], kind: [KillStrategy: KillOutcomePosterior] = [:]) {
+        self.signature = signature
+        self.kind = kind
+    }
+
+    /// The family's most recent stop was undone by a supervisor.
+    public var lastStopRespawned: Bool {
+        signature.values.max { ($0.updatedAt ?? .distantPast) < ($1.updatedAt ?? .distantPast) }.map { $0.respawnRun > 0 } ?? false
     }
 }

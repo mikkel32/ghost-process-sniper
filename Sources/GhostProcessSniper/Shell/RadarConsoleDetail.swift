@@ -23,9 +23,7 @@ struct RadarConsoleDetail: View {
                         onKill: { session.prepareKill(family) },
                         thermals: session.monitor.thermals,
                         onPreviewProcess: { session.prepareKill(family, member: $0) },
-                        stopRisk: KillRiskAssessor().assess(
-                            KillWorkloadProfile(family: family, sample: session.monitor.sampledProcesses)
-                        )
+                        stopRisk: session.monitor.stopRisk(for: family)
                     )
                 } else {
                     ContentUnavailableView {

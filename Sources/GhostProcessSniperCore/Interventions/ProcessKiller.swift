@@ -10,6 +10,8 @@ public final class ProcessKiller: Sendable {
     let clock: @Sendable () -> Date
     let outcomeClassifier = KillOutcomeClassifier()
     let protection: KillProtectionPolicy
+    let launchdResolver: LaunchdJobResolver?
+    let portProbe: ListeningPortProbing?
     private let reclaimEstimator = KillReclaimEstimator()
     private let preflightBuilder: KillPreflightBuilder
 
@@ -22,7 +24,9 @@ public final class ProcessKiller: Sendable {
             try? await Task.sleep(nanoseconds: nanoseconds)
         },
         clock: @escaping @Sendable () -> Date = { Date() },
-        protection: KillProtectionPolicy = KillProtectionPolicy()
+        protection: KillProtectionPolicy = KillProtectionPolicy(),
+        launchdResolver: LaunchdJobResolver? = nil,
+        portProbe: ListeningPortProbing? = nil
     ) {
         if let snapshotProvider {
             self.snapshotProvider = snapshotProvider
@@ -41,6 +45,10 @@ public final class ProcessKiller: Sendable {
         )
         self.sleeper = sleeper
         self.clock = clock
+        // Fakes run no launchctl unless tests pass their own.
+        let native = signaler.usesDarwinProcessNamespace
+        self.launchdResolver = launchdResolver ?? (native ? LaunchdJobResolver(userID: currentUserID) : nil)
+        self.portProbe = portProbe ?? (native ? DarwinListeningPortProbe() : nil)
     }
 
     public func preview(plan: KillPlan, forceKillDelay: TimeInterval = 2) async -> KillPreview {
@@ -56,6 +64,7 @@ public final class ProcessKiller: Sendable {
         snapshotPolicy: KillSnapshotPolicy,
         profile: KillEscalationProfile
     ) async -> KillPreview {
+        let plan = await withLaunchdJob(plan)
         do {
             let snapshot = try await snapshotProvider.snapshot(
                 request: KillSnapshotRequest(plan: plan, policy: snapshotPolicy)
@@ -73,13 +82,9 @@ public final class ProcessKiller: Sendable {
                     KillTarget(unresolved: $0, state: .stale, reason: "Preflight failed")
                 },
                 readiness: .locked,
-                decisionEvidence: [
-                    KillDecisionEvidence(
-                        kind: .blocking,
-                        title: "Preflight failed",
-                        detail: error.localizedDescription
-                    )
-                ]
+                decisionScore: KillDecisionScore(value: 0, confidence: 0, factors: [
+                    KillDecisionFactor(kind: .blocking, title: "Preflight failed", detail: error.localizedDescription, weight: -100)
+                ])
             )
         }
     }
@@ -117,6 +122,7 @@ public final class ProcessKiller: Sendable {
         let operationState = KillOperationStateMachine(operationID: operationID)
         let reactor = KillInterventionReactor(operationID: operationID)
         var watcherTask: Task<Void, Never>?
+        let plan = await withLaunchdJob(plan)
         do {
             await reactor.beginPhase("confirm-preflight")
             let preflightSnapshot = try await snapshotProvider.snapshot(
@@ -125,7 +131,6 @@ public final class ProcessKiller: Sendable {
             await reactor.endPhase("confirm-preflight")
             let preflight = preflightBuilder.build(plan: plan, snapshot: preflightSnapshot, profile: profile)
             await reactor.recordArenaStats(preflight.preview.arenaStats)
-            await reactor.recordCalibration(preflight.preview.strategySimulation)
             let fresh = preflight.preview.strategyProfile
             // The approved phases are the contract; a fresh look may only
             // make the first wait longer.
@@ -186,6 +191,8 @@ public final class ProcessKiller: Sendable {
                     }
                 }
             }
+            let launchdStoppedPID = await bootOutLaunchdJob(plan: plan, targets: targets, operationID: operationID,
+                                                            report: &report, eventSink: eventSink)
             let context = KillPhaseContext(
                 plan: plan,
                 strategy: runProfile.strategy,
@@ -204,7 +211,8 @@ public final class ProcessKiller: Sendable {
                 bornAfter: plan.approvedAt ?? preflightSnapshot.sampledAt,
                 // A quitting app may start an updater or crash reporter on
                 // purpose; what it starts is reported, never stopped.
-                adoptsLateMembers: plan.scope != .singleRoot && runProfile.strategy != .quitApp
+                adoptsLateMembers: plan.scope != .singleRoot && runProfile.strategy != .quitApp,
+                launchdStoppedPID: launchdStoppedPID
             )
             let walk = try await walk(runProfile.phases, targets: targets, context: context, report: &report)
 
@@ -279,9 +287,10 @@ public final class ProcessKiller: Sendable {
                 targets: report.targetResults,
                 respawnedNames: respawned.map(\.name)
             )
-            report.calibratedReclaimBytes = report.realizedMemoryReclaimBytes > 0 ?
-                report.realizedMemoryReclaimBytes :
-                UInt64(Double(report.estimatedMemoryReclaimBytes) * (1 - preflight.preview.survivorRisk))
+            report.calibratedReclaimBytes = report.realizedMemoryReclaimBytes
+            await verifyFreedPorts(preflight.preview.riskAssessment.freedPorts, targets: targets + walk.adopted,
+                                   groupsFrom: preflightSnapshot.arena, since: totalStart, operationID: operationID,
+                                   report: &report, eventSink: eventSink)
             appendEvent(.completed, operationID: operationID, message: report.summary, report: &report, eventSink: eventSink)
             RadarLogger.kill.info("Kill operation \(operationID.rawValue, privacy: .public) \(plan.displayName, privacy: .public) finished in \(report.timeline.totalMilliseconds, privacy: .public)ms, forced \(report.forcedPIDs.count, privacy: .public), survivors \(report.survivorPIDs.count, privacy: .public)")
             return report

@@ -72,15 +72,11 @@ final class KillOutcomeTests: XCTestCase {
     func testChangedProcessNeedsAFreshPreview() async {
         let table = FakeProcessTable()
         let worker = KillProcessLite.fake(pid: 650, name: "cruncher")
-        table.add(worker)
-        let rough = KillHistorySummary(signatureID: "cruncher", operationCount: 4, gracefulSuccessRate: 0.2, forceRate: 0.2,
-                                       survivorRate: 0.6, averageReclaimBytes: 0, commonDenialCount: 0)
+        // Since the preview it switched to another user, so its root is locked.
+        table.add(KillProcessLite.fake(pid: 650, name: "cruncher", userID: 0))
         let approved = KillPlan.fixture(worker).binding(to: [worker.identity], expiresAt: Date().addingTimeInterval(60), profile: .standard)
-        let changed = KillPlan(rootIdentity: worker.identity, targetIdentities: [worker.identity], protectedPIDs: [],
-                               displayName: "cruncher", killHistory: rough, approvedIdentities: approved.approvedIdentities,
-                               approvalExpiresAt: approved.approvalExpiresAt, approvedProfile: approved.approvedProfile)
 
-        let report = await table.killer().kill(plan: changed, forceKillDelay: 1)
+        let report = await table.killer().kill(plan: approved, forceKillDelay: 1)
 
         XCTAssertTrue(table.log.isEmpty)
         XCTAssertTrue(report.failures.first?.hasPrefix("This process changed since the preview (") == true, report.summary)
