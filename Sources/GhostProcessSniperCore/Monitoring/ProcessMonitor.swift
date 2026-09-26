@@ -42,6 +42,7 @@ public final class ProcessMonitor {
     @ObservationIgnored private var scheduler = RadarScheduler()
     @ObservationIgnored private var injectedThermalHistory = ThermalActivityHistory()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var postKillTask: Task<Void, Never>?
     @ObservationIgnored private var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
     @ObservationIgnored private var popoverVisible = false
@@ -357,6 +358,8 @@ public final class ProcessMonitor {
         }
     }
 
+    /// Returns as soon as the processes are handled. Recording and the
+    /// radar refresh follow in order, and the next plan waits for them.
     public func confirmKill(
         family: ProcessFamily,
         killer: ProcessKiller,
@@ -366,27 +369,21 @@ public final class ProcessMonitor {
         control: KillOperationControl? = nil,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
     ) async -> KillReport {
-        let plan: KillPlan
-        if let approvedPlan { plan = approvedPlan }
-        else { plan = await killPlan(for: family) }
+        await postKillTask?.value
+        let plan = if let approvedPlan { approvedPlan } else { await killPlan(for: family) }
         let operationControl = control ?? KillOperationControl()
-        if skipForce {
-            await operationControl.requestSkipForce()
+        if skipForce { await operationControl.requestSkipForce() }
+        let report = await KillOperationRunner().runReport(plan: plan, killer: killer, forceKillDelay: forceKillDelay ?? settings.forceKillDelay,
+                                                           control: operationControl, eventSink: eventSink)
+        postKillTask = Task { @MainActor [weak self] in
+            await self?.recordKill(report: report, family: family)
+            await self?.refresh()
         }
-        let runner = KillOperationRunner()
-        let report = await runner.runReport(
-            plan: plan,
-            killer: killer,
-            forceKillDelay: forceKillDelay ?? settings.forceKillDelay,
-            control: operationControl,
-            eventSink: eventSink
-        )
-        await recordKill(report: report, family: family)
-        await refresh()
         return report
     }
 
     public func killPlan(for family: ProcessFamily) async -> KillPlan {
+        await postKillTask?.value
         let workload = KillWorkloadProfile(family: family, sample: sampledProcesses)
         guard let store else {
             return family.killPlan(workload: workload)
