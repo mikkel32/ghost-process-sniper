@@ -7,6 +7,7 @@ import Observation
 final class RadarConsoleSession {
     let monitor: ProcessMonitor
     let killer: ProcessKiller
+    let openSettings: () -> Void
     let queries = ConsoleQueryStore()
     private(set) var navigationSubtitle = "Monitoring"
 
@@ -29,9 +30,10 @@ final class RadarConsoleSession {
     @ObservationIgnored private var lastFocusedFamilySignatures: Set<String> = []
     @ObservationIgnored private var nextRefreshCostSequence: UInt64 = 0
 
-    init(monitor: ProcessMonitor, killer: ProcessKiller) {
+    init(monitor: ProcessMonitor, killer: ProcessKiller, openSettings: @escaping () -> Void = {}) {
         self.monitor = monitor
         self.killer = killer
+        self.openSettings = openSettings
     }
 
     var selectedFamily: ProcessFamily? {

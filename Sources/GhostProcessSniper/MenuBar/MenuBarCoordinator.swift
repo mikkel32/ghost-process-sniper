@@ -9,6 +9,7 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     private let killer: ProcessKiller
     private let notifier: UserNotificationRadarNotifier
     private let consoleController = RadarConsoleController()
+    private let settingsController = SettingsWindowController()
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var statusObserverID: UUID?
@@ -36,7 +37,14 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     }
 
     func openConsole() {
-        consoleController.show(monitor: monitor, killer: killer)
+        consoleController.show(monitor: monitor, killer: killer) { [weak self] in
+            self?.openSettings()
+        }
+    }
+
+    func openSettings() {
+        popover?.close()
+        settingsController.show(monitor: monitor)
     }
 
     func openSection(_ selection: RadarFocusedSelection) {
@@ -230,6 +238,10 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
                     self?.openConsole()
                     self?.consoleController.focusFamily(signatureID)
                 },
+                onOpenSettings: { [weak self] in
+                    self?.monitor.setPopoverVisible(false)
+                    self?.openSettings()
+                },
                 onQuit: { NSApp.terminate(nil) }
             )
         )
@@ -255,6 +267,7 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         addMenuItem("Refresh Radar", key: "r", modifiers: [.command], action: #selector(refreshCommand), to: menu)
         addMenuItem("Copy Diagnostics", key: "", modifiers: [], action: #selector(copyDiagnosticsQuietCommand), to: menu)
         menu.addItem(.separator())
+        addMenuItem("Settings…", key: ",", modifiers: [.command], action: #selector(openSettingsCommand), to: menu)
         let quitItem = NSMenuItem(title: "Quit Ghost Process Sniper", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quitItem)
 
@@ -312,8 +325,7 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     }
 
     @objc private func openSettingsCommand() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
     }
 
     @objc private func findCommand() {

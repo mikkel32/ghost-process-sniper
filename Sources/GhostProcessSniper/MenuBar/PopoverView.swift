@@ -8,6 +8,7 @@ struct PopoverView: View {
     let notifier: UserNotificationRadarNotifier
     let onOpenConsole: () -> Void
     let onOpenFamily: (String) -> Void
+    let onOpenSettings: () -> Void
     let onQuit: () -> Void
 
     @State private var isRefreshing = false
@@ -191,7 +192,7 @@ struct PopoverView: View {
             .buttonStyle(.borderless)
             .help("Allow notifications")
 
-            SettingsLink {
+            Button(action: onOpenSettings) {
                 Image(systemName: "slider.horizontal.3")
             }
             .buttonStyle(.borderless)

@@ -7,14 +7,14 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var session: RadarConsoleSession?
 
-    func show(monitor: ProcessMonitor, killer: ProcessKiller) {
+    func show(monitor: ProcessMonitor, killer: ProcessKiller, openSettings: @escaping () -> Void) {
         if let window {
             window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
             return
         }
 
-        let session = RadarConsoleSession(monitor: monitor, killer: killer)
+        let session = RadarConsoleSession(monitor: monitor, killer: killer, openSettings: openSettings)
         let rootView = RadarConsoleView(session: session)
         let hosting = NSHostingController(rootView: rootView)
         // The console owns its window dimensions. A lazy process list must not
@@ -47,7 +47,7 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         self.window = window
         self.session = session
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         RadarLogger.ui.info("Opened radar console")
     }
 
@@ -124,6 +124,6 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
 
     private func showIfNeeded() {
         window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 }

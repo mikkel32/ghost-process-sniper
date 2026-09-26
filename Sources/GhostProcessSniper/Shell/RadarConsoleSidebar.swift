@@ -93,7 +93,9 @@ struct RadarConsoleSidebar: View {
 
             sidebarTools
             HStack {
-                SettingsLink {
+                Button {
+                    session.openSettings()
+                } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
                 Spacer()

@@ -112,7 +112,9 @@ struct RadarConsoleToolbar: ToolbarContent {
                     Label("Quick Guide & Shortcuts", systemImage: "questionmark.circle")
                 }
 
-                SettingsLink {
+                Button {
+                    session.openSettings()
+                } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
             } label: {
