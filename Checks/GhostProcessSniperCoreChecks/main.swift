@@ -69,10 +69,10 @@ struct CoreChecks {
         await run("radarSchedulerFocusesSelectedFamilies") { try radarSchedulerFocusesSelectedFamilies() }
         await run("radarPipelineDiffsAndHoldsLevels") { try radarPipelineDiffsAndHoldsLevels() }
         await run("familyScoringCacheReusesUnchangedFamilies") { try familyScoringCacheReusesUnchangedFamilies() }
-        await run("monitorPublishesRadarSummary") { try monitorPublishesRadarSummary() }
-        await run("monitorPublishedStateObserversCanBeRemoved") { try monitorPublishedStateObserversCanBeRemoved() }
-        await run("monitorDiagnosticsOnlyPublishKeepsViewModelStable") { try monitorDiagnosticsOnlyPublishKeepsViewModelStable() }
-        await run("monitorPublishObserversCanMutateRegistrationDuringCallback") { try monitorPublishObserversCanMutateRegistrationDuringCallback() }
+        await run("monitorPublishesRadarSummary") { try await monitorPublishesRadarSummary() }
+        await run("monitorPublishedStateObserversCanBeRemoved") { try await monitorPublishedStateObserversCanBeRemoved() }
+        await run("monitorDiagnosticsOnlyPublishKeepsViewModelStable") { try await monitorDiagnosticsOnlyPublishKeepsViewModelStable() }
+        await run("monitorPublishObserversCanMutateRegistrationDuringCallback") { try await monitorPublishObserversCanMutateRegistrationDuringCallback() }
         await run("radarStorePersistsSettingsRulesAndIncidents") { try await radarStorePersistsSettingsRulesAndIncidents() }
         await run("radarStoreQueriesIncidentsAndTogglesRules") { try await radarStoreQueriesIncidentsAndTogglesRules() }
         await run("radarStorePersistsForecastSnapshots") { try await radarStorePersistsForecastSnapshots() }
@@ -1619,7 +1619,7 @@ private func familyScoringCacheReusesUnchangedFamilies() throws {
 }
 
 @MainActor
-private func monitorPublishesRadarSummary() throws {
+private func monitorPublishesRadarSummary() async throws {
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 100_000_000
     let monitor = ProcessMonitor(
@@ -1628,7 +1628,7 @@ private func monitorPublishesRadarSummary() throws {
         settings: settings,
         store: nil
     )
-    monitor.ingest(
+    await monitor.ingest(
         [
             sample(pid: 300, name: "node", commandLine: "node api.js", memory: 150_000_000, sampledAt: Date(timeIntervalSince1970: 3_000)),
             sample(pid: 301, name: "Safari", executablePath: "/Applications/Safari.app/Contents/MacOS/Safari", commandLine: "Safari", memory: 20_000_000, sampledAt: Date(timeIntervalSince1970: 3_000))
@@ -1644,7 +1644,7 @@ private func monitorPublishesRadarSummary() throws {
 }
 
 @MainActor
-private func monitorPublishedStateObserversCanBeRemoved() throws {
+private func monitorPublishedStateObserversCanBeRemoved() async throws {
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 100_000_000
     let monitor = ProcessMonitor(
@@ -1660,7 +1660,7 @@ private func monitorPublishedStateObserversCanBeRemoved() throws {
         lastSummary = state.summary
     }
 
-    monitor.ingest(
+    await monitor.ingest(
         [sample(pid: 306, name: "node", commandLine: "node observer.js", memory: 150_000_000)],
         now: Date(timeIntervalSince1970: 3_060)
     )
@@ -1668,7 +1668,7 @@ private func monitorPublishedStateObserversCanBeRemoved() throws {
     try check(lastSummary?.familyCount == 1, "published-state observer should receive the published state")
 
     monitor.removePublishedStateObserver(id)
-    monitor.ingest(
+    await monitor.ingest(
         [sample(pid: 307, name: "node", commandLine: "node observer-2.js", memory: 160_000_000)],
         now: Date(timeIntervalSince1970: 3_070)
     )
@@ -1676,7 +1676,7 @@ private func monitorPublishedStateObserversCanBeRemoved() throws {
 }
 
 @MainActor
-private func monitorDiagnosticsOnlyPublishKeepsViewModelStable() throws {
+private func monitorDiagnosticsOnlyPublishKeepsViewModelStable() async throws {
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 100_000_000
     let process = sample(pid: 308, name: "node", commandLine: "node stable.js", memory: 150_000_000)
@@ -1687,10 +1687,10 @@ private func monitorDiagnosticsOnlyPublishKeepsViewModelStable() throws {
         store: nil
     )
 
-    monitor.ingest([process], now: Date(timeIntervalSince1970: 3_080))
+    await monitor.ingest([process], now: Date(timeIntervalSince1970: 3_080))
     let firstViewModel = monitor.viewModel
     let firstPerformance = monitor.performanceMetrics
-    monitor.ingest([process], now: Date(timeIntervalSince1970: 3_081))
+    await monitor.ingest([process], now: Date(timeIntervalSince1970: 3_081))
 
     try check(monitor.consoleSnapshot.contentRevision == firstPerformance.contentRevision, "same content ingest should stay diagnostics-only")
     try check(monitor.performanceMetrics.diagnosticsOnlyPublishCount > firstPerformance.diagnosticsOnlyPublishCount, "same content ingest should count diagnostics-only publish")
@@ -1698,7 +1698,7 @@ private func monitorDiagnosticsOnlyPublishKeepsViewModelStable() throws {
 }
 
 @MainActor
-private func monitorPublishObserversCanMutateRegistrationDuringCallback() throws {
+private func monitorPublishObserversCanMutateRegistrationDuringCallback() async throws {
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 100_000_000
     let monitor = ProcessMonitor(
@@ -1720,14 +1720,14 @@ private func monitorPublishObserversCanMutateRegistrationDuringCallback() throws
         }
     }
 
-    monitor.ingest(
+    await monitor.ingest(
         [sample(pid: 309, name: "node", commandLine: "node mutable-observer.js", memory: 150_000_000)],
         now: Date(timeIntervalSince1970: 3_090)
     )
     try check(firstCount == 1, "observer should fire before removing itself")
     try check(secondCount == 0, "observer added during publish should not fire in the same notification pass")
 
-    monitor.ingest(
+    await monitor.ingest(
         [sample(pid: 309, name: "node", commandLine: "node mutable-observer.js", memory: 150_000_000)],
         now: Date(timeIntervalSince1970: 3_091)
     )

@@ -191,7 +191,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
     }
 
     @MainActor
-    func testIdenticalIngestKeepsContentRevisionStable() {
+    func testIdenticalIngestKeepsContentRevisionStable() async {
         var settings = ThresholdSettings.aggressive
         settings.memoryBytes = 100_000_000
         let sampledAt = Date(timeIntervalSince1970: 3_080)
@@ -207,10 +207,10 @@ final class AdaptiveIntelligenceTests: XCTestCase {
             store: nil
         )
 
-        monitor.ingest([process], now: sampledAt)
+        await monitor.ingest([process], now: sampledAt)
         let firstRevision = monitor.consoleSnapshot.contentRevision
         let firstHeat = monitor.families.first?.score.heat
-        monitor.ingest([process], now: sampledAt.addingTimeInterval(1))
+        await monitor.ingest([process], now: sampledAt.addingTimeInterval(1))
         let secondRevision = monitor.consoleSnapshot.contentRevision
         let secondHeat = monitor.families.first?.score.heat
 

@@ -45,13 +45,13 @@ final class PresentationPipelineTests: XCTestCase {
         XCTAssertEqual(result.state.consoleSnapshot.families.count, 200)
     }
 
-    func testUnchangedRenderingStillPublishesFreshRawMeasurements() {
+    func testUnchangedRenderingStillPublishesFreshRawMeasurements() async {
         let first = family(0)
         let monitor = ProcessMonitor(builder: ProcessFamilyBuilder(currentUserID: 501), store: nil)
-        monitor.ingest([first.root], now: first.root.sampledAt)
+        await monitor.ingest([first.root], now: first.root.sampledAt)
         let revision = monitor.consoleSnapshot.contentRevision
         let fresh = family(0, at: first.root.sampledAt.addingTimeInterval(1))
-        monitor.ingest([fresh.root], now: fresh.root.sampledAt)
+        await monitor.ingest([fresh.root], now: fresh.root.sampledAt)
         XCTAssertEqual(monitor.consoleSnapshot.contentRevision, revision)
         XCTAssertEqual(monitor.families.first?.root.sampledAt, fresh.root.sampledAt)
     }

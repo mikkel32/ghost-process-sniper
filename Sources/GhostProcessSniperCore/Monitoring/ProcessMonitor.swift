@@ -38,15 +38,11 @@ public final class ProcessMonitor {
     @ObservationIgnored private let store: RadarStore?
     @ObservationIgnored private let worker: RadarRefreshWorker
     @ObservationIgnored private let refreshGate = RefreshGate()
-    @ObservationIgnored private var pipeline: RadarPipeline
-    @ObservationIgnored private var scheduler = RadarScheduler()
-    @ObservationIgnored private var injectedThermalHistory = ThermalActivityHistory()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
     @ObservationIgnored private var popoverVisible = false
     @ObservationIgnored private var focusedSignatureIDs: Set<String> = []
-    @ObservationIgnored private var averageRefreshMilliseconds = 0.0
     @ObservationIgnored private var lastCompletedPublishMilliseconds = 0.0
     @ObservationIgnored private let hitchMonitor = MainActorHitchMonitor()
     @ObservationIgnored private var publishedStateObservers: [UUID: (ProcessMonitorPublishedState) -> Void] = [:]
@@ -76,7 +72,6 @@ public final class ProcessMonitor {
             builder: builder,
             intelligence: intelligence
         )
-        self.pipeline = RadarPipeline(builder: builder, intelligence: intelligence)
     }
 
     deinit {
@@ -132,23 +127,8 @@ public final class ProcessMonitor {
 
         do {
             thermals = await thermalSampler.sample(now: now)
-            let request = RefreshRequest(
-                settings: settings,
-                currentFamilies: families,
-                currentIncidents: incidents,
-                currentStoreHealth: storeHealth,
-                previousRefresh: performanceMetrics.lastRefresh,
-                previousConsoleSnapshot: consoleSnapshot,
-                popoverVisible: popoverVisible,
-                focusedSignatureIDs: focusedSignatureIDs,
-                now: now,
-                startedAt: refreshStart
-            )
-            let outcome = try await worker.refresh(request)
+            let outcome = try await worker.refresh(refreshRequest(now: now, startedAt: refreshStart))
             let coalesced = await refreshGate.finish()
-            if outcome.systemPressure != systemPressure {
-                systemPressure = outcome.systemPressure
-            }
             let usage = selfUsageMonitor.sample()
             if usage != selfUsage {
                 selfUsage = usage
@@ -156,9 +136,7 @@ public final class ProcessMonitor {
                     RadarLogger.sampler.info("Self-throttle active: radar averaging \(Int(usage.averageCPUPercent.rounded()), privacy: .public)% CPU")
                 }
             }
-            thermalActivity = outcome.thermalActivity
-            recordSample(outcome.processes)
-            publish(payload: outcome.payload, coalescedRefreshCount: coalesced)
+            apply(outcome, coalescedRefreshCount: coalesced)
             await notifier.process(model: model)
         } catch {
             let coalesced = await refreshGate.finish()
@@ -177,75 +155,36 @@ public final class ProcessMonitor {
         }
     }
 
-    public func ingest(_ processes: [ProcessMetrics], now: Date = Date()) {
-        let effectiveSettings = settings
-            .resolvedProfile(systemPressure: systemPressure)
-            .effectiveSettings
-        let build = pipeline.buildCandidates(
-            processes: processes,
-            settings: effectiveSettings,
-            now: now
-        )
-        let scored = pipeline.score(
-            families: build.families,
-            diff: build.diff,
-            context: RadarContext(
-                baselines: [:],
-                recentIncidentCounts: [:],
-                rules: RadarRule.builtIns(settings: effectiveSettings)
-            ),
-            settings: effectiveSettings,
-            now: now
-        )
-        let summary = pipeline.summary(for: scored.families)
-        let currentActivity = ThermalActivityAnalyzer.project(processes: processes, families: scored.families, now: now)
-        thermalActivity = injectedThermalHistory.record(currentActivity, at: now)
-        recordSample(processes)
-        let effectivePerformanceMode = effectiveSettings.resolvedPerformanceMode(
-            summaryLevel: summary.level,
+    /// Runs injected processes through the same worker pipeline as a live
+    /// refresh, without sampling or notifying. Used by tests and previews.
+    public func ingest(_ processes: [ProcessMetrics], now: Date = Date()) async {
+        let batch = ProcessSampleBatch(processes: processes, sampledAt: now, stats: .empty)
+        let outcome = await worker.ingest(batch: batch, request: refreshRequest(now: now, startedAt: now))
+        apply(outcome, coalescedRefreshCount: 0)
+    }
+
+    private func refreshRequest(now: Date, startedAt: Date) -> RefreshRequest {
+        RefreshRequest(
+            settings: settings,
+            currentFamilies: families,
+            currentIncidents: incidents,
+            currentStoreHealth: storeHealth,
+            previousRefresh: performanceMetrics.lastRefresh,
+            previousConsoleSnapshot: consoleSnapshot,
             popoverVisible: popoverVisible,
-            systemPressure: scheduler.currentPressure
+            focusedSignatureIDs: focusedSignatureIDs,
+            now: now,
+            startedAt: startedAt
         )
-        let stats = RefreshStats(
-            startedAt: now,
-            sampleMilliseconds: 0,
-            buildMilliseconds: build.buildMilliseconds,
-            scoreMilliseconds: scored.scoreMilliseconds,
-            storeMilliseconds: 0,
-            publishMilliseconds: 0,
-            totalMilliseconds: build.buildMilliseconds + scored.scoreMilliseconds,
-            processCount: processes.count,
-            familyCount: scored.families.count
-        )
-        publish(
-            families: scored.families,
-            duplicateClusters: build.duplicateClusters,
-            summary: summary,
-            rules: RadarRule.builtIns(settings: effectiveSettings),
-            incidents: incidents,
-            health: SamplerHealth(
-                engineName: "libproc",
-                lastSampleDate: now,
-                processCount: processes.count,
-                familyCount: scored.families.count,
-                errorMessage: nil
-            ),
-            generatedAt: now,
-            storeHealth: storeHealth,
-            performance: metrics(
-                performanceMode: effectivePerformanceMode,
-                stats: stats,
-                samplerStats: .empty,
-                storeHealth: storeHealth,
-                nextInterval: settings.refreshInterval,
-                scannerHealth: .starting,
-                duplicateClusterCount: build.duplicateClusters.filter { !$0.isInternalToSingleFamily }.count,
-                promotedDuplicateCandidateCount: build.promotedDuplicateCandidateCount,
-                duplicateDetectorMilliseconds: build.duplicateDetectorMilliseconds,
-                hardwareOffenderCount: build.hardwareOffenderCount,
-                hardwareDetectorMilliseconds: build.hardwareDetectorMilliseconds
-            )
-        )
+    }
+
+    private func apply(_ outcome: RefreshOutcome, coalescedRefreshCount: Int) {
+        if outcome.systemPressure != systemPressure {
+            systemPressure = outcome.systemPressure
+        }
+        thermalActivity = outcome.thermalActivity
+        recordSample(outcome.processes)
+        publish(payload: outcome.payload, coalescedRefreshCount: coalescedRefreshCount)
     }
 
     private func recordSample(_ processes: [ProcessMetrics]) {
@@ -606,75 +545,4 @@ public final class ProcessMonitor {
             observer(state)
         }
     }
-
-    private func publish(
-        families: [ProcessFamily],
-        duplicateClusters: [DuplicateProcessCluster] = [],
-        summary: RadarSummary,
-        rules: [RadarRule],
-        incidents: [RadarIncident],
-        health: SamplerHealth,
-        generatedAt: Date,
-        storeHealth: StoreHealth,
-        performance: RadarPerformanceMetrics
-    ) {
-        let payload = RadarPublishPayload.build(
-            families: families,
-            duplicateClusters: duplicateClusters,
-            summary: summary,
-            rules: rules,
-            incidents: incidents,
-            health: health,
-            storeHealth: storeHealth,
-            storeError: storeError,
-            performance: performance,
-            previous: consoleSnapshot,
-            generatedAt: generatedAt
-        )
-        publish(payload: payload, coalescedRefreshCount: performance.coalescedRefreshCount)
-    }
-
-    private func metrics(
-        performanceMode: RadarPerformanceMode,
-        stats: RefreshStats,
-        samplerStats: SamplerStats,
-        storeHealth: StoreHealth,
-        nextInterval: TimeInterval,
-        scannerHealth: ScannerHealthSnapshot,
-        duplicateClusterCount: Int = 0,
-        promotedDuplicateCandidateCount: Int = 0,
-        duplicateDetectorMilliseconds: Double = 0,
-        hardwareOffenderCount: Int = 0,
-        hardwareDetectorMilliseconds: Double = 0
-    ) -> RadarPerformanceMetrics {
-        let alpha = averageRefreshMilliseconds == 0 ? 1 : 0.18
-        averageRefreshMilliseconds = averageRefreshMilliseconds * (1 - alpha) + stats.totalMilliseconds * alpha
-        return RadarPerformanceMetrics(
-            mode: performanceMode,
-            pressureLevel: scheduler.currentPressure,
-            lastRefresh: stats,
-            averageRefreshMilliseconds: averageRefreshMilliseconds,
-            nextRefreshInterval: nextInterval,
-            forensicsDeferredCount: samplerStats.forensicsDeferredCount,
-            forensicsRefreshCount: samplerStats.forensicsRefreshCount,
-            commandCacheHitCount: samplerStats.commandCacheHitCount,
-            storeBacklogCount: storeHealth.backlogCount,
-            lastStoreFlushDate: storeHealth.lastFlushDate,
-            budget: RadarPerformanceBudget.budget(for: performanceMode),
-            scannerHealth: scannerHealth,
-            scannerWorkerCount: samplerStats.scannerWorkerCount,
-            skippedOptionalWorkCount: samplerStats.skippedOptionalWorkCount,
-            scannerTaskCount: samplerStats.scannerTaskCount,
-            tinyQueueSequentialCount: samplerStats.tinyQueueSequentialCount,
-            samplerAllocationReuseCount: samplerStats.scratchpadReuseCount,
-            taskInfoReadCount: samplerStats.taskInfoReadCount,
-            reusedProcessRecordCount: samplerStats.reusedRecordCount,
-            duplicateClusterCount: duplicateClusterCount,
-            promotedDuplicateCandidateCount: promotedDuplicateCandidateCount,
-            duplicateDetectorMilliseconds: duplicateDetectorMilliseconds,
-            hardwareOffenderCount: hardwareOffenderCount,
-            hardwareDetectorMilliseconds: hardwareDetectorMilliseconds
-        )
-    }
-
 }

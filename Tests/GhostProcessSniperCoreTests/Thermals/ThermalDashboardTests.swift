@@ -135,11 +135,11 @@ final class ThermalDashboardTests: XCTestCase {
         XCTAssertTrue(outcome.families.isEmpty, "The fixture must exercise a process omitted by the family filter")
     }
 
-    func testMonitorIngestPublishesActivityIndependentlyOfDisplayedFamilies() {
+    func testMonitorIngestPublishesActivityIndependentlyOfDisplayedFamilies() async {
         var settings = ThresholdSettings.smart
         settings.radarMode = .dev
         let monitor = ProcessMonitor(settings: settings, store: nil)
-        monitor.ingest([process(1, cpu: 18)], now: now)
+        await monitor.ingest([process(1, cpu: 18)], now: now)
         XCTAssertEqual(monitor.thermalActivity.coverage, .processInventory)
         XCTAssertEqual(monitor.thermalActivity.contributors.first?.displayName, "Example")
     }
