@@ -42,7 +42,7 @@ public final class ProcessMonitor {
     @ObservationIgnored private var scheduler = RadarScheduler()
     @ObservationIgnored private var injectedThermalHistory = ThermalActivityHistory()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
-    @ObservationIgnored private var postKillTask: Task<Void, Never>?
+    @ObservationIgnored var postKillTask: Task<Void, Never>?
     @ObservationIgnored var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
     @ObservationIgnored private var popoverVisible = false

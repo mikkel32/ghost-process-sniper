@@ -55,7 +55,8 @@ extension RadarStore {
             try insertKillReclaimCalibration(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
             try upsertKillOutcomePosteriors(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)
         }
-        lastKillOperationSummary = "\(record.displayName): \(record.summary)"
+        // The one-line headline: the stored summary is the full narration.
+        lastKillOperationSummary = "\(record.displayName): \(report.narrative.headline)"
     }
 
     public func recentKillOperations(limit: Int = 20) throws -> [KillOperationRecord] {
