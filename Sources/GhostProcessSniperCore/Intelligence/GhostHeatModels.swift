@@ -149,6 +149,9 @@ public enum GhostHeatModel {
         // the old score==severity behavior.
         let extremeInstantSignal = memoryRatio >= 1.5 || cpuRatio >= 2.5 || gpuRatio >= 1.25
         let sustainedCount = (sustainedCPU ? 1 : 0) + (sustainedLeak ? 1 : 0)
+        // Hardware detection reads the same numbers; it only qualifies Hot
+        // when those numbers are themselves near the family's limits.
+        let hardwareCorroborates = hardwareLevel >= .hot && (memoryRatio >= 0.85 || cpuRatio >= 0.75)
 
         var evidence: [String] = []
         if sustainedCPU { evidence.append("CPU stayed elevated across the sampling window") }
@@ -176,7 +179,7 @@ public enum GhostHeatModel {
         let level: GhostLevel
         if heat >= 80, criticalEvidence, confidence >= 0.58 {
             level = .critical
-        } else if heat >= 58, (extremeInstantSignal || corroboratingAxes >= 2 || instantCorroboration || sustainedCount > 0 || hardwareLevel >= .hot) {
+        } else if heat >= 58, (extremeInstantSignal || corroboratingAxes >= 2 || instantCorroboration || sustainedCount > 0 || hardwareCorroborates) {
             level = .hot
         } else if heat >= 30 || hardwareLevel >= .watch || memoryRatio >= 0.8 || cpuRatio >= 0.8 || leakRatio >= 0.6 || gpuRatio >= 0.4 {
             level = .watch
