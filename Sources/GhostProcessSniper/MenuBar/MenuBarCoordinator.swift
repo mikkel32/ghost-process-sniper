@@ -187,10 +187,6 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
             lastRenderedLevel = presentation.level
             didChange = true
         }
-        if button.title != presentation.title {
-            button.title = presentation.title
-            didChange = true
-        }
         if button.toolTip != presentation.tooltip {
             button.toolTip = presentation.tooltip
             didChange = true
