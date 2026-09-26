@@ -46,8 +46,9 @@ final class RadarConsoleSession {
     @ObservationIgnored private var familyIndex: [String: Int] = [:]
     @ObservationIgnored private var familyIndexRevision: UInt64 = .max
     @ObservationIgnored private var recentStopOrder: [String] = []
-    /// The ports the last `port:` census was requested for.
+    /// The ports the last `port:` census was requested for, and when.
     @ObservationIgnored var censusPorts: Set<Int> = []
+    @ObservationIgnored var lastPortCensusAt: Date?
 
     init(
         monitor: ProcessMonitor,
@@ -221,6 +222,7 @@ final class RadarConsoleSession {
         if navigationSubtitle != title { navigationSubtitle = title }
         recordEngineSample()
         updateOverviewThermalBand()
+        renewPortCensusIfUnanswered()
         scheduleQueryUpdate()
         updateCanStopSelection()
         schedulePanelUpdate()
