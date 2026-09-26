@@ -23,7 +23,12 @@ struct RadarConsoleDetail: View {
                         onKill: { session.prepareKill(family) },
                         thermals: session.monitor.thermals,
                         onPreviewProcess: { session.prepareKill(family, member: $0) },
-                        stopRisk: session.monitor.stopRisk(for: family)
+                        stop: FamilyStopState(
+                            risk: session.monitor.stopRisk(for: family),
+                            blockedReason: session.monitor.stopBlockedReason(for: family),
+                            isPreparing: session.isPreparingIntervention,
+                            stopSupervisor: { session.prepareKillSupervisor(of: family) }
+                        )
                     )
                 } else {
                     ContentUnavailableView {

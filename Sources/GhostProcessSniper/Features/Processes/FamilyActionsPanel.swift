@@ -3,10 +3,12 @@ import SwiftUI
 
 struct FamilyActionsPanel: View {
     let panel: FamilyDetailPanelModel
-    let risk: KillRiskAssessment
+    let stop: FamilyStopState
     let onSnooze: (TimeInterval) -> Void
     let onIgnore: () -> Void
     let onKill: () -> Void
+
+    private var risk: KillRiskAssessment { stop.risk }
 
     var body: some View {
         RadarSection(title: "Actions", subtitle: "advisory only") {
@@ -32,6 +34,12 @@ struct FamilyActionsPanel: View {
                 }
             }
 
+            if let blockedReason = stop.blockedReason {
+                Label(blockedReason, systemImage: "lock.shield")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let headline = risk.headline {
                 Label(headline, systemImage: "info.circle")
                     .font(.caption)
@@ -55,11 +63,15 @@ struct FamilyActionsPanel: View {
                     Label("Ignore", systemImage: "eye.slash")
                 }
                 Spacer()
-                Button(role: .destructive, action: onKill) {
-                    Label(risk.appQuitPID != nil ? "Quit App\u{2026}" : "Stop Tree\u{2026}", systemImage: "scope")
+                if let supervisor = stop.restartingSupervisor {
+                    Button(action: stop.stopSupervisor) {
+                        Label("Stop \(supervisor.name) Instead\u{2026}", systemImage: "arrow.uturn.up")
+                    }
+                    .disabled(stop.isPreparing || stop.blockedReason != nil)
+                    .help("\(supervisor.name) starts it again as soon as it exits; stopping \(supervisor.name) keeps it stopped.")
                 }
-                .disabled(!panel.hasOwnedTargets)
-                .help(panel.hasOwnedTargets ? "Preview exactly what will be stopped, then confirm" : "No live processes owned by you to target")
+                FamilyStopButton(title: risk.appQuitPID != nil ? "Quit App\u{2026}" : "Stop Tree\u{2026}", stop: stop,
+                                 hasOwnedTargets: panel.hasOwnedTargets, action: onKill)
             }
             .controlSize(.small)
         }

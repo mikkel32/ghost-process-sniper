@@ -14,7 +14,7 @@ struct FamilyDetailConsoleView: View {
     let thermals: ThermalSnapshot
     let onPreviewProcess: (ProcessIdentity) -> Void
     /// What stopping this family would do, shown before any preview opens.
-    let stopRisk: KillRiskAssessment
+    let stop: FamilyStopState
 
     @State private var selectedTab: FamilyDetailTab = .overview
 
@@ -81,11 +81,11 @@ struct FamilyDetailConsoleView: View {
                         PrecisionTargetsView(family: family, onPreview: onPreviewProcess)
                         FamilyProcessTreePanel(family: family, panel: panelModel)
                         FamilyCulpritPanel(panel: panelModel)
-                        FamilyActionsPanel(panel: panelModel, risk: stopRisk, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
+                        FamilyActionsPanel(panel: panelModel, stop: stop, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
 
                     case .forensics:
                         FamilyForensicsPanel(panel: panelModel)
-                        FamilyActionsPanel(panel: panelModel, risk: stopRisk, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
+                        FamilyActionsPanel(panel: panelModel, stop: stop, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
                     }
                 }
                 .padding(18)
