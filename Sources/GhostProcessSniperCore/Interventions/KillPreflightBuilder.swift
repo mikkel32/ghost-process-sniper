@@ -135,6 +135,11 @@ struct KillPreflightBuilder: Sendable {
         var decisionScore = policy.decisionScore.adding(protectionFloor.cautions.map {
             KillDecisionFactor(kind: .whyWait, title: $0.title, detail: $0.detail, weight: $0.severity == .info ? -1 : -6, source: .risk)
         })
+        if targets.contains(where: { $0.condition == .suspended }) {
+            // Worth knowing, not worth waiting for: the stop resumes it.
+            decisionScore = decisionScore.adding([KillDecisionFactor(kind: .whyWait, title: "Paused job (Ctrl-Z)",
+                                                                     detail: "Ghost resumes it so it can exit cleanly.", weight: 0)])
+        }
         if let reason = protectionFloor.rootReason {
             // Stopping the rest of the tree without its root is not what
             // anyone asked for, so the whole plan becomes inspect-only.

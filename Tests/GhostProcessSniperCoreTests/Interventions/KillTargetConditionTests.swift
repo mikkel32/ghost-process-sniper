@@ -43,6 +43,10 @@ final class KillTargetConditionTests: XCTestCase {
 
         XCTAssertEqual(preview.targets.first?.condition, .suspended)
         XCTAssertEqual(preview.targets.first?.reason, "Suspended (Ctrl-Z) \u{2014} still holds its ports")
+        XCTAssertTrue(preview.decisionScore.factors.contains {
+            $0.kind == .whyWait && $0.title == "Paused job (Ctrl-Z)" && $0.detail == "Ghost resumes it so it can exit cleanly."
+        })
+        XCTAssertEqual(preview.readiness, .ready, "a paused job is a note, not a reason to hold back")
     }
 
     func testSuspendedAppIsResumedBeforeTheQuitRequest() async {
