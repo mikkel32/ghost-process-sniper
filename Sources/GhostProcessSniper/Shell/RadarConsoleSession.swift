@@ -61,28 +61,12 @@ final class RadarConsoleSession {
         currentDerivedSnapshot().compactFamilyRows
     }
 
-    var incidentItems: [RadarIncident] {
-        state.incidentQuery.apply(to: monitor.incidents)
-    }
-
     var incidentRows: [IncidentRowViewModel] {
         currentDerivedSnapshot().incidentRows
     }
 
     var duplicateRows: [DuplicateClusterViewModel] {
         currentDerivedSnapshot().duplicateRows
-    }
-
-    var ruleRows: [RuleRowViewModel] {
-        monitor.consoleSnapshot.ruleRows
-    }
-
-    var engine: EngineDiagnosticsViewModel {
-        monitor.engineDiagnostics
-    }
-
-    var engineStatus: EngineStatusSnapshot {
-        monitor.engineStatus
     }
 
     var commandCenter: OverviewCommandCenterModel {
@@ -93,20 +77,16 @@ final class RadarConsoleSession {
         monitor.consoleSnapshot.compact
     }
 
-    var sidebarSections: [ConsoleSidebarSection] {
-        currentDerivedSnapshot().sidebarSections
-    }
-
     var compactSidebarSections: [CompactSidebarSection] {
         currentDerivedSnapshot().compactSidebarSections
     }
 
-    var snapshotContentToken: SnapshotContentRevision {
-        monitor.consoleSnapshot.contentRevision
+    var searchResults: ConsoleSearchResults {
+        currentDerivedSnapshot().search
     }
 
-    var engineSampleToken: Date {
-        monitor.performanceMetrics.lastRefresh.startedAt
+    var snapshotContentToken: SnapshotContentRevision {
+        monitor.consoleSnapshot.contentRevision
     }
 
     func availability(_ command: RadarCommand) -> RadarCommandAvailability {
@@ -197,21 +177,30 @@ final class RadarConsoleSession {
         scheduleQueryUpdate()
     }
 
-    func scheduleQueryUpdate() {
-        guard presentationObserverID != nil else { return }
-        let source = monitor.consoleSnapshot
-        let state = state.coreState
-        let key = ConsoleDerivedSnapshotKey(snapshot: source, state: state)
-        guard key != requestedQueryKey else { return }
+    /// Returns the projection task for the current state, so callers that
+    /// need fresh results (opening the best match) can wait for it.
+    @discardableResult
+    func scheduleQueryUpdate() -> Task<Void, Never>? {
+        guard presentationObserverID != nil else { return nil }
+        let request = ConsoleProjectionRequest(
+            source: monitor.consoleSnapshot,
+            incidents: monitor.incidents,
+            state: state.coreState,
+            families: monitor.families,
+            processes: monitor.sampledProcesses,
+            sampleRevision: monitor.sampleRevision
+        )
+        let key = ConsoleDerivedSnapshotKey(request)
+        guard key != requestedQueryKey else { return queryTask }
         requestedQueryKey = key
         queryTask?.cancel()
-        let request = ConsoleProjectionRequest(source: source, incidents: monitor.incidents, state: state)
         let queries = queries
         queryTask = Task { [weak self] in
             let published = await queries.update(request)
             guard published, !Task.isCancelled else { return }
             self?.updateFocusedFamilies()
         }
+        return queryTask
     }
 
     func toggleInspector() {
@@ -264,6 +253,24 @@ final class RadarConsoleSession {
     func requestSearchFocus() {
         focus(.processes)
         searchFocusToken += 1
+    }
+
+    /// Return in the search field: open the best-matching family.
+    func openBestMatch() {
+        let pending = scheduleQueryUpdate()
+        Task {
+            await pending?.value
+            guard !state.searchText.isEmpty, let best = familyItems.first else { return }
+            focus(.family(best.familyKey))
+        }
+    }
+
+    /// Appends a filter token such as `is:leaking` to the current search.
+    func addSearchToken(_ token: String) {
+        let current = state.searchText.trimmingCharacters(in: .whitespaces)
+        guard !current.split(separator: " ").contains(Substring(token)) else { return }
+        state.searchText = current.isEmpty ? token : "\(current) \(token)"
+        focus(.processes)
     }
 
     func browseFamilies(filter: RadarFilter = .all, sort: RadarSort? = nil) {

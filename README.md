@@ -83,13 +83,13 @@ Click the menu-bar scope for a summary; **Open Dashboard** opens the console:
 | Section | What it answers |
 | --- | --- |
 | **Overview** | What needs attention now, what is trending the wrong way, and why. |
-| **All Processes** | Every family, searchable by name, command, or path, with filters and sorting. |
+| **All Processes** | Every family plus every other running process, searchable by name, helper, command, path, PID, or port — typo-tolerant, with filters like `cpu>20` or `is:leaking`. |
 | **Duplicates** | Which work is running more than once. |
 | **Incidents** | What has leaked, spiked, or run away before, and how often. |
 | **Rules** | How the radar should treat specific apps or commands. |
 | **Engine** | How much the radar itself costs, plus diagnostics for bug reports. |
 
-Handy shortcuts: **⌘F** search · **⌘R** scan now · **⌘1–⌘6** switch sections · **⌥⌘I** inspector · **⌘,** settings.
+Handy shortcuts: **⌘F** search (**↩** opens the best match) · **⌘R** scan now · **⌘1–⌘6** switch sections · **⌥⌘I** inspector · **⌘,** settings.
 
 The [user guide](Docs/User-Guide.md) covers every panel, the temperature tools, and exactly how a safe stop works.
 

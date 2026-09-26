@@ -14,39 +14,6 @@ public struct TrendSample: Identifiable, Equatable, Sendable {
     }
 }
 
-public enum TrendMath {
-    /// Ordinary least-squares fit. Returns slope in y-units per x-unit and R²
-    /// (1 = clean linear trend, 0 = uncorrelated noise). A perfectly flat
-    /// series counts as a perfect fit with zero slope.
-    public static func linearFit(x: [Double], y: [Double]) -> (slope: Double, rSquared: Double) {
-        guard x.count >= 2, x.count == y.count else {
-            return (0, 0)
-        }
-        let n = Double(x.count)
-        let meanX = x.reduce(0, +) / n
-        let meanY = y.reduce(0, +) / n
-        var sxx = 0.0
-        var sxy = 0.0
-        var syy = 0.0
-        for index in x.indices {
-            let dx = x[index] - meanX
-            let dy = y[index] - meanY
-            sxx += dx * dx
-            sxy += dx * dy
-            syy += dy * dy
-        }
-        guard sxx > 0 else {
-            return (0, 0)
-        }
-        let slope = sxy / sxx
-        guard syy > 0 else {
-            return (slope, 1)
-        }
-        let rSquared = (sxy * sxy) / (sxx * syy)
-        return (slope, min(1, max(0, rSquared)))
-    }
-}
-
 public struct TrendMetrics: Equatable, Sendable {
     public let memoryVelocityMegabytesPerMinute: Double
     public let cpuSlopePerMinute: Double

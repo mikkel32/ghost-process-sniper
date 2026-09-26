@@ -27,6 +27,10 @@ public final class ProcessMonitor {
     public private(set) var selfUsage: SelfResourceUsage = .unknown
     public private(set) var thermals: ThermalSnapshot = .unknown
     public private(set) var thermalActivity: ThermalActivitySummary = .empty
+    /// Every process in the latest sample, for search. Not observed: the
+    /// console re-queries on each publish, and views never read it directly.
+    @ObservationIgnored public private(set) var sampledProcesses: [ProcessMetrics] = []
+    @ObservationIgnored public private(set) var sampleRevision: UInt64 = 0
 
     @ObservationIgnored private let thermalSampler = ThermalSampler()
     @ObservationIgnored private var selfUsageMonitor = SelfUsageMonitor()
@@ -49,10 +53,6 @@ public final class ProcessMonitor {
 
     public var statusLevel: GhostLevel {
         summary.level
-    }
-
-    public var activeAlertCount: Int {
-        summary.hotCount
     }
 
     public var resolvedThresholdProfile: ResolvedThresholdProfile {
@@ -157,6 +157,7 @@ public final class ProcessMonitor {
                 }
             }
             thermalActivity = outcome.thermalActivity
+            recordSample(outcome.processes)
             publish(payload: outcome.payload, coalescedRefreshCount: coalesced)
             await notifier.process(model: model)
         } catch {
@@ -199,6 +200,7 @@ public final class ProcessMonitor {
         let summary = pipeline.summary(for: scored.families)
         let currentActivity = ThermalActivityAnalyzer.project(processes: processes, families: scored.families, now: now)
         thermalActivity = injectedThermalHistory.record(currentActivity, at: now)
+        recordSample(processes)
         let effectivePerformanceMode = effectiveSettings.resolvedPerformanceMode(
             summaryLevel: summary.level,
             popoverVisible: popoverVisible,
@@ -246,6 +248,11 @@ public final class ProcessMonitor {
         )
     }
 
+    private func recordSample(_ processes: [ProcessMetrics]) {
+        sampledProcesses = processes
+        sampleRevision &+= 1
+    }
+
     public func recordStatusUpdateCost(_ milliseconds: Double) {
         let updated = performanceMetrics.updatingSmoothness(statusUpdateMilliseconds: milliseconds)
         performanceMetrics = updated
@@ -275,25 +282,6 @@ public final class ProcessMonitor {
         }
     }
 
-    public func saveSettingsNow() async {
-        settingsSaveTask?.cancel()
-        settingsSaveTask = nil
-        do {
-            try await store?.saveSettings(settings)
-            storeError = nil
-        } catch {
-            storeError = error.localizedDescription
-        }
-    }
-
-    public func focusFamily(signatureID: String?) {
-        guard let signatureID else {
-            focusedSignatureIDs.removeAll()
-            return
-        }
-        focusedSignatureIDs = [signatureID]
-    }
-
     public func focusFamilies(signatureIDs: Set<String>) {
         focusedSignatureIDs = signatureIDs
     }
@@ -317,10 +305,6 @@ public final class ProcessMonitor {
             action: .ignore
         )
         await save(rule: rule)
-    }
-
-    public func addCommandRule(commandContains: String, action: RadarActionType) async {
-        await addRule(draft: RuleDraft(commandContains: commandContains, action: action))
     }
 
     public func addRule(draft: RuleDraft) async {
@@ -371,42 +355,6 @@ public final class ProcessMonitor {
         } catch {
             storeError = error.localizedDescription
         }
-    }
-
-    public func previewKill(
-        family: ProcessFamily,
-        killer: ProcessKiller,
-        forceKillDelay: TimeInterval? = nil
-    ) async -> KillPreview {
-        let plan = await killPlan(for: family)
-        return await killer.preview(
-            plan: plan,
-            forceKillDelay: forceKillDelay ?? settings.forceKillDelay
-        )
-    }
-
-    public func previewIntervention(
-        family: ProcessFamily,
-        killer: ProcessKiller,
-        forceKillDelay: TimeInterval? = nil
-    ) async -> KillPreview {
-        await previewKill(family: family, killer: killer, forceKillDelay: forceKillDelay)
-    }
-
-    public func startIntervention(
-        family: ProcessFamily,
-        killer: ProcessKiller,
-        forceKillDelay: TimeInterval? = nil,
-        control: KillOperationControl = KillOperationControl()
-    ) async -> AsyncStream<KillOperationEvent> {
-        let plan = await killPlan(for: family)
-        let runner = KillOperationRunner()
-        return await runner.run(
-            plan: plan,
-            killer: killer,
-            forceKillDelay: forceKillDelay ?? settings.forceKillDelay,
-            control: control
-        )
     }
 
     public func confirmKill(
@@ -482,31 +430,8 @@ public final class ProcessMonitor {
         }
     }
 
-    public func incidents(matching query: IncidentQuery) async -> [RadarIncident] {
-        do {
-            if let store {
-                return try await store.queryIncidents(query)
-            }
-        } catch {
-            storeError = error.localizedDescription
-        }
-        return query.apply(to: incidents)
-    }
-
-    public func ruleMatchPreviews() -> [RuleMatchPreview] {
-        consoleSnapshot.rulePreviews
-    }
-
     public func commandAvailability(_ command: RadarCommand, selection: RadarFocusedSelection) -> RadarCommandAvailability {
         RadarCommandCoordinator().availability(for: command, selection: selection, families: families)
-    }
-
-    public func commandAvailabilityMap(selection: RadarFocusedSelection) -> [RadarCommand: RadarCommandAvailability] {
-        RadarCommandCoordinator().availabilityMap(selection: selection, families: families)
-    }
-
-    public func familySelection(after selection: RadarFocusedSelection, direction: Int) -> RadarFocusedSelection {
-        RadarCommandCoordinator().selection(after: selection, families: families, direction: direction)
     }
 
     public func diagnosticsReport() -> String {
@@ -719,29 +644,6 @@ public final class ProcessMonitor {
             generatedAt: generatedAt
         )
         publish(payload: payload, coalescedRefreshCount: performance.coalescedRefreshCount)
-    }
-
-    private func refreshedEngineSnapshot(
-        snapshot: RadarConsoleSnapshot,
-        metrics: RadarPerformanceMetrics,
-        health: SamplerHealth,
-        storeHealth: StoreHealth,
-        storeError: String?,
-        summary: RadarSummary,
-        generatedAt: Date
-    ) -> RadarConsoleSnapshot {
-        snapshot.updatingEngine(
-            EngineDiagnosticsViewModel(
-                metrics: metrics,
-                health: health,
-                storeHealth: storeHealth,
-                storeError: storeError,
-                summary: summary,
-                generatedAt: generatedAt
-            ),
-            health: health,
-            generatedAt: generatedAt
-        )
     }
 
     private func metrics(

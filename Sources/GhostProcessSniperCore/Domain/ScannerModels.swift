@@ -114,33 +114,6 @@ public struct SamplerDeadline: Equatable, Sendable {
     }
 }
 
-public struct ProcessProbe: Equatable, Sendable {
-    public let identity: ProcessIdentity
-    public let parentPID: Int32
-    public let userID: UInt32
-    public let residentMemoryBytes: UInt64
-    public let physicalFootprintBytes: UInt64
-    public let virtualMemoryBytes: UInt64
-    public let cpuPercent: Double
-    public let totalProcessorSeconds: TimeInterval
-    public let threadCount: Int
-    public let isSystemProcess: Bool
-
-    public var pid: Int32 { identity.pid }
-
-    public var fingerprint: UInt64 {
-        var hasher = Hasher()
-        hasher.combine(parentPID)
-        hasher.combine(userID)
-        hasher.combine(residentMemoryBytes / 8_388_608)
-        hasher.combine(physicalFootprintBytes / 8_388_608)
-        hasher.combine(Int(cpuPercent.rounded()))
-        hasher.combine(threadCount)
-        hasher.combine(isSystemProcess)
-        return UInt64(bitPattern: Int64(hasher.finalize()))
-    }
-}
-
 public struct ProcessLiteRecord: Equatable, Sendable {
     public let identity: ProcessIdentity
     public let parentPID: Int32
@@ -186,66 +159,6 @@ public struct ProcessLiteRecord: Equatable, Sendable {
         hasher.combine(flags)
         hasher.combine(openFileCount)
         return UInt64(bitPattern: Int64(hasher.finalize()))
-    }
-}
-
-public struct ProcessGraphLiteBatch: Equatable, Sendable {
-    public let records: [ProcessLiteRecord]
-    public let sampledAt: Date
-    public let bsdReadCount: Int
-    public let pidBufferCopyCount: Int
-
-    public init(records: [ProcessLiteRecord], sampledAt: Date, bsdReadCount: Int, pidBufferCopyCount: Int) {
-        self.records = records
-        self.sampledAt = sampledAt
-        self.bsdReadCount = bsdReadCount
-        self.pidBufferCopyCount = pidBufferCopyCount
-    }
-}
-
-public struct ProcessMetricsEnrichmentPolicy: Equatable, Sendable {
-    public let richMetricBudget: Int
-    public let unknownProcessStride: Int
-    public let trueCheapScanEnabled: Bool
-
-    public init(
-        richMetricBudget: Int,
-        unknownProcessStride: Int,
-        trueCheapScanEnabled: Bool
-    ) {
-        self.richMetricBudget = max(0, richMetricBudget)
-        self.unknownProcessStride = max(1, unknownProcessStride)
-        self.trueCheapScanEnabled = trueCheapScanEnabled
-    }
-}
-
-public struct ScannerScratchpad: Equatable, Sendable {
-    public let rawSampleCapacity: Int
-    public let activeSampleCapacity: Int
-    public let telemetryJobCapacity: Int
-    public let forensicsJobCapacity: Int
-    public let reuseCount: Int
-
-    public static let empty = ScannerScratchpad(
-        rawSampleCapacity: 0,
-        activeSampleCapacity: 0,
-        telemetryJobCapacity: 0,
-        forensicsJobCapacity: 0,
-        reuseCount: 0
-    )
-
-    public init(
-        rawSampleCapacity: Int,
-        activeSampleCapacity: Int,
-        telemetryJobCapacity: Int,
-        forensicsJobCapacity: Int,
-        reuseCount: Int
-    ) {
-        self.rawSampleCapacity = rawSampleCapacity
-        self.activeSampleCapacity = activeSampleCapacity
-        self.telemetryJobCapacity = telemetryJobCapacity
-        self.forensicsJobCapacity = forensicsJobCapacity
-        self.reuseCount = reuseCount
     }
 }
 

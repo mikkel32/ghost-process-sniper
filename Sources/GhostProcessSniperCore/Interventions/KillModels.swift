@@ -422,16 +422,6 @@ public enum KillReadiness: String, Codable, Comparable, Sendable {
     }
 }
 
-public struct KillReadinessScore: Equatable, Sendable {
-    public let readiness: KillReadiness
-    public let reasons: [String]
-
-    public init(readiness: KillReadiness, reasons: [String]) {
-        self.readiness = readiness
-        self.reasons = reasons
-    }
-}
-
 public enum KillDecisionEvidenceKind: String, Codable, Sendable {
     case positive
     case caution
@@ -620,52 +610,6 @@ public struct KillSafetyGate: Sendable {
     }
 }
 
-public struct KillReadinessScorer: Sendable {
-    public init() {}
-
-    public func score(
-        plan: KillPlan,
-        targets: [KillTarget],
-        locked: [KillTarget],
-        stale: [KillTarget],
-        recycled: [KillTarget]
-    ) -> KillReadinessScore {
-        var reasons: [String] = []
-        guard !targets.isEmpty else {
-            return KillReadinessScore(
-                readiness: .locked,
-                reasons: ["No owned live process identities matched the selected family tree."]
-            )
-        }
-
-        var readiness: KillReadiness = .ready
-        if !locked.isEmpty {
-            readiness = .caution
-            reasons.append("\(locked.count) protected or foreign process\(locked.count == 1 ? "" : "es") will be skipped.")
-        }
-        if !stale.isEmpty || !recycled.isEmpty {
-            readiness = .caution
-            reasons.append("Stale or recycled PIDs were detected and excluded.")
-        }
-        if let metadata = plan.familyMetadata {
-            if metadata.scoreLevel >= .hot || metadata.forecastState >= .leaking {
-                reasons.append("\(metadata.displayName) is \(metadata.scoreLevel.label.lowercased()) with score \(Int(metadata.scoreValue.rounded())).")
-            }
-            if metadata.isBackgroundOrOrphan {
-                reasons.append("Root appears backgrounded or orphaned.")
-            }
-            if metadata.childCount > 0 {
-                reasons.append("\(metadata.childCount) owned descendant\(metadata.childCount == 1 ? "" : "s") in the selected family.")
-            }
-        }
-        if reasons.isEmpty {
-            reasons.append("All targets are owned, live, and identity-verified.")
-        }
-
-        return KillReadinessScore(readiness: readiness, reasons: reasons)
-    }
-}
-
 public struct KillAttempt: Identifiable, Equatable, Sendable {
     public var id: String { "\(pid)-\(signal)-\(stage)" }
 
@@ -693,14 +637,6 @@ public struct KillAttempt: Identifiable, Equatable, Sendable {
         default: "Signal \(signal)"
         }
     }
-}
-
-public enum KillLiveState: String, Codable, Sendable {
-    case live
-    case exited
-    case recycled
-    case locked
-    case unknown
 }
 
 public struct KillVerificationPass: Identifiable, Codable, Equatable, Sendable {

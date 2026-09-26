@@ -61,7 +61,6 @@ struct CoreChecks {
         await run("spikeRingBufferBoundsReports") { try spikeRingBufferBoundsReports() }
         await run("samplerExecutionPlanScalesAndCounts") { try samplerExecutionPlanScalesAndCounts() }
         await run("radarPublishPayloadSkipsUnchangedContentRebuild") { try radarPublishPayloadSkipsUnchangedContentRebuild() }
-        await run("consoleDerivedSnapshotCacheReadsArePure") { try consoleDerivedSnapshotCacheReadsArePure() }
         await run("menuBarStatusPresentationIsIconOnlyAndCompact") { try menuBarStatusPresentationIsIconOnlyAndCompact() }
         await run("menuBarPresentationKeepsDiagnosticsOutOfTitle") { try menuBarPresentationKeepsDiagnosticsOutOfTitle() }
         await run("refreshGateCoalescesOverlappingRequests") { try await refreshGateCoalescesOverlappingRequests() }
@@ -530,12 +529,7 @@ private func triageViewModelsFilterAndSort() throws {
         cpu: 5,
         score: GhostScore(value: 8, level: .quiet, reasons: ["quiet dev process"])
     )
-    let items = FamilyTriageViewModel.filtered(
-        families: [python, node],
-        query: "server",
-        filter: .attention,
-        sort: .memory
-    )
+    let items = consoleSnapshot([python, node]).families(query: "server", filter: .attention, sort: .memory)
 
     try check(items.map(\.displayName) == ["node"], "triage view model should filter by query and attention state")
     try check(items.first?.memoryBytes == 900_000_000, "triage view model should sort by memory")
@@ -600,12 +594,14 @@ private func radarCommandCoordinatorNavigatesFamilies() throws {
     let first = hotFamily(pid: 131, memory: 700_000_000, cpu: 90)
     let second = hotFamily(pid: 132, memory: 500_000_000, cpu: 10, score: GhostScore(value: 20, level: .watch, reasons: ["large memory footprint"]))
     let coordinator = RadarCommandCoordinator()
-    let map = coordinator.availabilityMap(selection: .family(first.familyKey), families: [first, second])
-    let next = coordinator.selection(after: .family(first.familyKey), families: [first, second], direction: 1)
+    let selection = RadarFocusedSelection.family(first.familyKey)
+    let next = coordinator.selection(after: selection, orderedFamilyKeys: [first.familyKey, second.familyKey], direction: 1)
+    let wrapped = coordinator.selection(after: selection, orderedFamilyKeys: [first.familyKey, second.familyKey], direction: -1)
 
-    try check(map[.copyDiagnostics]?.isEnabled == true, "copy diagnostics should always be command-available")
-    try check(map[.nextFamily]?.isEnabled == true, "next family should be available when families exist")
-    try check(next == .family(second.familyKey), "command coordinator should navigate to next sorted family")
+    try check(coordinator.availability(for: .copyDiagnostics, selection: selection, families: [first, second]).isEnabled, "copy diagnostics should always be command-available")
+    try check(coordinator.availability(for: .nextFamily, selection: selection, families: [first, second]).isEnabled, "next family should be available when families exist")
+    try check(next == .family(second.familyKey), "command coordinator should navigate to the next visible family")
+    try check(wrapped == .family(second.familyKey), "command coordinator should wrap around the visible order")
 }
 
 private func consoleSnapshotPrecomputesStableRows() throws {
@@ -628,7 +624,7 @@ private func consoleSnapshotPrecomputesStableRows() throws {
     try check(snapshot.families.count == 2, "snapshot should precompute family rows")
     try check(snapshot.detailPanel(for: first.familyKey) != nil, "snapshot should retain detail by family key")
     try check(snapshot.detailPanel(for: first.signature.id) != nil, "snapshot should keep signature fallback for compatibility")
-    try check(snapshot.sidebarSections(query: "", sort: .smart).first?.count == 2, "snapshot should precompute sidebar section counts")
+    try check(CompactConsoleSnapshot.sidebarSections(from: snapshot.compact.allRows).first?.count == 2, "snapshot should precompute sidebar section counts")
     try check(snapshot.families(query: "node", filter: .attention, sort: .memory).count == 2, "snapshot should filter without remapping process families")
     try check(snapshot.compact.layoutMode == .compact, "snapshot should build the compact console payload")
     try check(snapshot.compact.allRows.count == 2, "compact snapshot should precompute sidebar rows")
@@ -676,22 +672,18 @@ private func consoleDerivedSnapshotCachesRows() throws {
     state.focusedSelection = .family(family.familyKey)
 
     let first = ConsoleDerivedSnapshot.build(snapshot: snapshot, incidents: [], state: state)
-    let second = first.withCacheHitCount(1)
 
     try check(first.familyRows.map(\.id) == [family.familyKey], "derived snapshot should precompute filtered family rows")
-    try check(first.selectedPanel?.familyKey == family.familyKey, "derived snapshot should precompute selected panel")
     try check(first.compactFamilyRows.map(\.id) == [family.familyKey], "derived snapshot should precompute compact filtered rows")
     try check(first.compactSidebarSections.first?.rows.map(\.id) == [family.familyKey], "derived snapshot should precompute compact sidebar sections")
-    try check(first.selectedCompactDetail?.familyKey == family.familyKey, "derived snapshot should precompute selected compact detail")
-    try check(first.key == second.key && second.cacheHitCount == 1, "derived snapshot cache should preserve key and expose hits")
-    try check(first.compactFamilyRows == second.compactFamilyRows, "derived snapshot cache should preserve compact rows")
+    try check(first.search.familyMatches[family.familyKey] != nil, "derived snapshot should carry search matches for highlighted rows")
 
     var cache = ConsoleDerivedSnapshotCache()
-    _ = cache.update(snapshot: snapshot, incidents: [], state: state)
+    let built = cache.update(ConsoleProjectionRequest(source: snapshot, incidents: [], state: state))
     state.focusedSelection = .overview
-    let selectionOnlyUpdate = cache.update(snapshot: snapshot, incidents: [], state: state)
+    let selectionOnlyUpdate = cache.update(ConsoleProjectionRequest(source: snapshot, incidents: [], state: state))
     try check(cache.missCount == 1 && cache.hitCount == 1, "selection changes should reuse expensive derived projections")
-    try check(selectionOnlyUpdate.selectedPanel == nil, "selection-only cache hits should refresh selected detail in constant time")
+    try check(selectionOnlyUpdate == built, "selection-only cache hits should return the stable projection")
 }
 
 private func compactDefaultsAndEngineIsolationBehave() throws {
@@ -743,7 +735,7 @@ private func compactDefaultsAndEngineIsolationBehave() throws {
     try check(first.compact.engineStatus.processText == "42", "first engine status should carry process count")
     try check(second.compact.engineStatus.processText == "84", "diagnostics-only compact updates should keep lightweight engine text live")
     try check(second.compact.engineStatus.refreshText != first.compact.engineStatus.refreshText || second.compact.engineStatus.backlogText != first.compact.engineStatus.backlogText, "engine status should still update without content invalidation")
-    try check(ConsoleDerivedSnapshotKey(snapshot: first, state: state) == ConsoleDerivedSnapshotKey(snapshot: second, state: state), "diagnostics-only updates should reuse the derived snapshot key")
+    try check(derivedKey(first, state) == derivedKey(second, state), "diagnostics-only updates should reuse the derived snapshot key")
 }
 
 private func consoleSnapshotSurfacesPredictiveQueues() throws {
@@ -1501,33 +1493,6 @@ private func radarPublishPayloadSkipsUnchangedContentRebuild() throws {
     try check(second.state.detailViewModels.isEmpty, "diagnostics-only payload should not rebuild family detail view models")
 }
 
-private func consoleDerivedSnapshotCacheReadsArePure() throws {
-    let family = hotFamily(pid: 231, memory: 300_000_000, cpu: 15)
-    let snapshot = RadarConsoleSnapshot.build(
-        families: [family],
-        summary: RadarSummary(statusText: "Quiet", level: .quiet, familyCount: 1, hotCount: 0, totalMemoryBytes: family.totalPhysicalFootprintBytes, topFamilyName: family.displayName),
-        incidents: [],
-        rules: RadarRule.builtIns(settings: .aggressive),
-        metrics: .empty,
-        health: .starting,
-        storeHealth: .empty,
-        storeError: nil,
-        previous: nil,
-        generatedAt: Date(timeIntervalSince1970: 2_310)
-    )
-    var state = RadarConsoleState.default
-    state.searchText = family.displayName
-    var cache = ConsoleDerivedSnapshotCache()
-    let first = cache.update(snapshot: snapshot, incidents: [], state: state)
-    let hitCountAfterBuild = cache.hitCount
-    let readOne = cache.cached(snapshot: snapshot, state: state)
-    let readTwo = cache.cached(snapshot: snapshot, state: state)
-
-    try check(first.familyRows.count == 1, "derived cache should build matching family rows")
-    try check(readOne == first && readTwo == first, "cached derived reads should return the stable snapshot")
-    try check(cache.hitCount == hitCountAfterBuild, "SwiftUI-style repeated reads should not mutate cache hit counters")
-}
-
 private func menuBarStatusPresentationIsIconOnlyAndCompact() throws {
     let states = [
         RadarSummary(statusText: "Quiet", level: .quiet, familyCount: 0, hotCount: 0, totalMemoryBytes: 0, topFamilyName: nil),
@@ -1881,7 +1846,8 @@ private func radarStoreQueriesIncidentsAndTogglesRules() async throws {
     )
 
     try await store.persist(model: model, settings: settings)
-    let queried = try await store.queryIncidents(IncidentQuery(text: "node", filter: .active, sort: .severity, limit: 5))
+    let stored = try await store.recentIncidents()
+    let queried = IncidentQuery(text: "node", filter: .active, sort: .severity, limit: 5).apply(to: stored)
     try check(queried.count == 1, "store should query active incidents")
 
     let rule = RadarRule(
@@ -2290,9 +2256,9 @@ private func consoleSnapshotContentRevisionAvoidsGeneratedAtInvalidation() throw
     state.focusedSelection = .family(family.familyKey)
 
     try check(first.contentRevision == second.contentRevision, "content revision should ignore generatedAt-only changes")
-    try check(ConsoleDerivedSnapshotKey(snapshot: first, state: state) == ConsoleDerivedSnapshotKey(snapshot: second, state: state), "derived snapshot key should stay stable across diagnostics-only refreshes")
+    try check(derivedKey(first, state) == derivedKey(second, state), "derived snapshot key should stay stable across diagnostics-only refreshes")
     try check(metricVersionOnly.contentRevision == first.contentRevision, "content revision should ignore raw per-refresh metricsVersion churn")
-    try check(ConsoleDerivedSnapshotKey(snapshot: first, state: state) == ConsoleDerivedSnapshotKey(snapshot: metricVersionOnly, state: state), "metric-version-only refreshes should reuse derived snapshot rows")
+    try check(derivedKey(first, state) == derivedKey(metricVersionOnly, state), "metric-version-only refreshes should reuse derived snapshot rows")
     try check(second.generatedAt != first.generatedAt, "snapshot should still update engine/generatedAt diagnostics")
     try check(second.families == first.families, "unchanged content should reuse precomputed family rows")
     try check(second.compact.allRows == first.compact.allRows, "unchanged content should reuse compact family rows")
@@ -3923,6 +3889,25 @@ private func hotFamily(
         ownedIdentities: [root.identity],
         protectedPIDs: []
     )
+}
+
+private func consoleSnapshot(_ families: [ProcessFamily]) -> RadarConsoleSnapshot {
+    RadarConsoleSnapshot.build(
+        families: families,
+        summary: ProcessFamilyBuilder(currentUserID: 501).summary(for: families),
+        incidents: [],
+        rules: [],
+        metrics: .empty,
+        health: .starting,
+        storeHealth: .empty,
+        storeError: nil,
+        previous: nil,
+        generatedAt: Date(timeIntervalSince1970: 1)
+    )
+}
+
+private func derivedKey(_ snapshot: RadarConsoleSnapshot, _ state: RadarConsoleState) -> ConsoleDerivedSnapshotKey {
+    ConsoleDerivedSnapshotKey(ConsoleProjectionRequest(source: snapshot, incidents: [], state: state))
 }
 
 private func temporaryStoreURL() -> URL {

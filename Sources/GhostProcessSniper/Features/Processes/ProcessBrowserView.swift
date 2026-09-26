@@ -5,7 +5,7 @@ struct ProcessBrowserView: View {
     @Bindable var session: RadarConsoleSession
 
     private var hasFilters: Bool {
-        !session.state.searchText.isEmpty || session.state.familyFilter != .all
+        !session.state.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || session.state.familyFilter != .all
     }
 
     var body: some View {
@@ -18,66 +18,58 @@ struct ProcessBrowserView: View {
 
     private var browserContent: some View {
         let items = session.familyItems
+        let search = session.searchResults
+        let others = search.processRows
+        let familyCount = session.monitor.summary.familyCount
         return VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("All processes")
+                        Text(search.isActive ? "Search results" : "All processes")
                             .font(.largeTitle.weight(.bold))
-                        Text("Find what is using your Mac. Select a family to understand its activity.")
+                        Text(search.isActive
+                             ? "Tracked families first, then everything else that is running. Return opens the best match."
+                             : "Find what is using your Mac. Select a family to understand its activity.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 0)
-                    Text("\(items.count) of \(session.monitor.summary.familyCount)")
+                    Text(search.isActive ? "\(items.count) tracked \u{00b7} \(search.processMatchCount) other" : "\(items.count) of \(familyCount)")
                         .font(.callout.monospacedDigit().weight(.semibold))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(RadarTheme.brand.opacity(0.1), in: Capsule())
-                        .accessibilityLabel("\(items.count) matching families out of \(session.monitor.summary.familyCount)")
+                        .accessibilityLabel(search.isActive
+                            ? "\(items.count) tracked families and \(search.processMatchCount) other processes match"
+                            : "\(items.count) matching families out of \(familyCount)")
                 }
 
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) {
                         filters
                         Spacer(minLength: 8)
-                        sortPicker
+                        sortPicker(relevance: search.query.ranksByRelevance)
                     }
                     VStack(alignment: .leading, spacing: 12) {
                         filters
-                        sortPicker
+                        sortPicker(relevance: search.query.ranksByRelevance)
                     }
                 }
 
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .accessibilityHidden(true)
-                    Text(session.state.searchText.isEmpty
-                         ? "Search by name, command, or path with ⌘F"
-                         : "Results for \u{201c}\(session.state.searchText)\u{201d}")
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 4)
-                    if hasFilters {
-                        Button("Clear filters") { session.clearFamilyFilters() }
-                            .buttonStyle(.link)
-                    }
-                }
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                ProcessSearchSummary(session: session)
             }
             .padding(24)
 
-            if items.isEmpty && session.queries.isUpdating {
-                ProgressView("Preparing process list")
+            if items.isEmpty && others.isEmpty && session.queries.isUpdating {
+                ProgressView(search.isActive ? "Searching" : "Preparing process list")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if items.isEmpty {
+            } else if items.isEmpty && others.isEmpty {
                 ContentUnavailableView {
                     Label(hasFilters ? "No matching processes" : "Waiting for processes", systemImage: hasFilters ? "magnifyingglass" : "waveform.path")
                 } description: {
                     Text(hasFilters
-                         ? "Try another name or clear the filters to see every tracked family."
+                         ? "Nothing running matches. Check the spelling, remove a filter, or search by PID or port."
                          : session.monitor.storeError ?? "The next scan will populate this list.")
                 } actions: {
                     if hasFilters {
@@ -93,15 +85,27 @@ struct ProcessBrowserView: View {
                 columnHeadings
                 ScrollView {
                     LazyVStack(spacing: 2) {
+                        if items.isEmpty {
+                            Text("No tracked family matches.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                        }
                         ForEach(items) { item in
+                            let match = search.familyMatches[item.id]
                             Button { session.focus(.family(item.id)) } label: {
-                                ProcessBrowserRow(item: item)
+                                ProcessBrowserRow(item: item, match: match)
                                     .equatable()
                             }
                             .buttonStyle(RadarRowButtonStyle())
                             .familyRowActions(row: CompactSidebarRowModel(item: item), session: session)
-                            .accessibilityLabel("\(item.displayName), \(item.assessment.status), \(item.assessment.cause), memory \(item.memoryText), CPU \(item.cpuText)")
+                            .accessibilityLabel("\(item.displayName), \(item.assessment.status), \(match?.reason ?? item.assessment.cause), memory \(item.memoryText), CPU \(item.cpuText)")
                             .accessibilityHint("Open process details")
+                        }
+                        if !others.isEmpty {
+                            UntrackedProcessSection(session: session, rows: others, hiddenCount: search.hiddenProcessCount)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -128,10 +132,10 @@ struct ProcessBrowserView: View {
         ProcessFilterBar(session: session)
     }
 
-    private var sortPicker: some View {
+    private func sortPicker(relevance: Bool) -> some View {
         Picker("Sort", selection: $session.state.familySort) {
             ForEach(RadarSort.allCases, id: \.self) { sort in
-                Text(sort == .smart ? "Priority" : sort.label).tag(sort)
+                Text(sort == .smart ? (relevance ? "Best match" : "Priority") : sort.label).tag(sort)
             }
         }
         .pickerStyle(.menu)
@@ -158,12 +162,14 @@ struct ProcessBrowserView: View {
 
 private struct ProcessBrowserRow: View, Equatable {
     let item: FamilyTriageViewModel
+    let match: ProcessSearchMatch?
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         let a = lhs.item, b = rhs.item
         return a.id == b.id && a.displayName == b.displayName && a.level == b.level &&
             a.assessment.cause == b.assessment.cause && a.assessment.status == b.assessment.status &&
-            a.memoryText == b.memoryText && a.cpuText == b.cpuText
+            a.memoryText == b.memoryText && a.cpuText == b.cpuText &&
+            lhs.match?.nameHighlights == rhs.match?.nameHighlights && lhs.match?.reason == rhs.match?.reason
     }
 
     var body: some View {
@@ -175,14 +181,22 @@ private struct ProcessBrowserRow: View, Equatable {
                     .frame(width: 36, height: 36)
                     .background(RadarTheme.accent(for: item.level).opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(item.displayName)
+                    HighlightedText(text: item.displayName, highlights: match?.nameHighlights ?? [])
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text(item.assessment.cause)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if let reason = match?.reason {
+                        Label(reason, systemImage: "magnifyingglass")
+                            .font(.caption)
+                            .foregroundStyle(RadarTheme.brand)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
+                        Text(item.assessment.cause)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }

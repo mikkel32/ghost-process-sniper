@@ -35,6 +35,7 @@ Scripts/dev.sh telemetry          # Read subsystem logs without rebuilding
 | `Thermals` | Hardware sensors and the separate app-activity projection |
 | `Intelligence` | Classification, family building, scoring, forecasts and patterns |
 | `Persistence` | SQLite connection, schema, persistence and query ownership |
+| `Search` | Process search: text folding, query language, scoring and the per-identity search index |
 | `Presentation` | Immutable display models, snapshots, formatting and asynchronous queries |
 | `Diagnostics` | Logging, self-usage accounting and responsiveness instrumentation |
 | `Interventions` | Preview, authorization identity, execution, escalation and results |

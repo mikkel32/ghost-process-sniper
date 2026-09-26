@@ -202,10 +202,6 @@ public struct DevProcessClassifier: Sendable {
         return root
     }
 
-    public func isDevProcess(_ process: ProcessMetrics) -> Bool {
-        confidence(for: process) >= 0.45
-    }
-
     private func containsAny(_ markers: [String], in text: String) -> Bool {
         cContainsAny(text, markers)
     }

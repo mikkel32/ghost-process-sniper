@@ -19,10 +19,11 @@ struct RadarConsoleSidebar: View {
             }
             .padding(10)
 
-            if !session.state.searchText.isEmpty || session.state.familyFilter != .all {
+            if hasQueryFilters {
                 HStack {
-                    Label(session.state.searchText.isEmpty ? session.state.familyFilter.label : "Search active", systemImage: "line.3.horizontal.decrease")
+                    Label(session.state.searchText.isEmpty ? session.state.familyFilter.label : "\u{201c}\(session.state.searchText)\u{201d}", systemImage: "line.3.horizontal.decrease")
                         .lineLimit(1)
+                        .truncationMode(.middle)
                     Spacer(minLength: 4)
                     Button("Clear") { session.clearFamilyFilters() }
                         .buttonStyle(.link)
@@ -67,7 +68,8 @@ struct RadarConsoleSidebar: View {
                                     if hasQueryFilters {
                                         session.focus(.processes)
                                     } else {
-                                        session.browseFamilies(filter: section.kind == .attention ? .attention : section.kind == .quiet ? .quiet : .all)
+                                        // Stable is exactly the complement of Attention.
+                                        session.browseFamilies(filter: section.kind == .attention ? .attention : .quiet)
                                     }
                                 } label: {
                                     HStack {

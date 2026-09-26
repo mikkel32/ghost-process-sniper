@@ -148,9 +148,6 @@ struct RadarSweepView: View {
 
     // FNV-1a: deterministic across launches, unlike Swift's seeded hashing,
     // so a family keeps its bearing on the scope forever.
-    static func stableAngle(for key: String) -> Double {
-        RadarScopeGeometry.angle(for: key)
-    }
 }
 
 /// The beam keeps its local animation time when paused, so resuming does

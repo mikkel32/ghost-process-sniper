@@ -28,19 +28,6 @@ enum RadarStyle {
         }
     }
 
-    static func glass(for level: GhostLevel) -> Glass {
-        switch level {
-        case .quiet:
-            .regular.interactive(true)
-        case .watch:
-            .regular.tint(.orange.opacity(0.13)).interactive(true)
-        case .hot:
-            .regular.tint(.red.opacity(0.18)).interactive(true)
-        case .critical:
-            .regular.tint(.pink.opacity(0.22)).interactive(true)
-        }
-    }
-
     static func icon(for level: GhostLevel) -> String {
         switch level {
         case .quiet: "checkmark.circle"
@@ -257,47 +244,6 @@ struct CompactRadarChip: View {
     }
 }
 
-struct ScoreRingGauge: View {
-    let score: Double
-    var heat: Double? = nil
-    let level: GhostLevel
-    var size: CGFloat = 46
-
-    private var displayedHeat: Double { heat ?? score }
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(.quaternary, lineWidth: size * 0.11)
-            Circle()
-                .trim(from: 0, to: max(0.02, min(1, displayedHeat / 100)))
-                .stroke(
-                    RadarStyle.color(for: level).gradient,
-                    style: StrokeStyle(lineWidth: size * 0.11, lineCap: .round)
-                )
-                .rotationEffect(.degrees(-90))
-            VStack(spacing: -1) {
-                Text("\(Int(displayedHeat.rounded()))")
-                    .font(.system(size: size * 0.3, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(level == .quiet ? AnyShapeStyle(.secondary) : AnyShapeStyle(RadarStyle.color(for: level)))
-                if heat != nil {
-                    Text("HEAT")
-                        .font(.system(size: max(5, size * 0.1), weight: .black))
-                        .tracking(0.3)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .frame(width: size, height: size)
-        .accessibilityLabel(
-            heat == nil
-                ? "Score \(Int(score.rounded())) of 100, \(level.label)"
-                : "Heat \(Int(displayedHeat.rounded())) of 100, \(level.label). Evidence score \(Int(score.rounded()))"
-        )
-    }
-}
-
 struct ScoreCapsuleBadge: View {
     let scoreText: String
     let level: GhostLevel
@@ -453,67 +399,6 @@ struct CompactRadarSection<Content: View>: View {
     }
 }
 
-struct FamilyTriageRow: View {
-    let item: FamilyTriageViewModel
-    var isSelected = false
-
-    var body: some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(RadarStyle.color(for: item.level))
-                .frame(width: 4, height: 42)
-                .shadow(color: RadarStyle.color(for: item.level).opacity(item.level == .quiet ? 0 : 0.45), radius: 4)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Image(systemName: RadarStyle.icon(for: item.level))
-                        .foregroundStyle(RadarStyle.color(for: item.level))
-                        .frame(width: 15)
-                    Text(item.displayName)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Spacer(minLength: 6)
-                    Text(Int(item.score.rounded()).description)
-                        .font(.caption2.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(RadarStyle.color(for: item.level))
-                }
-
-                Text(item.subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                HStack(spacing: 8) {
-                    metric(item.kindText, "tag")
-                    if item.forecastState >= .warming {
-                        metric("\(item.forecastText) \(item.etaText)", "clock.badge.exclamationmark")
-                    }
-                    metric(item.memoryText, "memorychip")
-                    metric(item.cpuText, "cpu")
-                    if item.gpuPercent > 0.5 {
-                        metric("GPU \(item.gpuText)", "display")
-                    }
-                    metric(item.leakText, "chart.line.uptrend.xyaxis")
-                    if item.childCount > 0 {
-                        metric("\(item.childCount)", "point.3.connected.trianglepath.dotted")
-                    }
-                }
-            }
-        }
-        .padding(.vertical, 6)
-        .contentShape(Rectangle())
-        .opacity(isSelected ? 1 : 0.96)
-    }
-
-    private func metric(_ value: String, _ image: String) -> some View {
-        Label(value, systemImage: image)
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .labelStyle(.titleAndIcon)
-    }
-}
-
 struct ScoreComponentView: View {
     let component: GhostScoreComponent
 
@@ -554,36 +439,6 @@ struct ScoreComponentView: View {
         case .rules: "slider.horizontal.3"
         case .system: "gearshape.2"
         }
-    }
-}
-
-struct TrendSparkline: Shape {
-    let points: [Double]
-
-    func path(in rect: CGRect) -> Path {
-        guard points.count >= 2 else {
-            var path = Path()
-            path.move(to: CGPoint(x: rect.minX, y: rect.midY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-            return path
-        }
-
-        let minValue = points.min() ?? 0
-        let maxValue = points.max() ?? 1
-        let span = max(maxValue - minValue, 1)
-        var path = Path()
-
-        for (index, value) in points.enumerated() {
-            let x = rect.minX + rect.width * CGFloat(index) / CGFloat(points.count - 1)
-            let y = rect.maxY - rect.height * CGFloat((value - minValue) / span)
-            if index == 0 {
-                path.move(to: CGPoint(x: x, y: y))
-            } else {
-                path.addLine(to: CGPoint(x: x, y: y))
-            }
-        }
-
-        return path
     }
 }
 

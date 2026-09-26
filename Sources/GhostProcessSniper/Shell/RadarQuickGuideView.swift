@@ -24,13 +24,14 @@ struct RadarQuickGuideView: View {
             }
 
             guideStep("1", title: "See the whole picture", detail: "The overview separates urgent issues from early warnings. Summary cards open the corresponding processes or tools.", icon: "square.grid.2x2")
-            guideStep("2", title: "Find the process behind the numbers", detail: "All Processes shows every tracked family. Search by name, command, or path; sort by memory, CPU, or priority.", icon: "list.bullet.rectangle")
+            guideStep("2", title: "Find the process behind the numbers", detail: "Search reaches every running process by name, helper, command, path, PID, or port — typos included. Narrow with filters like cpu>20, mem>1gb, is:leaking, or -helper; Return opens the best match.", icon: "list.bullet.rectangle")
             guideStep("3", title: "Review before you act", detail: "Open a family to inspect its process tree and history. A stop preview shows the exact targets before you confirm anything.", icon: "checkmark.shield")
 
             Divider()
             HStack(alignment: .top, spacing: 32) {
                 VStack(alignment: .leading, spacing: 12) {
                     shortcut("Find processes", keys: "⌘F")
+                    shortcut("Open best match", keys: "↩")
                     shortcut("Scan now", keys: "⌘R")
                     shortcut("Overview", keys: "⌘1")
                 }

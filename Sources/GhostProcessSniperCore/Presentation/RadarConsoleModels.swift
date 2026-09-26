@@ -1,12 +1,5 @@
 import Foundation
 
-public enum RadarSelection: Hashable, Sendable {
-    case family(String)
-    case incident(UUID)
-    case rules
-    case engine
-}
-
 public enum RadarFilter: String, CaseIterable, Sendable {
     case all
     case attention
@@ -166,53 +159,46 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
         forensicsFreshness = family.forensicsFreshness
     }
 
-    public static func filtered(
-        families: [ProcessFamily],
-        query: String,
-        filter: RadarFilter,
-        sort: RadarSort
-    ) -> [FamilyTriageViewModel] {
-        let loweredQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return families
-            .map { FamilyTriageViewModel(family: $0) }
-            .filter { item in
-                switch filter {
-                case .all:
-                    true
-                case .attention:
-                    item.level >= .watch || item.forecastPriority > 0
-                case .leaking:
-                    item.hasCredibleLeak
-                case .killable:
-                    item.isKillable
-                case .quiet:
-                    item.level == .quiet && item.forecastPriority == 0
-                }
-            }
-            .filter { item in
-                loweredQuery.isEmpty ||
-                    item.displayName.lowercased().contains(loweredQuery) ||
-                    item.subtitle.lowercased().contains(loweredQuery) ||
-                    item.signature.canonicalPath.lowercased().contains(loweredQuery)
-            }
-            .sorted { lhs, rhs in
-                switch sort {
-                case .smart:
-                    if lhs.level != rhs.level { return lhs.level > rhs.level }
-                    if lhs.heat != rhs.heat { return lhs.heat > rhs.heat }
-                    if lhs.forecastPriority != rhs.forecastPriority { return lhs.forecastPriority > rhs.forecastPriority }
-                    if lhs.score != rhs.score { return lhs.score > rhs.score }
-                    if lhs.memoryBytes != rhs.memoryBytes { return lhs.memoryBytes > rhs.memoryBytes }
-                    return lhs.cpuPercent > rhs.cpuPercent
-                case .memory:
-                    return lhs.memoryBytes == rhs.memoryBytes ? lhs.score > rhs.score : lhs.memoryBytes > rhs.memoryBytes
-                case .cpu:
-                    return lhs.cpuPercent == rhs.cpuPercent ? lhs.score > rhs.score : lhs.cpuPercent > rhs.cpuPercent
-                case .leak:
-                    return lhs.leakVelocity == rhs.leakVelocity ? lhs.score > rhs.score : lhs.leakVelocity > rhs.leakVelocity
-                case .name:
-                    return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
-                }
-            }
+    /// Elevated now, or trending toward trouble. Sidebar sections, the
+    /// Attention filter and `is:attention` all use this one definition.
+    public var needsAttention: Bool {
+        level >= .watch || forecastState >= .warming
+    }
+
+    public func matches(_ filter: RadarFilter) -> Bool {
+        switch filter {
+        case .all: true
+        case .attention: needsAttention
+        // Credible leaks only: any positive memory slope is mostly noise.
+        case .leaking: hasCredibleLeak
+        case .killable: isKillable
+        case .quiet: !needsAttention
+        }
+    }
+
+    public static func areInIncreasingOrder(_ lhs: Self, _ rhs: Self, by sort: RadarSort) -> Bool {
+        switch sort {
+        case .smart:
+            if lhs.level != rhs.level { return lhs.level > rhs.level }
+            if lhs.heat != rhs.heat { return lhs.heat > rhs.heat }
+            if lhs.forecastPriority != rhs.forecastPriority { return lhs.forecastPriority > rhs.forecastPriority }
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            if lhs.leakVelocity != rhs.leakVelocity { return lhs.leakVelocity > rhs.leakVelocity }
+            if lhs.memoryBytes != rhs.memoryBytes { return lhs.memoryBytes > rhs.memoryBytes }
+            if lhs.cpuPercent != rhs.cpuPercent { return lhs.cpuPercent > rhs.cpuPercent }
+        case .memory:
+            if lhs.memoryBytes != rhs.memoryBytes { return lhs.memoryBytes > rhs.memoryBytes }
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+        case .cpu:
+            if lhs.cpuPercent != rhs.cpuPercent { return lhs.cpuPercent > rhs.cpuPercent }
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+        case .leak:
+            if lhs.leakVelocity != rhs.leakVelocity { return lhs.leakVelocity > rhs.leakVelocity }
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+        case .name:
+            let comparison = lhs.displayName.localizedStandardCompare(rhs.displayName)
+            if comparison != .orderedSame { return comparison == .orderedAscending }
+        }
+        return lhs.id < rhs.id
     }
 }

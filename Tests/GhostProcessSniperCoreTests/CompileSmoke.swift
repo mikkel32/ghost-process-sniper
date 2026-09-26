@@ -25,5 +25,6 @@ func ghostProcessSniperCoreCompileSmoke() {
     _ = SamplingPlan.balanced()
     _ = ProcessSignature(displayName: "node", canonicalPath: "/usr/local/bin/node", commandLine: "node server.js")
     _ = GhostScoreComponent(kind: .memory, title: "memory", detail: "memory", impact: 1, level: .watch)
-    _ = FamilyTriageViewModel.filtered(families: [], query: "", filter: .all, sort: .smart)
+    _ = RadarConsoleSnapshot.empty.families(query: "", filter: .all, sort: .smart)
+    _ = ProcessSearchEngine.search(ProcessSearchQuery("node cpu>5"), families: [], processes: [])
 }

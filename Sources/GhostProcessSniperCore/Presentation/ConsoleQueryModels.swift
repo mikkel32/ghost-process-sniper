@@ -9,9 +9,13 @@ public struct ConsoleDerivedSnapshotKey: Hashable, Sendable {
     public let incidentFilter: RadarIncidentFilter
     public let incidentSort: RadarIncidentSort
     public let incidentLimit: Int
+    /// Live samples only matter while searching: results then follow every
+    /// refresh, and an idle console does no projection work at all.
+    public let sampleRevision: UInt64
 
-    public init(snapshot: RadarConsoleSnapshot, state: RadarConsoleState) {
-        contentRevision = snapshot.contentRevision
+    public init(_ request: ConsoleProjectionRequest) {
+        let state = request.state
+        contentRevision = request.source.contentRevision
         searchText = state.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         familyFilter = state.familyFilter
         familySort = state.familySort
@@ -19,6 +23,7 @@ public struct ConsoleDerivedSnapshotKey: Hashable, Sendable {
         incidentFilter = state.incidentQuery.filter
         incidentSort = state.incidentQuery.sort
         incidentLimit = state.incidentQuery.limit
+        sampleRevision = searchText.isEmpty ? 0 : request.sampleRevision
     }
 }
 
@@ -26,180 +31,113 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
     public let key: ConsoleDerivedSnapshotKey
     public let familyRows: [FamilyTriageViewModel]
     public let compactFamilyRows: [CompactSidebarRowModel]
+    public let compactSidebarSections: [CompactSidebarSection]
     public let incidentRows: [IncidentRowViewModel]
     public let duplicateRows: [DuplicateClusterViewModel]
-    public let sidebarSections: [ConsoleSidebarSection]
-    public let compactSidebarSections: [CompactSidebarSection]
-    public let selectedPanel: FamilyDetailPanelModel?
-    public let selectedCompactDetail: CompactFamilyDetailModel?
-    public let cacheHitCount: Int
+    public let search: ConsoleSearchResults
 
     public static let empty = ConsoleDerivedSnapshot(
-        key: ConsoleDerivedSnapshotKey(snapshot: .empty, state: .default),
+        key: ConsoleDerivedSnapshotKey(ConsoleProjectionRequest(source: .empty, incidents: [], state: .default)),
         familyRows: [],
         compactFamilyRows: [],
+        compactSidebarSections: [],
         incidentRows: [],
         duplicateRows: [],
-        sidebarSections: [],
-        compactSidebarSections: [],
-        selectedPanel: nil,
-        selectedCompactDetail: nil,
-        cacheHitCount: 0
+        search: .inactive
     )
 
     public init(
         key: ConsoleDerivedSnapshotKey,
         familyRows: [FamilyTriageViewModel],
         compactFamilyRows: [CompactSidebarRowModel],
+        compactSidebarSections: [CompactSidebarSection],
         incidentRows: [IncidentRowViewModel],
         duplicateRows: [DuplicateClusterViewModel],
-        sidebarSections: [ConsoleSidebarSection],
-        compactSidebarSections: [CompactSidebarSection],
-        selectedPanel: FamilyDetailPanelModel?,
-        selectedCompactDetail: CompactFamilyDetailModel?,
-        cacheHitCount: Int
+        search: ConsoleSearchResults
     ) {
         self.key = key
         self.familyRows = familyRows
         self.compactFamilyRows = compactFamilyRows
+        self.compactSidebarSections = compactSidebarSections
         self.incidentRows = incidentRows
         self.duplicateRows = duplicateRows
-        self.sidebarSections = sidebarSections
-        self.compactSidebarSections = compactSidebarSections
-        self.selectedPanel = selectedPanel
-        self.selectedCompactDetail = selectedCompactDetail
-        self.cacheHitCount = cacheHitCount
+        self.search = search
     }
 
+    /// Projection without a live process sample: families are searched by
+    /// their row text, and untracked processes are not available.
     public static func build(
         snapshot: RadarConsoleSnapshot,
         incidents: [RadarIncident],
-        state: RadarConsoleState,
-        cacheHitCount: Int = 0
+        state: RadarConsoleState
     ) -> ConsoleDerivedSnapshot {
-        let key = ConsoleDerivedSnapshotKey(snapshot: snapshot, state: state)
-        let normalizedSearch = state.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let usesDefaultFamilyProjection = normalizedSearch.isEmpty && state.familyFilter == .all && state.familySort == .smart
-        let familyRows = usesDefaultFamilyProjection
-            ? snapshot.families
-            : snapshot.families(query: normalizedSearch, filter: state.familyFilter, sort: state.familySort)
+        build(ConsoleProjectionRequest(source: snapshot, incidents: incidents, state: state), index: nil)
+    }
+
+    static func build(_ request: ConsoleProjectionRequest, index: ProcessSearchIndex?) -> ConsoleDerivedSnapshot {
+        let snapshot = request.source
+        let state = request.state
+        let query = ProcessSearchQuery(state.searchText)
+        let usesDefaultFamilyProjection = query.isEmpty && state.familyFilter == .all && state.familySort == .smart
+        let projection = usesDefaultFamilyProjection
+            ? (rows: snapshot.families, results: ConsoleSearchResults.inactive)
+            : ConsoleSearchProjection.run(
+                rows: snapshot.families,
+                query: query,
+                filter: state.familyFilter,
+                sort: state.familySort,
+                index: index
+            )
         let compactRows = usesDefaultFamilyProjection
             ? snapshot.compact.allRows
-            : familyRows.map(CompactSidebarRowModel.init(item:))
-        let query = state.searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let duplicateRows = snapshot.duplicateRows.filter { row in
-            query.isEmpty ||
-                row.title.lowercased().contains(query) ||
-                row.subtitle.lowercased().contains(query) ||
-                row.kindText.lowercased().contains(query) ||
-                row.reasonText.lowercased().contains(query)
-        }
-        let attentionRows = familyRows.filter { $0.level >= .watch || $0.forecastState >= .warming }
-        let attentionIDs = Set(attentionRows.map(\.id))
-        let stableRows = familyRows.filter { !attentionIDs.contains($0.id) }
-        let sidebarSections = [
-            ConsoleSidebarSection(kind: .attention, title: "Attention", count: attentionRows.count, families: attentionRows),
-            ConsoleSidebarSection(kind: .watched, title: "Stable", count: stableRows.count, families: stableRows),
-            ConsoleSidebarSection(kind: .tools, title: "Tools", count: 4, families: [])
-        ]
+            : projection.rows.map(CompactSidebarRowModel.init(item:))
+        let duplicateRows = query.terms.isEmpty
+            ? snapshot.duplicateRows
+            : snapshot.duplicateRows.filter { query.matchesText([$0.title, $0.subtitle, $0.kindText, $0.reasonText]) }
         return ConsoleDerivedSnapshot(
-            key: key,
-            familyRows: familyRows,
+            key: ConsoleDerivedSnapshotKey(request),
+            familyRows: projection.rows,
             compactFamilyRows: compactRows,
+            compactSidebarSections: CompactConsoleSnapshot.sidebarSections(from: compactRows),
             incidentRows: state.incidentQuery
-                .apply(to: incidents)
+                .apply(to: request.incidents)
                 .map(IncidentRowViewModel.init(incident:)),
             duplicateRows: duplicateRows,
-            sidebarSections: sidebarSections,
-            compactSidebarSections: CompactConsoleSnapshot.sidebarSections(from: compactRows),
-            selectedPanel: state.focusedSelection.familyKey.flatMap { snapshot.detailPanel(for: $0) },
-            selectedCompactDetail: state.focusedSelection.familyKey.flatMap { snapshot.compact.detailModels[$0] },
-            cacheHitCount: cacheHitCount
-        )
-    }
-
-    public func withCacheHitCount(_ count: Int) -> ConsoleDerivedSnapshot {
-        ConsoleDerivedSnapshot(
-            key: key,
-            familyRows: familyRows,
-            compactFamilyRows: compactFamilyRows,
-            incidentRows: incidentRows,
-            duplicateRows: duplicateRows,
-            sidebarSections: sidebarSections,
-            compactSidebarSections: compactSidebarSections,
-            selectedPanel: selectedPanel,
-            selectedCompactDetail: selectedCompactDetail,
-            cacheHitCount: count
-        )
-    }
-
-    public func selecting(
-        _ selection: RadarFocusedSelection,
-        from source: RadarConsoleSnapshot,
-        cacheHitCount: Int? = nil
-    ) -> ConsoleDerivedSnapshot {
-        ConsoleDerivedSnapshot(
-            key: key,
-            familyRows: familyRows,
-            compactFamilyRows: compactFamilyRows,
-            incidentRows: incidentRows,
-            duplicateRows: duplicateRows,
-            sidebarSections: sidebarSections,
-            compactSidebarSections: compactSidebarSections,
-            selectedPanel: selection.familyKey.flatMap { source.detailPanel(for: $0) },
-            selectedCompactDetail: selection.familyKey.flatMap { source.compact.detailModels[$0] },
-            cacheHitCount: cacheHitCount ?? self.cacheHitCount
+            search: projection.results
         )
     }
 }
 
-public struct ConsoleDerivedSnapshotCache: Equatable, Sendable {
+/// Reuses the last projection until its inputs change. Selection is not an
+/// input, so moving between families never re-runs a search.
+public struct ConsoleDerivedSnapshotCache: Sendable {
     public private(set) var snapshot: ConsoleDerivedSnapshot?
-    public private(set) var hitCount: Int
-    public private(set) var missCount: Int
+    public private(set) var hitCount = 0
+    public private(set) var missCount = 0
+    private var searchIndex = ProcessSearchIndex()
 
-    public init(
-        snapshot: ConsoleDerivedSnapshot? = nil,
-        hitCount: Int = 0,
-        missCount: Int = 0
-    ) {
-        self.snapshot = snapshot
-        self.hitCount = hitCount
-        self.missCount = missCount
-    }
+    public init() {}
 
-    public mutating func update(
-        snapshot source: RadarConsoleSnapshot,
-        incidents: [RadarIncident],
-        state: RadarConsoleState
-    ) -> ConsoleDerivedSnapshot {
-        let key = ConsoleDerivedSnapshotKey(snapshot: source, state: state)
+    public mutating func update(_ request: ConsoleProjectionRequest) -> ConsoleDerivedSnapshot {
+        let key = ConsoleDerivedSnapshotKey(request)
         if let snapshot, snapshot.key == key {
             hitCount += 1
-            let selected = snapshot.selecting(state.focusedSelection, from: source, cacheHitCount: hitCount)
-            self.snapshot = selected
-            return selected
+            return snapshot
         }
         missCount += 1
-        let built = ConsoleDerivedSnapshot.build(
-            snapshot: source,
-            incidents: incidents,
-            state: state,
-            cacheHitCount: hitCount
-        )
+        var index: ProcessSearchIndex?
+        if !key.searchText.isEmpty {
+            searchIndex.update(
+                rows: request.source.families,
+                families: request.families,
+                processes: request.processes,
+                sampleRevision: request.sampleRevision,
+                contentRevision: request.source.contentRevision
+            )
+            index = searchIndex
+        }
+        let built = ConsoleDerivedSnapshot.build(request, index: index)
         snapshot = built
         return built
     }
-
-    public func cached(
-        snapshot source: RadarConsoleSnapshot,
-        state: RadarConsoleState
-    ) -> ConsoleDerivedSnapshot? {
-        let key = ConsoleDerivedSnapshotKey(snapshot: source, state: state)
-        guard snapshot?.key == key else {
-            return nil
-        }
-        return snapshot?.selecting(state.focusedSelection, from: source)
-    }
 }
-

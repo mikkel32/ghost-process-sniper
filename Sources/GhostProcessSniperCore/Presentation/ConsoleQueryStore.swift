@@ -5,11 +5,27 @@ public struct ConsoleProjectionRequest: Sendable {
     public let source: RadarConsoleSnapshot
     public let incidents: [RadarIncident]
     public let state: RadarConsoleState
+    /// Tracked families with their helpers, so a search reaches helper names
+    /// and command lines, not only what the row displays.
+    public let families: [ProcessFamily]
+    /// Every process in the latest sample, tracked or not.
+    public let processes: [ProcessMetrics]
+    public let sampleRevision: UInt64
 
-    public init(source: RadarConsoleSnapshot, incidents: [RadarIncident], state: RadarConsoleState) {
+    public init(
+        source: RadarConsoleSnapshot,
+        incidents: [RadarIncident],
+        state: RadarConsoleState,
+        families: [ProcessFamily] = [],
+        processes: [ProcessMetrics] = [],
+        sampleRevision: UInt64 = 0
+    ) {
         self.source = source
         self.incidents = incidents
         self.state = state
+        self.families = families
+        self.processes = processes
+        self.sampleRevision = sampleRevision
     }
 }
 
@@ -26,7 +42,7 @@ public actor ConsoleProjectionWorker: ConsoleProjecting {
 
     public func project(_ request: ConsoleProjectionRequest) throws -> ConsoleDerivedSnapshot {
         try Task.checkCancellation()
-        let result = cache.update(snapshot: request.source, incidents: request.incidents, state: request.state)
+        let result = cache.update(request)
         try Task.checkCancellation()
         return result
     }

@@ -66,8 +66,10 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     private func configureApplicationMenu() {
         let mainMenu = NSMenu()
         let appItem = NSMenuItem()
+        let editItem = NSMenuItem()
         let radarItem = NSMenuItem()
         mainMenu.addItem(appItem)
+        mainMenu.addItem(editItem)
         mainMenu.addItem(radarItem)
 
         let appMenu = NSMenu(title: "Ghost Process Sniper")
@@ -82,6 +84,18 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Ghost Process Sniper", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
+        // Text fields only receive ⌘X/⌘C/⌘V/⌘A/⌘Z through these menu items;
+        // without them the search field could not even paste a process name.
+        let editMenu = NSMenu(title: "Edit")
+        editItem.submenu = editMenu
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z").keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
         let radarMenu = NSMenu(title: "Radar")
         radarItem.submenu = radarMenu
         addMenuItem("Open Console", key: "o", modifiers: [.command], action: #selector(openConsoleCommand), to: radarMenu)
@@ -92,6 +106,7 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         addMenuItem("Toggle Inspector", key: "i", modifiers: [.command, .option], action: #selector(toggleInspectorCommand), to: radarMenu)
         radarMenu.addItem(.separator())
         addMenuItem("Overview", key: "1", modifiers: [.command], action: #selector(showOverviewCommand), to: radarMenu)
+        addMenuItem("All Processes", key: "6", modifiers: [.command], action: #selector(showProcessesCommand), to: radarMenu)
         addMenuItem("Duplicates", key: "2", modifiers: [.command], action: #selector(showDuplicatesCommand), to: radarMenu)
         addMenuItem("Incidents", key: "3", modifiers: [.command], action: #selector(showIncidentsCommand), to: radarMenu)
         addMenuItem("Rules", key: "4", modifiers: [.command], action: #selector(showRulesCommand), to: radarMenu)
@@ -259,6 +274,11 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     @objc private func showOverviewCommand() {
         openConsole()
         consoleController.focusSection(.overview)
+    }
+
+    @objc private func showProcessesCommand() {
+        openConsole()
+        consoleController.focusSection(.processes)
     }
 
     @objc private func showDuplicatesCommand() {

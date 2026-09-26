@@ -780,10 +780,6 @@ public final class ProcessKiller: @unchecked Sendable {
         )
     }
 
-    public func skipForceKill(plan: KillPlan, forceKillDelay: TimeInterval = 2) async -> KillReport {
-        await kill(plan: plan, forceKillDelay: forceKillDelay, skipForce: true)
-    }
-
     private struct Preflight {
         let preview: KillPreview
         let targets: [KillTarget]
