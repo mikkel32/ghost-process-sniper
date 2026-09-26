@@ -4,6 +4,8 @@ import GhostProcessSniperCore
 /// Stopping processes: previews, the in-place refresh, confirming, and the
 /// follow-ups a finished stop offers.
 extension RadarConsoleSession {
+    /// A precision stop of one `member` is audited but not learned: how one
+    /// worker stops says nothing about how the family does.
     /// - Parameter redirectedFrom: the family the user asked to stop, when
     ///   `family` is the supervisor that keeps restarting it.
     func prepareKill(_ family: ProcessFamily, member: ProcessIdentity? = nil, redirectedFrom: String? = nil) {
@@ -16,7 +18,7 @@ extension RadarConsoleSession {
                 showToast("This process cannot be targeted", systemImage: "lock")
                 return
             }
-            await presentPreview(of: plan, for: family, preparing: stop, member: member,
+            await presentPreview(of: plan, for: family, preparing: stop, member: member, learnsFromOutcome: member == nil,
                                  redirectedFrom: redirectedFrom, returnSelection: returnTo)
         }
     }
@@ -83,9 +85,9 @@ extension RadarConsoleSession {
 
     /// Previews an alternative the advisor proposed, such as the supervisor
     /// that restarts the family. It replaces any open preview, and the stop
-    /// is learned by the family that owns the new root. A root no family
-    /// owns, like an unlisted pm2 daemon, is only audited: its stop says
-    /// nothing about how `family` stops.
+    /// is learned by the family whose root it is. A root no family owns,
+    /// like an unlisted pm2 daemon, or one member of a family, is only
+    /// audited: its stop says nothing about how that family stops.
     func prepareKill(_ family: ProcessFamily, plan: KillPlan) {
         guard preparingStop == nil else { return }
         let stop = beginPreparing(family.displayName)
@@ -108,7 +110,8 @@ extension RadarConsoleSession {
         let owner = monitor.families.first { $0.ownedIdentities.contains(plan.rootIdentity) }
         let redirectedFrom = family.ownedIdentities.contains(plan.rootIdentity) ? nil : family.displayName
         await presentPreview(of: plan, for: owner ?? family, preparing: stop, fixedPlan: true,
-                             learnsFromOutcome: owner != nil, redirectedFrom: redirectedFrom,
+                             learnsFromOutcome: owner.map { $0.root.identity == plan.rootIdentity } ?? false,
+                             redirectedFrom: redirectedFrom,
                              returnSelection: returnSelection)
     }
 
