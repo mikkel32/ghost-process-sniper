@@ -48,13 +48,13 @@ struct OverviewVerdictHero: View {
                         .background(.quaternary, in: Capsule())
                 }
 
-                Text(Self.headline(for: brief, hasFamilies: hasFamilies))
+                Text(Self.headline(for: brief, hasFamilies: hasFamilies, hasSampled: compact.hasSampled))
                     .font(.system(.title2, design: .rounded, weight: .bold))
                     .fixedSize(horizontal: false, vertical: true)
                     .contentTransition(.opacity)
                     .accessibilityAddTraits(.isHeader)
 
-                if !hasFamilies {
+                if !compact.hasSampled {
                     RadarWaitLabel("Scanning your processes…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -105,8 +105,9 @@ struct OverviewVerdictHero: View {
         .onChange(of: brief.familyKey) { _, _ in evidenceExpanded = false }
     }
 
-    static func headline(for brief: RadarIntelligenceBrief, hasFamilies: Bool) -> String {
-        if brief.familyKey != nil { return brief.title }
+    /// After a sample, no families means nothing in scope; the brief says so.
+    static func headline(for brief: RadarIntelligenceBrief, hasFamilies: Bool, hasSampled: Bool) -> String {
+        if brief.familyKey != nil || (hasSampled && !hasFamilies) { return brief.title }
         return hasFamilies ? "Your Mac is running smoothly" : "Learning what is normal"
     }
 }
