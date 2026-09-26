@@ -384,7 +384,7 @@ public final class ProcessMonitor {
 
     public func killPlan(for family: ProcessFamily) async -> KillPlan {
         await postKillTask?.value
-        let workload = KillWorkloadProfile(family: family, sample: sampledProcesses)
+        let workload = KillWorkloadProfile(root: family.root, sampleIndex: Dictionary(grouping: sampledProcesses, by: \.parentPID), family: family)
         guard let store else {
             return family.killPlan(workload: workload)
         }

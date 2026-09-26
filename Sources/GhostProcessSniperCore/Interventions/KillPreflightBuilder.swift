@@ -51,7 +51,9 @@ struct KillPreflightBuilder: Sendable {
                 seen.insert(member.process.identity)
             }
             for member in slice.lockedMembers {
-                locked.append(KillTarget(process: member.process, depth: member.depth, state: .locked, reason: "Owned by \(member.process.ownerName)", rootIdentity: plan.rootIdentity))
+                let reason = member.lockedUnder.map { "Runs under \($0.ownerName)-owned \($0.name) (PID \($0.pid))" }
+                    ?? "Owned by \(member.process.ownerName)"
+                locked.append(KillTarget(process: member.process, depth: member.depth, state: .locked, reason: reason, rootIdentity: plan.rootIdentity))
             }
             classifyPlanIdentities(
                 plan,

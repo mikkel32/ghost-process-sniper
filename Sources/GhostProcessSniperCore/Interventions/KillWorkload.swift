@@ -11,6 +11,11 @@ public struct KillWorkloadProcess: Equatable, Sendable {
     public let commandLine: String
     public let listeningPorts: [Int]
     public let isRoot: Bool
+    /// Pins the radar's numbers to this exact process, not a PID reused since.
+    public let identity: ProcessIdentity?
+    /// CPU over the last radar scan; the kill snapshot cannot measure it.
+    public let cpuPercent: Double
+    public let memoryBytes: UInt64
 
     public init(
         pid: Int32,
@@ -19,7 +24,10 @@ public struct KillWorkloadProcess: Equatable, Sendable {
         executablePath: String,
         commandLine: String,
         listeningPorts: [Int] = [],
-        isRoot: Bool = false
+        isRoot: Bool = false,
+        identity: ProcessIdentity? = nil,
+        cpuPercent: Double = 0,
+        memoryBytes: UInt64 = 0
     ) {
         self.pid = pid
         self.parentPID = parentPID
@@ -28,6 +36,9 @@ public struct KillWorkloadProcess: Equatable, Sendable {
         self.commandLine = commandLine
         self.listeningPorts = listeningPorts
         self.isRoot = isRoot
+        self.identity = identity
+        self.cpuPercent = cpuPercent
+        self.memoryBytes = memoryBytes
     }
 }
 
@@ -78,7 +89,10 @@ public struct KillWorkloadProfile: Equatable, Sendable {
             executablePath: process.executablePath,
             commandLine: process.commandLine,
             listeningPorts: process.listeningPorts,
-            isRoot: true
+            isRoot: true,
+            identity: process.identity,
+            cpuPercent: process.cpuPercent,
+            memoryBytes: process.memoryBytes
         )
         let byPID = Dictionary(processes.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
         var chain: [KillWorkloadAncestor] = []

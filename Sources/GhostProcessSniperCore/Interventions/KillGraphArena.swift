@@ -65,10 +65,14 @@ public struct KillGraphSliceMember: Identifiable, Equatable, Sendable {
 
     public let process: KillProcessLite
     public let depth: Int
+    /// The nearest process above it owned by someone else; the stop does
+    /// not reach through it.
+    public let lockedUnder: KillProcessLite?
 
-    public init(process: KillProcessLite, depth: Int) {
+    public init(process: KillProcessLite, depth: Int, lockedUnder: KillProcessLite? = nil) {
         self.process = process
         self.depth = depth
+        self.lockedUnder = lockedUnder
     }
 }
 
@@ -298,12 +302,20 @@ public struct KillGraphArena: Equatable, Sendable {
         targetMembers.reserveCapacity(scopedMembers.count)
         lockedMembers.reserveCapacity(scopedMembers.count / 4)
 
+        // Everything below a process owned by someone else is theirs too:
+        // the shells under Terminal's root-owned login are not Terminal's.
+        var foreignAbove: [Int32: KillProcessLite] = [:]
         for member in scopedMembers {
-            treeIdentities.insert(member.process.identity)
-            if member.process.userID == currentUserID {
+            let process = member.process
+            treeIdentities.insert(process.identity)
+            let above = member.depth == 0 ? nil : foreignAbove[process.parentPID]
+            if let blocker = above ?? (process.userID == currentUserID ? nil : process) {
+                foreignAbove[process.pid] = blocker
+            }
+            if process.userID == currentUserID, above == nil {
                 targetMembers.append(member)
             } else {
-                lockedMembers.append(member)
+                lockedMembers.append(KillGraphSliceMember(process: process, depth: member.depth, lockedUnder: above))
             }
         }
 
