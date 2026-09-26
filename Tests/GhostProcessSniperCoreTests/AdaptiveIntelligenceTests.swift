@@ -363,7 +363,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
         XCTAssertEqual(legacy.headline, unlearned.headline)
 
         let trustedBaseline = FamilyBaseline(
-            signature: family.signature, sampleCount: 4, meanMemoryBytes: Double(128 * mebibyte),
+            signature: family.signature, sampleCount: 40, meanMemoryBytes: Double(128 * mebibyte),
             peakMemoryBytes: 128 * mebibyte, meanCPUPercent: 4, peakCPUPercent: 4,
             meanLeakVelocityMegabytesPerMinute: 0, incidentCount: 0,
             firstSeenAt: now, lastSeenAt: now

@@ -26,7 +26,11 @@ enum RadarStoreSchema {
             incident_count INTEGER NOT NULL,
             first_seen_at REAL NOT NULL,
             last_seen_at REAL NOT NULL,
-            measurement_version INTEGER NOT NULL DEFAULT 0
+            measurement_version INTEGER NOT NULL DEFAULT 0,
+            memory_variance REAL NOT NULL DEFAULT 0,
+            cpu_variance REAL NOT NULL DEFAULT 0,
+            observed_seconds REAL NOT NULL DEFAULT 0,
+            session_count INTEGER NOT NULL DEFAULT 1
         )
         """,
         """

@@ -872,7 +872,7 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
     )
     let baseline = FamilyBaseline(
         signature: recurringBase.signature,
-        sampleCount: 20,
+        sampleCount: 40,
         meanMemoryBytes: 160 * 1_048_576,
         peakMemoryBytes: 220 * 1_048_576,
         meanCPUPercent: 2,
@@ -1999,7 +1999,7 @@ private func radarIntelligenceEscalatesBaselineAnomalies() throws {
     let family = hotFamily(pid: 520, memory: 420_000_000, cpu: 15, score: GhostScore(value: 32, level: .watch, reasons: ["dev process"]))
     let baseline = FamilyBaseline(
         signature: family.signature,
-        sampleCount: 8,
+        sampleCount: 40,
         meanMemoryBytes: 100_000_000,
         peakMemoryBytes: 120_000_000,
         meanCPUPercent: 5,

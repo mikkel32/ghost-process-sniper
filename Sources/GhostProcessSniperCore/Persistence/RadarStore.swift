@@ -413,23 +413,7 @@ public actor RadarStore {
                 throw RadarStoreError.sqlite(text)
             }
         }
-        var columns: OpaquePointer?
-        guard sqlite3_prepare_v2(handle, "PRAGMA table_info(baselines)", -1, &columns, nil) == SQLITE_OK else {
-            throw RadarStoreError.sqlite("Cannot inspect baseline schema")
-        }
-        var hasMeasurementVersion = false
-        while sqlite3_step(columns) == SQLITE_ROW {
-            if let name = sqlite3_column_text(columns, 1), String(cString: name) == "measurement_version" {
-                hasMeasurementVersion = true
-            }
-        }
-        sqlite3_finalize(columns)
-        if !hasMeasurementVersion {
-            let sql = "ALTER TABLE baselines ADD COLUMN measurement_version INTEGER NOT NULL DEFAULT 0"
-            guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else {
-                throw RadarStoreError.sqlite("Cannot upgrade baseline measurement provenance")
-            }
-        }
+        try RadarStoreBaselineColumns.upgrade(handle)
     }
 
     public func pruneIfNeeded(now: Date) throws {
@@ -483,7 +467,8 @@ public actor RadarStore {
                 """
                 SELECT signature_id, display_name, canonical_path, command_fingerprint, sample_count,
                        mean_memory_bytes, peak_memory_bytes, mean_cpu_percent, peak_cpu_percent,
-                       mean_leak_velocity, incident_count, first_seen_at, last_seen_at, measurement_version
+                       mean_leak_velocity, incident_count, first_seen_at, last_seen_at, measurement_version,
+                       memory_variance, cpu_variance, observed_seconds, session_count
                 FROM baselines
                 WHERE signature_id IN (\(placeholders(count: chunk.count)))
                 """
@@ -615,8 +600,9 @@ public actor RadarStore {
             """
             INSERT INTO baselines(signature_id, display_name, canonical_path, command_fingerprint, sample_count,
                                   mean_memory_bytes, peak_memory_bytes, mean_cpu_percent, peak_cpu_percent,
-                                  mean_leak_velocity, incident_count, first_seen_at, last_seen_at, measurement_version)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  mean_leak_velocity, incident_count, first_seen_at, last_seen_at, measurement_version,
+                                  memory_variance, cpu_variance, observed_seconds, session_count)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(signature_id) DO UPDATE SET
                 display_name = excluded.display_name,
                 canonical_path = excluded.canonical_path,
@@ -630,7 +616,11 @@ public actor RadarStore {
                 incident_count = excluded.incident_count,
                 last_seen_at = excluded.last_seen_at,
                 first_seen_at = excluded.first_seen_at,
-                measurement_version = excluded.measurement_version
+                measurement_version = excluded.measurement_version,
+                memory_variance = excluded.memory_variance,
+                cpu_variance = excluded.cpu_variance,
+                observed_seconds = excluded.observed_seconds,
+                session_count = excluded.session_count
             """,
             .text(baseline.signature.id),
             .text(baseline.signature.displayName),
@@ -645,7 +635,11 @@ public actor RadarStore {
             .int64(Int64(baseline.incidentCount)),
             .double(baseline.firstSeenAt.timeIntervalSince1970),
             .double(baseline.lastSeenAt.timeIntervalSince1970),
-            .int64(Int64(baseline.measurementVersion ?? 0))
+            .int64(Int64(baseline.measurementVersion ?? 0)),
+            .double(baseline.memoryVariance),
+            .double(baseline.cpuVariance),
+            .double(baseline.observedSeconds),
+            .int64(Int64(baseline.sessionCount))
         )
         baselineCache[baseline.signature.id] = baseline
         knownMissingBaselines.remove(baseline.signature.id)
@@ -866,7 +860,11 @@ public actor RadarStore {
             incidentCount: Int(sqlite3_column_int64(statement, 10)),
             firstSeenAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 11)),
             lastSeenAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 12)),
-            measurementVersion: Int(sqlite3_column_int64(statement, 13))
+            measurementVersion: Int(sqlite3_column_int64(statement, 13)),
+            memoryVariance: sqlite3_column_double(statement, 14),
+            cpuVariance: sqlite3_column_double(statement, 15),
+            observedSeconds: sqlite3_column_double(statement, 16),
+            sessionCount: Int(sqlite3_column_int64(statement, 17))
         )
     }
 

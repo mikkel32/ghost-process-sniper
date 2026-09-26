@@ -325,13 +325,16 @@ public struct RadarIntelligence: Sendable {
         }
 
         let memoryMultiple = baseline.memoryMultiple(for: family.totalPhysicalFootprintBytes)
-        let cpuMultiple = baseline.cpuMultiple(for: family.totalCPUPercent)
+        // Unusual means far outside the learned spread as well as well above
+        // the mean: a family that swings between idle and indexing is not
+        // anomalous at 2x.
+        let memoryIsUnusual = baseline.memoryZScore(for: family.totalPhysicalFootprintBytes) >= 3 && memoryMultiple >= 1.3
         let leakRatio = family.trend.credibleMemoryVelocity / max(settings.leakVelocityMegabytesPerMinute, 1)
         var reasons = family.score.reasons
         var value = family.score.value
         var components = family.score.components
 
-        if memoryMultiple >= 2, family.totalPhysicalFootprintBytes > 256 * 1_048_576 {
+        if memoryIsUnusual, memoryMultiple >= 2, family.totalPhysicalFootprintBytes > 256 * 1_048_576 {
             let impact = min(18, memoryMultiple * 6)
             let reason = String(format: "%.1fx usual memory", memoryMultiple)
             value += impact
@@ -343,7 +346,7 @@ public struct RadarIntelligence: Sendable {
                 impact: impact,
                 level: memoryMultiple >= 3 ? .critical : .hot
             ))
-        } else if memoryMultiple >= 1.45, family.totalPhysicalFootprintBytes > 512 * 1_048_576 {
+        } else if memoryIsUnusual, family.totalPhysicalFootprintBytes > 512 * 1_048_576 {
             let impact = min(10, memoryMultiple * 4)
             let reason = String(format: "%.1fx baseline memory", memoryMultiple)
             value += impact
@@ -357,17 +360,16 @@ public struct RadarIntelligence: Sendable {
             ))
         }
 
-        if cpuMultiple >= 3, family.totalCPUPercent > 20 {
-            let impact = min(12, cpuMultiple * 3)
-            let reason = String(format: "%.1fx usual CPU", cpuMultiple)
+        if let cpuAnomaly = BaselineCPUAnomaly(baseline: baseline, cpuPercent: family.totalCPUPercent) {
+            let impact = min(12, cpuAnomaly.multiple * 3)
             value += impact
-            reasons.insert(reason, at: 0)
+            reasons.insert(cpuAnomaly.reason, at: 0)
             components.append(GhostScoreComponent(
                 kind: .baseline,
-                title: reason,
+                title: cpuAnomaly.reason,
                 detail: "CPU use is well above this family's learned normal",
                 impact: impact,
-                level: cpuMultiple >= 5 ? .hot : .watch
+                level: cpuAnomaly.multiple >= 5 ? .hot : .watch
             ))
         }
 

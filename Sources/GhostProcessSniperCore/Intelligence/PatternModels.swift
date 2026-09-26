@@ -145,7 +145,12 @@ public struct FamilyVerdict: Equatable, Sendable {
         let forecast = family.forecast
         let velocity = family.trend.credibleMemoryVelocity
         let trustedBaseline = family.baseline.flatMap { $0.isMeasurementTrusted ? $0 : nil }
-        let baselineMultiple = trustedBaseline?.memoryMultiple(for: family.totalPhysicalFootprintBytes) ?? 1
+        // Above-normal claims need the footprint outside the learned spread too.
+        let baselineMultiple = trustedBaseline.map { baseline in
+            baseline.memoryZScore(for: family.totalPhysicalFootprintBytes) >= 3
+                ? baseline.memoryMultiple(for: family.totalPhysicalFootprintBytes)
+                : 1
+        } ?? 1
         let effectiveForecastState: ForecastState
         if family.score.level >= .critical {
             effectiveForecastState = .critical

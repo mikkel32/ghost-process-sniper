@@ -123,8 +123,39 @@ final class PrecisionTelemetryTests: XCTestCase {
         try await store.persist(model: model, settings: .smart)
         let reopened = try RadarStore(url: url)
         let loaded = try await reopened.context(for: [f], settings: .smart, now: now)
-        XCTAssertEqual(loaded.baselines[f.signature.id]?.measurementVersion, 1)
+        XCTAssertEqual(loaded.baselines[f.signature.id]?.measurementVersion, FamilyBaseline.currentMeasurementVersion)
         XCTAssertEqual(loaded.baselines[f.signature.id]?.sampleCount, 1)
+        XCTAssertEqual(loaded.baselines[f.signature.id]?.observedSeconds, 0)
+        XCTAssertEqual(loaded.baselines[f.signature.id]?.sessionCount, 1)
+    }
+
+    func testBaselineVarianceAndObservedTimeRoundTrip() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("radar-baseline-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try RadarStore(url: url)
+        var expected: FamilyBaseline?
+        var last = family(root: process())
+        for step in 0..<3 {
+            let date = now.addingTimeInterval(Double(step) * 10)
+            last = family(root: process(bytes: UInt64(100 + step * 20) * mib, cpu: Double(step * 4), date: date))
+            expected = FamilyBaselineLearner().updated(existing: expected, family: last, now: date)
+            let model = RadarModel(families: [last], summary: .empty, incidents: [], rules: [], health: .starting, generatedAt: date)
+            try await store.persist(model: model, settings: .smart)
+        }
+        let learned = try XCTUnwrap(expected)
+        XCTAssertGreaterThan(learned.memoryVariance, 0)
+        XCTAssertGreaterThan(learned.cpuVariance, 0)
+        XCTAssertEqual(learned.observedSeconds, 20)
+
+        let reopened = try RadarStore(url: url)
+        let context = try await reopened.context(for: [last], settings: .smart, now: now)
+        let loaded = try XCTUnwrap(context.baselines[last.signature.id])
+        XCTAssertEqual(loaded.measurementVersion, FamilyBaseline.currentMeasurementVersion)
+        XCTAssertEqual(loaded.sampleCount, learned.sampleCount)
+        XCTAssertEqual(loaded.memoryVariance, learned.memoryVariance, accuracy: 1)
+        XCTAssertEqual(loaded.cpuVariance, learned.cpuVariance, accuracy: 0.001)
+        XCTAssertEqual(loaded.observedSeconds, learned.observedSeconds, accuracy: 0.001)
+        XCTAssertEqual(loaded.sessionCount, learned.sessionCount)
     }
 
     func testRecurringHistoryAloneDoesNotMakeQuietActivityUrgent() {

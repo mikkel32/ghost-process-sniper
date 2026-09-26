@@ -61,6 +61,8 @@ public struct FamilyScoringCache: Sendable {
             hasher.combine(baseline.measurementVersion)
             hasher.combine(baseline.sampleCount)
             hasher.combine(Int(baseline.meanMemoryBytes.rounded()))
+            hasher.combine(Int(baseline.memoryStandardDeviation / 16_777_216))
+            hasher.combine(baseline.observedSeconds >= 1_200)
             hasher.combine(baseline.incidentCount)
         }
         hasher.combine(context.recentIncidentCounts[family.signature.id, default: 0])

@@ -215,8 +215,7 @@ public enum GhostHeatModel {
 
         if let baseline, baseline.isMeasurementTrusted {
             let memoryMultiple = baseline.memoryMultiple(for: family.totalPhysicalFootprintBytes)
-            let cpuMultiple = baseline.cpuMultiple(for: family.totalCPUPercent)
-            if memoryMultiple >= 1.6 {
+            if baseline.memoryZScore(for: family.totalPhysicalFootprintBytes) >= 3, memoryMultiple >= 1.3 {
                 heat += min(14, (memoryMultiple - 1) * 7)
                 evidence.append(String(format: "Memory is %.1fx this family's learned normal", memoryMultiple))
                 confidence += 0.08
@@ -226,9 +225,9 @@ public enum GhostHeatModel {
                     confidence = max(0.5, confidence)
                 }
             }
-            if cpuMultiple >= 2.5, family.totalCPUPercent > 20 {
-                heat += min(10, cpuMultiple * 2)
-                evidence.append(String(format: "CPU is %.1fx this family's learned normal", cpuMultiple))
+            if let cpuAnomaly = BaselineCPUAnomaly(baseline: baseline, cpuPercent: family.totalCPUPercent) {
+                heat += min(10, cpuAnomaly.multiple * 2)
+                evidence.append(cpuAnomaly.evidence)
                 confidence += 0.05
             }
         }
@@ -301,5 +300,31 @@ public enum GhostHeatModel {
             sustainedSignalCount: base.sustainedSignalCount,
             corroborationCount: contextVotes
         )
+    }
+}
+
+/// CPU well above a family's learned normal: at least 3x the usual level, 20
+/// points above the top of its usual range, and busy in absolute terms. A
+/// normally idle family qualifies too; its ratio is against a 2% floor.
+struct BaselineCPUAnomaly {
+    let multiple: Double
+    let reason: String
+    let evidence: String
+
+    init?(baseline: FamilyBaseline, cpuPercent: Double) {
+        let multiple = baseline.cpuMultiple(for: cpuPercent)
+        guard baseline.isMeasurementTrusted, multiple >= 3, baseline.cpuExcess(for: cpuPercent) >= 20, cpuPercent > 20 else {
+            return nil
+        }
+        self.multiple = multiple
+        // "200x usual CPU" says less than the two numbers it divides.
+        if baseline.meanCPUPercent < 5 {
+            let comparison = String(format: "%.0f%% CPU vs about %.1f%% normally", cpuPercent, baseline.meanCPUPercent)
+            reason = comparison
+            evidence = "CPU is at " + comparison
+        } else {
+            reason = String(format: "%.1fx usual CPU", multiple)
+            evidence = String(format: "CPU is %.1fx this family's learned normal", multiple)
+        }
     }
 }
