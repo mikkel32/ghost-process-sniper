@@ -3160,7 +3160,7 @@ private func processKillerHonorsLiveSkipForceControl() async throws {
         signaler: signaler,
         currentUserID: 501,
         sleeper: { _ in
-            await control.requestSkipForce()
+            await control.stopWaiting()
         }
     )
 

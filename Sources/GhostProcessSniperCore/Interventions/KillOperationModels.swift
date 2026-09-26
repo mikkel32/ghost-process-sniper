@@ -87,15 +87,6 @@ public actor KillOperationControl {
     public func shouldStopWaiting() -> Bool {
         waitingStopped
     }
-
-    /// The earlier name for `stopWaiting()`.
-    public func requestSkipForce() {
-        stopWaiting()
-    }
-
-    public func shouldSkipForce() -> Bool {
-        forceHeld
-    }
 }
 
 public actor KillOperationRunner {
