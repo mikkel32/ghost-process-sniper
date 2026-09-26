@@ -22,7 +22,10 @@ struct RadarConsoleDetail: View {
                         onIgnore: { session.ignoreSelected() },
                         onKill: { session.prepareKill(family) },
                         thermals: session.monitor.thermals,
-                        onPreviewProcess: { session.prepareKill(family, member: $0) }
+                        onPreviewProcess: { session.prepareKill(family, member: $0) },
+                        stopRisk: KillRiskAssessor().assess(
+                            KillWorkloadProfile(family: family, sample: session.monitor.sampledProcesses)
+                        )
                     )
                 } else {
                     ContentUnavailableView {

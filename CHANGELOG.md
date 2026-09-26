@@ -13,6 +13,19 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 - Return in the search field opens the best match; typing from any section opens the results.
 - Incident and duplicate search use the same matching.
 
+### Smarter stopping
+- Every stop now knows what it is interrupting: apps, document editors, databases, container runtimes, git, package installs, builds, dev servers, and model runners are recognised from their names, paths, and command lines.
+- Apps are asked to quit like ⌘Q before any signal, so they can save their work. Databases and container runtimes get time to shut down cleanly.
+- Work that can lose data is never force-stopped unless you allow it; survivors can be force-stopped in one step after you check them.
+- Supervisors that would restart a process (nodemon, pm2, forever, supervisord, watchexec, cargo watch, air, tsx watch, entr, overmind, launchd agents) are detected before the stop, and a restart after it is reported.
+- The preview leads with what will happen, the risks, and what you get back (memory, CPU, processes, freed ports). Engine internals moved behind **Engine details**.
+- Family pages show what stopping the family would do, and the button reads **Quit App…** for apps.
+- Grace periods end as soon as the processes exit even when the exit watcher is unavailable.
+- Learned timing is kept per strategy, and never shortens an app's or database's clean-shutdown time.
+
+### Layout
+- Process list column headers sort by name, memory, or CPU; click again for priority order.
+
 ### Fixed
 - Paste, copy, cut, select all, and undo now work in the console's text fields (the app menu had no Edit menu).
 - The **Leaks** filter shows credible leaks only, instead of any family whose memory grew at all.

@@ -9,11 +9,9 @@ struct ProcessBrowserView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            browserContent
-                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
-        }
-        .radarEntrance()
+        browserContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .radarEntrance()
     }
 
     private var browserContent: some View {
@@ -142,13 +140,19 @@ struct ProcessBrowserView: View {
         .frame(width: 160)
     }
 
+    /// Column titles double as sort controls; clicking the active one
+    /// returns to priority order.
     private var columnHeadings: some View {
         HStack(spacing: 14) {
-            Text("PROCESS FAMILY")
+            sortHeading("PROCESS FAMILY", sort: .name)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text("MEMORY").frame(width: 84, alignment: .trailing)
-            Text("CPU").frame(width: 64, alignment: .trailing)
-            Text("ACTION").frame(width: 74, alignment: .trailing)
+            sortHeading("MEMORY", sort: .memory)
+                .frame(width: 84, alignment: .trailing)
+            sortHeading("CPU", sort: .cpu)
+                .frame(width: 64, alignment: .trailing)
+            Text("ACTION")
+                .frame(width: 74, alignment: .trailing)
+                .accessibilityHidden(true)
             Color.clear.frame(width: 12, height: 1)
         }
         .font(.caption.weight(.semibold))
@@ -156,7 +160,27 @@ struct ProcessBrowserView: View {
         .padding(.horizontal, 30)
         .padding(.vertical, 12)
         .background(Color.primary.opacity(0.025))
-        .accessibilityHidden(true)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func sortHeading(_ title: String, sort: RadarSort) -> some View {
+        let isActive = session.state.familySort == sort
+        return Button {
+            session.state.familySort = isActive ? .smart : sort
+        } label: {
+            HStack(spacing: 3) {
+                Text(title)
+                Image(systemName: sort == .name ? "chevron.up" : "chevron.down")
+                    .opacity(isActive ? 1 : 0)
+                    .accessibilityHidden(true)
+            }
+            .foregroundStyle(isActive ? Color.primary : Color.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isActive ? "Back to priority order" : "Sort by \(sort.label.lowercased())")
+        .accessibilityLabel("Sort by \(sort.label)")
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
 
