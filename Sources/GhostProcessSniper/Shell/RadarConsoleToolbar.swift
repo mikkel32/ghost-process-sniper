@@ -38,7 +38,6 @@ struct RadarConsoleToolbar: ToolbarContent {
                         Label("Previous Family", systemImage: "chevron.up")
                     }
                     .disabled(!session.availability(.previousFamily).isEnabled)
-                    .keyboardShortcut(.upArrow, modifiers: [.command])
 
                     Button {
                         session.nextFamily()
@@ -46,7 +45,6 @@ struct RadarConsoleToolbar: ToolbarContent {
                         Label("Next Family", systemImage: "chevron.down")
                     }
                     .disabled(!session.availability(.nextFamily).isEnabled)
-                    .keyboardShortcut(.downArrow, modifiers: [.command])
                 }
                 .controlGroupStyle(.navigation)
                 .help("Walk through process families (⌘↑ / ⌘↓)")
@@ -82,17 +80,17 @@ struct RadarConsoleToolbar: ToolbarContent {
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help("Toggle the inspector panel (⌥⌘I)")
 
+                // ⇧⌘⌫ comes from the Radar menu's Stop… item.
                 Button(role: .destructive) {
                     session.prepareKillSelected()
                 } label: {
-                    Label("Kill Preview", systemImage: "scope")
+                    Label("Stop…", systemImage: "scope")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
-                .disabled(!session.availability(.killPreview).isEnabled)
-                .keyboardShortcut(.delete, modifiers: [.command, .shift])
-                .help(session.availability(.killPreview).isEnabled
-                    ? "Preview a kill of the selected family — nothing runs without confirmation (⇧⌘⌫)"
+                .disabled(!session.canStopSelection)
+                .help(session.canStopSelection
+                    ? "Preview stopping the selected family — nothing runs without confirmation (⇧⌘⌫)"
                     : "No live processes owned by you to target")
             }
 

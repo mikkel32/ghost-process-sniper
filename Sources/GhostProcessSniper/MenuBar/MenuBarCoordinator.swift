@@ -47,11 +47,6 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         settingsController.show(monitor: monitor)
     }
 
-    func openSection(_ selection: RadarFocusedSelection) {
-        openConsole()
-        consoleController.focusSection(selection)
-    }
-
     /// A notification click or action. Keys come from the notification, so the
     /// family is resolved again in case it restarted since the alert.
     func handleNotification(action: String, familyKey: String?, signatureID: String?) {
@@ -76,11 +71,6 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
                 consoleController.focusFamily(key)
             }
         }
-    }
-
-    func findProcesses() {
-        openConsole()
-        consoleController.find()
     }
 
     func stop() {
@@ -139,19 +129,21 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         addMenuItem("Previous Family", key: String(UnicodeScalar(NSUpArrowFunctionKey)!), modifiers: [.command], action: #selector(previousFamilyCommand), to: radarMenu)
         addMenuItem("Toggle Inspector", key: "i", modifiers: [.command, .option], action: #selector(toggleInspectorCommand), to: radarMenu)
         radarMenu.addItem(.separator())
+        // Sidebar order.
         addMenuItem("Overview", key: "1", modifiers: [.command], action: #selector(showOverviewCommand), to: radarMenu)
-        addMenuItem("All Processes", key: "6", modifiers: [.command], action: #selector(showProcessesCommand), to: radarMenu)
-        addMenuItem("Duplicates", key: "2", modifiers: [.command], action: #selector(showDuplicatesCommand), to: radarMenu)
-        addMenuItem("Incidents", key: "3", modifiers: [.command], action: #selector(showIncidentsCommand), to: radarMenu)
-        addMenuItem("Rules", key: "4", modifiers: [.command], action: #selector(showRulesCommand), to: radarMenu)
-        addMenuItem("Engine", key: "5", modifiers: [.command], action: #selector(showEngineCommand), to: radarMenu)
+        addMenuItem("All Processes", key: "2", modifiers: [.command], action: #selector(showProcessesCommand), to: radarMenu)
+        addMenuItem("Duplicates", key: "3", modifiers: [.command], action: #selector(showDuplicatesCommand), to: radarMenu)
+        addMenuItem("Incidents", key: "4", modifiers: [.command], action: #selector(showIncidentsCommand), to: radarMenu)
+        addMenuItem("Rules", key: "5", modifiers: [.command], action: #selector(showRulesCommand), to: radarMenu)
+        addMenuItem("Engine", key: "6", modifiers: [.command], action: #selector(showEngineCommand), to: radarMenu)
         radarMenu.addItem(.separator())
         addMenuItem("Copy Incident Report", key: "c", modifiers: [.command, .shift], action: #selector(copyReportCommand), to: radarMenu)
         addMenuItem("Copy Diagnostics", key: "d", modifiers: [.command, .shift], action: #selector(copyDiagnosticsCommand), to: radarMenu)
         addMenuItem("Snooze Family", key: "s", modifiers: [.command, .shift], action: #selector(snoozeCommand), to: radarMenu)
         addMenuItem("Ignore Family", key: "e", modifiers: [.command, .shift], action: #selector(ignoreCommand), to: radarMenu)
-        addMenuItem("Kill Preview", key: "k", modifiers: [.command, .shift], action: #selector(killPreviewCommand), to: radarMenu)
+        addMenuItem("Stop…", key: String(UnicodeScalar(NSBackspaceCharacter)!), modifiers: [.command, .shift], action: #selector(killPreviewCommand), to: radarMenu)
 
+        // The single menu definition: the SwiftUI scene declares no commands.
         NSApp.mainMenu = mainMenu
     }
 
@@ -174,8 +166,10 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
             return true
         case #selector(nextFamilyCommand), #selector(previousFamilyCommand):
             return monitor.commandAvailability(menuItem.action == #selector(nextFamilyCommand) ? .nextFamily : .previousFamily, selection: .overview).isEnabled
-        case #selector(snoozeCommand), #selector(ignoreCommand), #selector(killPreviewCommand):
-            return true
+        case #selector(snoozeCommand), #selector(ignoreCommand):
+            return consoleController.canActOnSelection(stop: false)
+        case #selector(killPreviewCommand):
+            return consoleController.canActOnSelection(stop: true)
         default:
             return true
         }
