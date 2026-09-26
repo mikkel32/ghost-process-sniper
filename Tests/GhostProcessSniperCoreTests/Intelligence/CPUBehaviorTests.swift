@@ -33,6 +33,7 @@ final class CPUBehaviorTests: XCTestCase {
         minutes: Double,
         cores: Int = 8,
         context: RadarContext = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []),
+        each: (TimeInterval, [ProcessFamily]) -> Void = { _, _ in },
         world: (Int, Date, Clock) -> [ProcessMetrics]
     ) -> [ProcessFamily] {
         var pipeline = RadarPipeline(
@@ -46,6 +47,7 @@ final class CPUBehaviorTests: XCTestCase {
         for tick in 0...ticks {
             let date = start.addingTimeInterval(Double(tick) * Self.cadence)
             families = pipeline.run(processes: world(tick, date, clock), settings: .smart, context: context, now: date).families
+            each(Double(tick) * Self.cadence, families)
         }
         return families
     }
@@ -80,6 +82,55 @@ final class CPUBehaviorTests: XCTestCase {
         XCTAssertEqual(spinner.forecast.cpuBehavior?.kind, .spin)
         XCTAssertEqual(spinner.forecast.state, .runaway)
         XCTAssertTrue(spinner.forecast.whyNow.contains("busy-looping on one core"), spinner.forecast.whyNow)
+    }
+
+    /// A few cores on a twelve-core Mac is a busy app, not an emergency:
+    /// the automatic CPU limit scales with the Mac, and CPU is sustained
+    /// only after the ledger or a 90 s window proves it.
+    func testMultiCoreLoadOnBigMacIsNotCriticalWithin90s() {
+        let chromeApp = "/Applications/Google Chrome.app/Contents"
+        let renderer = "\(chromeApp)/Frameworks/Google Chrome Framework.framework/Helpers/" +
+            "Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)"
+        let analyzer = "/Users/dev/.vscode/extensions/rust-lang.rust-analyzer/server/rust-analyzer"
+        let context = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: RadarRule.builtIns(settings: .smart))
+        var jitter = Fixture.Jitter(seed: 11)
+        var checked = 0
+        _ = run(minutes: 1, cores: 12, context: context, each: { seconds, families in
+            for family in families {
+                XCTAssertLessThan(family.score.level, .critical, "\(family.displayName) at \(seconds) s")
+                XCTAssertNotEqual(family.forecast.state, .critical, "\(family.displayName) at \(seconds) s")
+                XCTAssertFalse(family.score.heat.shouldNotify, "\(family.displayName) at \(seconds) s: \(family.score.heat.evidence)")
+                checked += 1
+            }
+        }) { tick, date, clock in
+            var world = [self.process(700, name: "rust-analyzer", path: analyzer, command: analyzer,
+                                      cpu: 380 + jitter.next(amplitude: 40), clock: clock, at: date)]
+            if Double(tick) * Self.cadence <= 30 {
+                world.append(self.process(600, name: "Google Chrome", path: "\(chromeApp)/MacOS/Google Chrome",
+                                          command: "\(chromeApp)/MacOS/Google Chrome", cpu: 10, clock: clock, at: date))
+                world.append(self.process(601, parent: 600, name: "Google Chrome Helper (Renderer)", path: renderer,
+                                          command: "\(renderer) --type=renderer", cpu: 240, clock: clock, at: date))
+            }
+            return world
+        }
+        XCTAssertGreaterThan(checked, 20)
+    }
+
+    /// The scaled limit still catches most of a big Mac held for minutes.
+    func testHeavyLoadOnBigMacStillEscalates() throws {
+        var jitter = Fixture.Jitter(seed: 13)
+        let families = run(minutes: 3, cores: 12) { _, date, clock in
+            let root = self.process(800, name: "node", path: "/usr/local/bin/node", command: "node /Users/dev/app/render.js",
+                                    cpu: 1, clock: clock, at: date)
+            let workers = (0..<4).map { index in
+                self.process(Int32(801 + index), parent: 800, name: "node", path: "/usr/local/bin/node",
+                             command: "node /Users/dev/app/render-worker.js", cpu: 175 + jitter.next(amplitude: 5), clock: clock, at: date)
+            }
+            return [root] + workers
+        }
+        let renderer = try XCTUnwrap(families.first { $0.root.pid == 800 })
+        XCTAssertGreaterThanOrEqual(renderer.score.level, .hot)
+        XCTAssertGreaterThan(renderer.score.heat.sustainedSignalCount, 0)
     }
 
     func testIdleLanguageServerBurningCPUIsFlagged() throws {

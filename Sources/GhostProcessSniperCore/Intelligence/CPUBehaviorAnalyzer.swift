@@ -44,6 +44,16 @@ public enum CPUBehaviorAnalyzer {
     static let sustainedMinutes = 2
     static let runawayMinutes = 5
 
+    /// The limit a family's total CPU is judged against. The automatic
+    /// profiles' limit is a share of one core per two cores, so a busy app
+    /// using a few cores of a big Mac is not held to a small Mac's limit; a
+    /// custom limit is exact. A single pegged core is the spin rule's job.
+    public static func familyCPULimit(settings: ThresholdSettings, processorCount: Int) -> Double {
+        let limit = max(settings.cpuPercent, 1)
+        guard settings.detectionMode == .automatic else { return limit }
+        return limit * max(1, Double(processorCount) / 2)
+    }
+
     public static func analyze(
         activity: FamilyCPUActivity,
         classification: DevClassification?,

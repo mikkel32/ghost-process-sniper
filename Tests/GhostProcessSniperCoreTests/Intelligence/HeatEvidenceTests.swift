@@ -12,11 +12,22 @@ final class HeatEvidenceTests: XCTestCase {
         XCTAssertLessThanOrEqual(spike.level, .hot)
         XCTAssertFalse(spike.evidence.contains("CPU stayed elevated across the sampling window"))
 
-        let peggedHistory = Fixture.trend(megabytes: Array(repeating: 300, count: 8), cpu: Array(repeating: 180, count: 8))
+        let peggedHistory = Fixture.trend(megabytes: Array(repeating: 300, count: 8), cpu: Array(repeating: 180, count: 8), cadence: 15)
         let pegged = GhostHeatModel.initial(memoryRatio: 0.3, cpuRatio: 2, cpuThreshold: 90, gpuRatio: 0,
                                             leakRatio: 0, trend: peggedHistory, hardwareLevel: .quiet)
         XCTAssertEqual(pegged.sustainedSignalCount, 1)
         XCTAssertTrue(pegged.evidence.contains("CPU stayed elevated across the sampling window"))
+    }
+
+    /// Four samples over 15 s prove nothing about minutes: like the
+    /// forecaster's runaway rule, the window needs 90 s.
+    func testShortPeggedWindowIsNotSustainedCPU() {
+        let briefHistory = Fixture.trend(megabytes: Array(repeating: 300, count: 8), cpu: Array(repeating: 180, count: 8), cadence: 3)
+        let brief = GhostHeatModel.initial(memoryRatio: 0.3, cpuRatio: 2, cpuThreshold: 90, gpuRatio: 0,
+                                           leakRatio: 0, trend: briefHistory, hardwareLevel: .quiet)
+        XCTAssertEqual(brief.sustainedSignalCount, 0)
+        XCTAssertLessThan(brief.level, .critical)
+        XCTAssertFalse(brief.evidence.contains("CPU stayed elevated across the sampling window"))
     }
 
     func testTwoSampleJumpIsNotALeak() throws {
