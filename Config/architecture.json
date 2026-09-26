@@ -4,19 +4,11 @@
     "GhostProcessSniper": ["Application", "MenuBar", "Shell", "DesignSystem", "Features/Overview", "Features/Thermals", "Features/Processes", "Features/Interventions", "Features/Incidents", "Features/Duplicates", "Features/Rules", "Features/Engine", "Features/Settings"],
     "GhostProcessSniperCore": ["Domain", "Configuration", "Monitoring", "Sampling", "Thermals", "Intelligence", "Persistence", "Search", "Presentation", "Diagnostics", "Interventions", "Cleanup"]
   },
-  "legacy_line_budgets": {
-    "GhostProcessSniperCore/Sampling/ProcessSampler.swift": 917,
-    "GhostProcessSniperCore/Intelligence/ProcessFamilyBuilder.swift": 828,
-    "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 643,
-    "GhostProcessSniperCore/Domain/ScannerModels.swift": 695,
-    "GhostProcessSniperCore/Configuration/SettingsPerformanceModels.swift": 771,
-    "GhostProcessSniperCore/Intelligence/ForecastModels.swift": 767
-  },
+  "legacy_line_budgets": {},
   "test_roots": {
     "roots": ["Tests/GhostProcessSniperCoreTests", "Checks/GhostProcessSniperCoreChecks"],
     "legacy_line_budgets": {
-      "Checks/GhostProcessSniperCoreChecks/main.swift": 3946,
-      "Tests/GhostProcessSniperCoreTests/AdaptiveIntelligenceTests.swift": 605
+      "Checks/GhostProcessSniperCoreChecks/main.swift": 4053
     }
   }
 }

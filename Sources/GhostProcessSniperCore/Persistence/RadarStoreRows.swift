@@ -29,7 +29,8 @@ enum RadarStoreRows {
     static let baselineColumns = """
         signature_id, display_name, canonical_path, command_fingerprint, sample_count,
         mean_memory_bytes, peak_memory_bytes, mean_cpu_percent, peak_cpu_percent,
-        mean_leak_velocity, incident_count, first_seen_at, last_seen_at, measurement_version
+        mean_leak_velocity, incident_count, first_seen_at, last_seen_at, measurement_version,
+        memory_variance, cpu_variance, observed_seconds, session_count
         """
 
     static func baseline(from row: SQLiteRow) -> FamilyBaseline {
@@ -50,7 +51,11 @@ enum RadarStoreRows {
             incidentCount: row.int(10),
             firstSeenAt: row.date(11),
             lastSeenAt: row.date(12),
-            measurementVersion: row.int(13)
+            measurementVersion: row.int(13),
+            memoryVariance: row.double(14),
+            cpuVariance: row.double(15),
+            observedSeconds: row.double(16),
+            sessionCount: row.int(17)
         )
     }
 

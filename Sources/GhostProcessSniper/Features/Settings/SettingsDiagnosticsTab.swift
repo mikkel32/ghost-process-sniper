@@ -23,6 +23,7 @@ struct DiagnosticsSettingsTab: View {
                 }
 
                 VStack(spacing: 7) {
+                    SettingsDiagnosticRow("Last sample", monitor.lastSampleDate?.formatted(date: .omitted, time: .standard) ?? "warming")
                     SettingsDiagnosticRow("Last stop", monitor.storeHealth.lastKillOperationSummary ?? "none")
                     SettingsDiagnosticRow("Self memory", monitor.selfUsage.footprintBytes > 0 ? RadarFormat.bytes(monitor.selfUsage.footprintBytes) : "measuring")
                     SettingsDiagnosticRow("Self throttle", monitor.selfUsage.isThrottling ? "active" : "off")

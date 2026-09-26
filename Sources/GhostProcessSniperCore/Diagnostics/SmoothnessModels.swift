@@ -95,11 +95,14 @@ public struct SpikeRingBuffer: Equatable, Sendable {
         public let date: Date
         public let phase: String
         public let milliseconds: Double
+        /// Formatted once when recorded; reports are read every tick.
+        public let line: String
 
         public init(date: Date, phase: String, milliseconds: Double) {
             self.date = date
             self.phase = phase
             self.milliseconds = milliseconds
+            line = "\(phase) \(Int(milliseconds.rounded()))ms at \(date.formatted(date: .omitted, time: .standard))"
         }
     }
 
@@ -138,26 +141,45 @@ public struct SpikeRingBuffer: Equatable, Sendable {
     public var report: RadarSmoothnessReport {
         let worst = entries.map(\.milliseconds).max() ?? 0
         let latest = entries.last?.phase ?? "none"
-        let lines = entries.map { entry in
-            "\(entry.phase) \(Int(entry.milliseconds.rounded()))ms at \(entry.date.formatted(date: .omitted, time: .standard))"
-        }
         return RadarSmoothnessReport(
             hitchCount: entries.count,
             worstHitchMilliseconds: worst,
             latestSpikePhase: latest,
-            recentSpikes: lines
+            recentSpikes: entries.map(\.line)
         )
     }
 }
 
+/// A main-actor heartbeat that records late wake-ups as hitches. It runs
+/// only while a radar surface is on screen, since nobody sees a hitch
+/// otherwise and the heartbeat wakes the main thread four times a second.
 @MainActor
 public final class MainActorHitchMonitor {
     private var task: Task<Void, Never>?
     private var spikes = SpikeRingBuffer(limit: 8)
+    private let sleepMeasuringLateness: @MainActor @Sendable (Duration) async throws -> Duration
     private var heartbeatInterval: TimeInterval = 0.25
     private var thresholdMilliseconds: Double = 120
 
-    public init() {}
+    /// The clock must stop while the Mac sleeps (the default suspending
+    /// clock does), or waking from sleep would read as a minutes-long hitch.
+    public init<C: Clock<Duration>>(clock: C = SuspendingClock()) {
+        // Main-actor isolated so the post-sleep reading waits for the main
+        // thread: a busy main actor is exactly the lateness being measured.
+        sleepMeasuringLateness = { @MainActor interval in
+            let expected = clock.now.advanced(by: interval)
+            try await clock.sleep(until: expected, tolerance: nil)
+            return expected.duration(to: clock.now)
+        }
+    }
+
+    deinit {
+        task?.cancel()
+    }
+
+    public var isRunning: Bool {
+        task != nil
+    }
 
     public func start(
         interval: TimeInterval = 0.25,
@@ -166,26 +188,7 @@ public final class MainActorHitchMonitor {
         stop()
         heartbeatInterval = max(0.05, interval)
         self.thresholdMilliseconds = thresholdMilliseconds
-        task = Task { @MainActor [weak self] in
-            guard let self else { return }
-            let warmupEnd = Date().addingTimeInterval(2)
-            var expected = Date().addingTimeInterval(self.heartbeatInterval)
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(self.heartbeatInterval * 1_000_000_000))
-                let now = Date()
-                let drift = max(0, now.timeIntervalSince(expected) * 1_000)
-                if now >= warmupEnd {
-                    self.spikes.record(
-                        phase: "main actor heartbeat",
-                        milliseconds: drift,
-                        threshold: self.thresholdMilliseconds,
-                        at: now,
-                        logToOS: false
-                    )
-                }
-                expected = now.addingTimeInterval(self.heartbeatInterval)
-            }
-        }
+        task = heartbeat()
     }
 
     public func stop() {
@@ -197,37 +200,45 @@ public final class MainActorHitchMonitor {
         spikes.record(phase: "main actor publish", milliseconds: milliseconds, threshold: 16)
     }
 
+    func recordHeartbeat(milliseconds: Double, at date: Date = Date()) {
+        spikes.record(
+            phase: "main actor heartbeat",
+            milliseconds: milliseconds,
+            threshold: thresholdMilliseconds,
+            at: date,
+            logToOS: false
+        )
+    }
+
     public var report: RadarSmoothnessReport {
         spikes.report
     }
+
+    private func heartbeat() -> Task<Void, Never> {
+        let interval = Duration.seconds(heartbeatInterval)
+        let sleep = sleepMeasuringLateness
+        return Task { @MainActor [weak self] in
+            let warmup = Duration.seconds(2)
+            var elapsed = Duration.zero
+            while !Task.isCancelled {
+                let late: Duration
+                do {
+                    late = try await sleep(interval)
+                } catch {
+                    return
+                }
+                guard let self else { return }
+                elapsed += interval + late
+                if elapsed >= warmup {
+                    self.recordHeartbeat(milliseconds: max(0, late.milliseconds))
+                }
+            }
+        }
+    }
 }
 
-public struct SamplerExecutionPlan: Equatable, Sendable {
-    public let workerCount: Int
-    public let telemetryJobCount: Int
-    public let forensicsJobCount: Int
-    public let scannerTaskCount: Int
-    public let tinyQueueSequentialCount: Int
-
-    public static let empty = SamplerExecutionPlan(
-        workerCount: 0,
-        telemetryJobCount: 0,
-        forensicsJobCount: 0,
-        scannerTaskCount: 0,
-        tinyQueueSequentialCount: 0
-    )
-
-    public init(
-        workerCount: Int,
-        telemetryJobCount: Int,
-        forensicsJobCount: Int,
-        scannerTaskCount: Int,
-        tinyQueueSequentialCount: Int
-    ) {
-        self.workerCount = workerCount
-        self.telemetryJobCount = telemetryJobCount
-        self.forensicsJobCount = forensicsJobCount
-        self.scannerTaskCount = scannerTaskCount
-        self.tinyQueueSequentialCount = tinyQueueSequentialCount
+private extension Duration {
+    var milliseconds: Double {
+        Double(components.seconds) * 1_000 + Double(components.attoseconds) / 1e15
     }
 }

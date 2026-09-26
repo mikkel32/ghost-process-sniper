@@ -8,7 +8,10 @@ public final class ProcessMonitor {
     public var settings: ThresholdSettings
     public private(set) var families: [ProcessFamily] = []
     public private(set) var summary: RadarSummary = .empty
+    /// Counts and errors only; the per-tick time is `lastSampleDate`, so
+    /// readers of the counts do not re-render every tick.
     public private(set) var health: SamplerHealth = .starting
+    public private(set) var lastSampleDate: Date?
     public private(set) var incidents: [RadarIncident] = []
     public private(set) var rules: [RadarRule] = []
     public private(set) var model: RadarModel = .empty
@@ -32,25 +35,30 @@ public final class ProcessMonitor {
     @ObservationIgnored public private(set) var sampleRevision: UInt64 = 0
     @ObservationIgnored var stopRiskCache = StopRiskCache()
 
-    @ObservationIgnored private let thermalSampler = ThermalSampler()
+    @ObservationIgnored private let thermalSampler: any ThermalSampling
     @ObservationIgnored private var selfUsageMonitor = SelfUsageMonitor()
     @ObservationIgnored private let notifier: RadarNotifying
     @ObservationIgnored let store: RadarStore?
     @ObservationIgnored private let worker: RadarRefreshWorker
-    @ObservationIgnored private let refreshGate = RefreshGate()
-    @ObservationIgnored private var pipeline: RadarPipeline
-    @ObservationIgnored private var scheduler = RadarScheduler()
-    @ObservationIgnored private var injectedThermalHistory = ThermalActivityHistory()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    /// The loop's current sleep; cancelling it runs the next tick now.
+    @ObservationIgnored var sleeper: Task<Void, Never>?
+    @ObservationIgnored var wakePending = false
+    /// The only path into the worker: NativeProcessSampler.sample reuses
+    /// scratch buffers across awaits and must never run concurrently.
+    @ObservationIgnored private var inFlight: Task<Void, Never>?
+    /// One queued rerun shared by every caller that arrived mid-refresh.
+    @ObservationIgnored private var trailing: Task<Void, Never>?
+    @ObservationIgnored private(set) var coalescedCount = 0
+    @ObservationIgnored private(set) var rerunCount = 0
     @ObservationIgnored var postKillTask: Task<Void, Never>?
     @ObservationIgnored var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
-    @ObservationIgnored private var popoverVisible = false
-    @ObservationIgnored var consoleVisible = false
+    @ObservationIgnored var visibleSurfaces: Set<RadarSurface> = []
     @ObservationIgnored private var focusedSignatureIDs: Set<String> = []
-    @ObservationIgnored private var averageRefreshMilliseconds = 0.0
+    @ObservationIgnored private var portCensusRequested = false
     @ObservationIgnored private var lastCompletedPublishMilliseconds = 0.0
-    @ObservationIgnored private let hitchMonitor = MainActorHitchMonitor()
+    @ObservationIgnored let hitchMonitor = MainActorHitchMonitor()
     @ObservationIgnored private var publishedStateObservers: [UUID: (ProcessMonitorPublishedState) -> Void] = [:]
 
     public var statusLevel: GhostLevel {
@@ -67,10 +75,12 @@ public final class ProcessMonitor {
         intelligence: RadarIntelligence = RadarIntelligence(),
         settings: ThresholdSettings = .smart,
         store: RadarStore? = ProcessMonitor.createDefaultStore(),
-        notifier: RadarNotifying = NoopRadarNotifier()
+        notifier: RadarNotifying = NoopRadarNotifier(),
+        thermalSampler: any ThermalSampling = ThermalSampler()
     ) {
         self.settings = settings
         self.store = store
+        self.thermalSampler = thermalSampler
         self.notifier = notifier
         self.worker = RadarRefreshWorker(
             sampler: sampler,
@@ -78,100 +88,118 @@ public final class ProcessMonitor {
             builder: builder,
             intelligence: intelligence
         )
-        self.pipeline = RadarPipeline(builder: builder, intelligence: intelligence)
     }
 
     deinit {
         refreshTask?.cancel()
+        sleeper?.cancel()
         settingsSaveTask?.cancel()
     }
 
     public func start() {
         stop()
-        hitchMonitor.start()
-        refreshTask = Task { @MainActor [weak self] in
+        wakePending = false
+        // Utility QoS keeps hidden sampling, scoring and store work off the
+        // performance cores; a visible caller awaiting it escalates it.
+        refreshTask = Task(priority: .utility) { @MainActor [weak self] in
             await self?.loadPersistedSettingsIfNeeded()
+            var isFirstTick = true
             while !Task.isCancelled {
-                await self?.refresh()
-                var interval = max(0.25, self?.performanceMetrics.nextRefreshInterval ?? 1)
-                // Self-throttle: when the radar's own average CPU is above
-                // budget, stretch the cadence until it recovers.
-                if self?.selfUsage.isThrottling == true {
-                    interval = min(interval * 1.6, 8)
-                }
-                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard let interval = await self?.runLoopTick(isFirstTick: isFirstTick) else { return }
+                isFirstTick = false
+                let sleeper = self?.startSleepUntilNextTick(interval)
+                await sleeper?.value
             }
         }
+        updateHitchMonitor()
+    }
+
+    var isRunning: Bool {
+        refreshTask != nil
     }
 
     public func stop() {
         refreshTask?.cancel()
         refreshTask = nil
+        sleeper?.cancel()
         settingsSaveTask?.cancel()
         settingsSaveTask = nil
-        hitchMonitor.stop()
+        updateHitchMonitor()
         Task { [store] in
             try? await store?.flush()
         }
     }
 
-    public func refresh(now: Date = Date()) async {
+    /// Samples and publishes. A call that arrives while a refresh is running
+    /// returns only after a sample that started after the call: callers
+    /// share one trailing rerun. Loop ticks just join the running refresh.
+    public func refresh(reason: RefreshReason = .user, now: Date? = nil) async {
+        guard let running = inFlight else {
+            await launchRefresh(now: now ?? Date()).value
+            return
+        }
+        coalescedCount += 1
+        guard reason != .loop else {
+            await running.value
+            return
+        }
+        if trailing == nil {
+            trailing = Task {
+                await running.value
+                self.trailing = nil
+                // A caller may have started a refresh in the gap after the
+                // running one ended; it began after every waiter, so join it.
+                if let fresh = self.inFlight {
+                    await fresh.value
+                    return
+                }
+                self.rerunCount += 1
+                await self.launchRefresh(now: Date()).value
+            }
+        }
+        await trailing?.value
+    }
+
+    /// Only called while nothing is in flight.
+    private func launchRefresh(now: Date) -> Task<Void, Never> {
+        let task = Task { await self.performRefresh(now: now) }
+        inFlight = task
+        return task
+    }
+
+    private func performRefresh(now: Date) async {
+        defer { inFlight = nil }
         let refreshStart = Date()
         let signpost = RadarLogger.signposter
         let refreshState = signpost.beginInterval("RadarRefresh")
         defer { signpost.endInterval("RadarRefresh", refreshState) }
 
-        let gateDecision = await refreshGate.begin()
-        guard gateDecision.shouldRun else {
-            if case .coalesced(let count) = gateDecision {
-                performanceMetrics = performanceMetrics.updatingSmoothness(
-                    coalescedRefreshCount: count,
-                    refreshInFlight: true
-                )
-            }
-            return
-        }
-
         do {
-            let sampled = await thermalSampler.sample(now: now)
-            if let next = ThermalSnapshotStore.update(thermals, thermalObservations, with: sampled, at: now) { (thermals, thermalObservations) = next }
-            let request = RefreshRequest(
-                settings: settings,
-                currentFamilies: families,
-                currentIncidents: incidents,
-                currentStoreHealth: storeHealth,
-                previousRefresh: performanceMetrics.lastRefresh,
-                previousConsoleSnapshot: consoleSnapshot,
-                popoverVisible: popoverVisible || consoleVisible,
-                focusedSignatureIDs: focusedSignatureIDs,
-                now: now,
-                startedAt: refreshStart
+            // Only the popover and console show temperatures.
+            if uiVisible {
+                let sampled = await thermalSampler.sample(now: now)
+                if let next = ThermalSnapshotStore.update(thermals, thermalObservations, with: sampled, at: now) { (thermals, thermalObservations) = next }
+            }
+            let outcome = try await worker.refresh(refreshRequest(now: now, startedAt: refreshStart))
+            let usage = selfUsageMonitor.sample(
+                throttleAbovePercent: uiVisible ? .infinity : 2 * outcome.performance.budget.targetIdleCPUPercent
             )
-            let outcome = try await worker.refresh(request)
-            let coalesced = await refreshGate.finish()
-            if outcome.systemPressure != systemPressure {
-                systemPressure = outcome.systemPressure
-            }
-            let usage = selfUsageMonitor.sample()
             if usage != selfUsage {
-                selfUsage = usage
-                if usage.isThrottling {
-                    RadarLogger.sampler.info("Self-throttle active: radar averaging \(Int(usage.averageCPUPercent.rounded()), privacy: .public)% CPU")
+                if usage.isThrottling, !selfUsage.isThrottling {
+                    RadarLogger.sampler.info("Self-throttle active: radar averaging \(String(format: "%.2f", usage.averageCPUPercent), privacy: .public)% CPU")
                 }
+                selfUsage = usage
             }
-            thermalActivity = outcome.thermalActivity
-            recordSample(outcome.processes)
-            publish(payload: outcome.payload, coalescedRefreshCount: coalesced)
+            apply(outcome)
             await notifier.process(model: model)
         } catch {
-            let coalesced = await refreshGate.finish()
-            performanceMetrics = performanceMetrics.updatingSmoothness(
-                coalescedRefreshCount: coalesced,
-                refreshInFlight: false
-            )
+            var metrics = performanceMetrics
+            metrics.smoothness.coalescedRefreshCount = coalescedCount
+            metrics.smoothness.refreshInFlight = false
+            performanceMetrics = metrics
             health = SamplerHealth(
                 engineName: "libproc",
-                lastSampleDate: health.lastSampleDate,
+                lastSampleDate: nil,
                 processCount: health.processCount,
                 familyCount: families.count,
                 errorMessage: error.localizedDescription
@@ -180,74 +208,42 @@ public final class ProcessMonitor {
         }
     }
 
-    public func ingest(_ processes: [ProcessMetrics], now: Date = Date()) {
-        let effectiveSettings = settings
-            .resolvedProfile(systemPressure: systemPressure)
-            .effectiveSettings
-        let build = pipeline.buildCandidates(
-            processes: processes,
-            settings: effectiveSettings,
-            now: now
+    /// Runs injected processes through the same worker pipeline as a live
+    /// refresh, without sampling or notifying. Used by tests and previews.
+    public func ingest(_ processes: [ProcessMetrics], now: Date = Date()) async {
+        let batch = ProcessSampleBatch(processes: processes, sampledAt: now, stats: .empty)
+        let outcome = await worker.ingest(batch: batch, request: refreshRequest(now: now, startedAt: now))
+        apply(outcome)
+    }
+
+    private func refreshRequest(now: Date, startedAt: Date) -> RefreshRequest {
+        defer { portCensusRequested = false }
+        return RefreshRequest(
+            settings: settings,
+            currentFamilies: families,
+            currentIncidents: incidents,
+            currentStoreHealth: storeHealth,
+            previousConsoleSnapshot: consoleSnapshot,
+            uiVisible: uiVisible,
+            focusedSignatureIDs: focusedSignatureIDs,
+            portCensusRequested: portCensusRequested,
+            hitchReport: hitchMonitor.report,
+            lastPublishMilliseconds: lastCompletedPublishMilliseconds,
+            coalescedRefreshCount: coalescedCount,
+            now: now,
+            startedAt: startedAt
         )
-        let scored = pipeline.score(
-            families: build.families,
-            diff: build.diff,
-            context: RadarContext(
-                baselines: [:],
-                recentIncidentCounts: [:],
-                rules: RadarRule.builtIns(settings: effectiveSettings)
-            ),
-            settings: effectiveSettings,
-            now: now
-        )
-        let summary = pipeline.summary(for: scored.families)
-        thermalActivity = injectedThermalHistory.recordProjection(of: processes, families: scored.families, at: now)
-        recordSample(processes)
-        let effectivePerformanceMode = effectiveSettings.resolvedPerformanceMode(
-            summaryLevel: summary.level,
-            popoverVisible: popoverVisible || consoleVisible,
-            systemPressure: scheduler.currentPressure
-        )
-        let stats = RefreshStats(
-            startedAt: now,
-            sampleMilliseconds: 0,
-            buildMilliseconds: build.buildMilliseconds,
-            scoreMilliseconds: scored.scoreMilliseconds,
-            storeMilliseconds: 0,
-            publishMilliseconds: 0,
-            totalMilliseconds: build.buildMilliseconds + scored.scoreMilliseconds,
-            processCount: processes.count,
-            familyCount: scored.families.count
-        )
-        publish(
-            families: scored.families,
-            duplicateClusters: build.duplicateClusters,
-            summary: summary,
-            rules: RadarRule.builtIns(settings: effectiveSettings),
-            incidents: incidents,
-            health: SamplerHealth(
-                engineName: "libproc",
-                lastSampleDate: now,
-                processCount: processes.count,
-                familyCount: scored.families.count,
-                errorMessage: nil
-            ),
-            generatedAt: now,
-            storeHealth: storeHealth,
-            performance: metrics(
-                performanceMode: effectivePerformanceMode,
-                stats: stats,
-                samplerStats: .empty,
-                storeHealth: storeHealth,
-                nextInterval: settings.refreshInterval,
-                scannerHealth: .starting,
-                duplicateClusterCount: build.duplicateClusters.filter { !$0.isInternalToSingleFamily }.count,
-                promotedDuplicateCandidateCount: build.promotedDuplicateCandidateCount,
-                duplicateDetectorMilliseconds: build.duplicateDetectorMilliseconds,
-                hardwareOffenderCount: build.hardwareOffenderCount,
-                hardwareDetectorMilliseconds: build.hardwareDetectorMilliseconds
-            )
-        )
+    }
+
+    private func apply(_ outcome: RefreshOutcome) {
+        if outcome.systemPressure != systemPressure {
+            systemPressure = outcome.systemPressure
+        }
+        if outcome.thermalActivity != thermalActivity {
+            thermalActivity = outcome.thermalActivity
+        }
+        recordSample(outcome.processes)
+        publish(payload: outcome.payload)
     }
 
     private func recordSample(_ processes: [ProcessMetrics]) {
@@ -256,13 +252,14 @@ public final class ProcessMonitor {
     }
 
     public func recordStatusUpdateCost(_ milliseconds: Double) {
-        let updated = performanceMetrics.updatingSmoothness(statusUpdateMilliseconds: milliseconds)
+        var updated = performanceMetrics
+        updated.smoothness.statusUpdateMilliseconds = milliseconds
         performanceMetrics = updated
         publishedState = publishedState.updating(performanceMetrics: updated)
     }
 
     public func setPopoverVisible(_ visible: Bool) {
-        popoverVisible = visible
+        setSurface(.popover, visible: visible)
     }
 
     @discardableResult
@@ -286,6 +283,13 @@ public final class ProcessMonitor {
 
     public func focusFamilies(signatureIDs: Set<String>) {
         focusedSignatureIDs = signatureIDs
+    }
+
+    /// Reads every same-user process's listening ports on the next refresh and
+    /// starts that refresh now, so `port:3000` finds a quiet server.
+    public func requestPortCensus() {
+        portCensusRequested = true
+        Task { await refresh() }
     }
 
     public func snooze(_ family: ProcessFamily, minutes: TimeInterval = 60) async {
@@ -409,7 +413,14 @@ public final class ProcessMonitor {
     }
 
     public func diagnosticsReport() -> String {
-        engineDiagnostics.diagnosticsReport
+        EngineDiagnosticsViewModel.diagnosticsReport(
+            metrics: performanceMetrics,
+            health: health,
+            storeHealth: storeHealth,
+            storeError: storeError,
+            summary: summary,
+            generatedAt: Date()
+        )
     }
 
     public func exportDiagnosticsReport() async -> String {
@@ -475,7 +486,9 @@ public final class ProcessMonitor {
         }
     }
 
-    private func publish(payload: RadarPublishPayload, coalescedRefreshCount: Int) {
+    /// The worker already folded in the hitch report and last publish cost
+    /// and built the engine diagnostics, so this only assigns what changed.
+    private func publish(payload: RadarPublishPayload) {
         let publishStart = Date()
         // Measure assignments and observer callbacks too. Report the last
         // completed publish on the next refresh, without self-triggering a loop.
@@ -484,53 +497,26 @@ public final class ProcessMonitor {
             hitchMonitor.recordPublish(milliseconds: lastCompletedPublishMilliseconds)
         }
         var state = payload.state
-        let mergedReport = state.performanceMetrics.smoothnessReport.merging(hitchMonitor.report)
-        var performance = state.performanceMetrics.updatingSmoothness(
-            coalescedRefreshCount: coalescedRefreshCount,
-            refreshInFlight: false,
-            hitchCount: mergedReport.hitchCount,
-            worstHitchMilliseconds: mergedReport.worstHitchMilliseconds,
-            latestSpikePhase: mergedReport.latestSpikePhase,
-            smoothnessReport: mergedReport
-        )
-        storeError = state.storeError ?? state.storeHealth.errorMessage
-        storeHealth = state.storeHealth
-        scannerHealth = state.scannerHealth
-
-        let finalPublishCost = lastCompletedPublishMilliseconds
-        let finalReport = performance.smoothnessReport.merging(hitchMonitor.report)
-        performance = performance.updatingSmoothness(
-            mainActorPublishMilliseconds: finalPublishCost,
-            hitchCount: finalReport.hitchCount,
-            worstHitchMilliseconds: finalReport.worstHitchMilliseconds,
-            latestSpikePhase: finalReport.latestSpikePhase,
-            smoothnessReport: finalReport
-        )
-        let finalEngine = EngineDiagnosticsViewModel(
-            metrics: performance,
-            health: state.health,
-            storeHealth: state.storeHealth,
-            storeError: storeError,
-            summary: state.summary,
-            generatedAt: payload.generatedAt
-        )
-        let finalConsoleSnapshot = state.consoleSnapshot.updatingEngine(
-            finalEngine,
-            health: state.health,
-            generatedAt: payload.generatedAt
-        )
+        var performance = state.performanceMetrics
+        performance.smoothness.refreshInFlight = false
+        let nextStoreError = state.storeError ?? state.storeHealth.errorMessage
+        if storeError != nextStoreError { storeError = nextStoreError }
+        if storeHealth != state.storeHealth { storeHealth = state.storeHealth }
+        if scannerHealth != state.scannerHealth { scannerHealth = state.scannerHealth }
         let contentChanged = payload.delta.mode == .contentChanged ||
-            finalConsoleSnapshot.contentRevision != consoleSnapshot.contentRevision
+            state.consoleSnapshot.contentRevision != consoleSnapshot.contentRevision
 
-        engineDiagnostics = finalEngine
-        engineStatus = finalConsoleSnapshot.compact.engineStatus
-        health = SamplerHealth(
+        if engineDiagnostics != state.engineDiagnostics { engineDiagnostics = state.engineDiagnostics }
+        if engineStatus != state.engineStatus { engineStatus = state.engineStatus }
+        let nextHealth = SamplerHealth(
             engineName: state.health.engineName,
-            lastSampleDate: state.health.lastSampleDate,
+            lastSampleDate: nil,
             processCount: state.health.processCount,
             familyCount: contentChanged ? state.health.familyCount : health.familyCount,
             errorMessage: state.health.errorMessage
         )
+        if nextHealth != health { health = nextHealth }
+        lastSampleDate = state.health.lastSampleDate
         // Rendering buckets are not a data cache. Stable displayed numbers
         // must never freeze measurement timestamps or intervention inputs.
         families = state.families
@@ -540,9 +526,9 @@ public final class ProcessMonitor {
             rules = state.rules
             incidents = state.incidents
             triageFamilies = state.triageFamilies
-            consoleSnapshot = finalConsoleSnapshot
+            consoleSnapshot = state.consoleSnapshot
         }
-        performanceMetrics = performance
+        if performance != performanceMetrics { performanceMetrics = performance }
         state = ProcessMonitorPublishedState(
             families: families,
             summary: summary,
@@ -561,7 +547,7 @@ public final class ProcessMonitor {
         )
         publishedState = state
         notifyPublishedStateObservers(state)
-        RadarLogger.performance.debug("Refresh \(performance.lastRefresh.totalMilliseconds, privacy: .public)ms, next \(performance.nextRefreshInterval, privacy: .public)s, publish \(finalPublishCost, privacy: .public)ms, hitches \(performance.hitchCount, privacy: .public), forensics \(performance.forensicsRefreshCount, privacy: .public)/\(performance.forensicsDeferredCount, privacy: .public)")
+        RadarLogger.performance.debug("Refresh \(performance.lastRefresh.totalMilliseconds, privacy: .public)ms, next \(performance.nextRefreshInterval, privacy: .public)s, publish \(performance.mainActorPublishMilliseconds, privacy: .public)ms, hitches \(performance.smoothness.hitchCount, privacy: .public), forensics \(performance.forensicsRefreshCount, privacy: .public)/\(performance.forensicsDeferredCount, privacy: .public)")
     }
 
     private func notifyPublishedStateObservers(_ state: ProcessMonitorPublishedState) {
@@ -569,75 +555,5 @@ public final class ProcessMonitor {
         for observer in observers {
             observer(state)
         }
-    }
-
-    private func publish(
-        families: [ProcessFamily],
-        duplicateClusters: [DuplicateProcessCluster] = [],
-        summary: RadarSummary,
-        rules: [RadarRule],
-        incidents: [RadarIncident],
-        health: SamplerHealth,
-        generatedAt: Date,
-        storeHealth: StoreHealth,
-        performance: RadarPerformanceMetrics
-    ) {
-        let payload = RadarPublishPayload.build(
-            families: families,
-            duplicateClusters: duplicateClusters,
-            summary: summary,
-            rules: rules,
-            incidents: incidents,
-            health: health,
-            storeHealth: storeHealth,
-            storeError: storeError,
-            performance: performance,
-            previous: consoleSnapshot,
-            generatedAt: generatedAt
-        )
-        publish(payload: payload, coalescedRefreshCount: performance.coalescedRefreshCount)
-    }
-
-    private func metrics(
-        performanceMode: RadarPerformanceMode,
-        stats: RefreshStats,
-        samplerStats: SamplerStats,
-        storeHealth: StoreHealth,
-        nextInterval: TimeInterval,
-        scannerHealth: ScannerHealthSnapshot,
-        duplicateClusterCount: Int = 0,
-        promotedDuplicateCandidateCount: Int = 0,
-        duplicateDetectorMilliseconds: Double = 0,
-        hardwareOffenderCount: Int = 0,
-        hardwareDetectorMilliseconds: Double = 0
-    ) -> RadarPerformanceMetrics {
-        let alpha = averageRefreshMilliseconds == 0 ? 1 : 0.18
-        averageRefreshMilliseconds = averageRefreshMilliseconds * (1 - alpha) + stats.totalMilliseconds * alpha
-        return RadarPerformanceMetrics(
-            mode: performanceMode,
-            pressureLevel: scheduler.currentPressure,
-            lastRefresh: stats,
-            averageRefreshMilliseconds: averageRefreshMilliseconds,
-            nextRefreshInterval: nextInterval,
-            forensicsDeferredCount: samplerStats.forensicsDeferredCount,
-            forensicsRefreshCount: samplerStats.forensicsRefreshCount,
-            commandCacheHitCount: samplerStats.commandCacheHitCount,
-            storeBacklogCount: storeHealth.backlogCount,
-            lastStoreFlushDate: storeHealth.lastFlushDate,
-            budget: RadarPerformanceBudget.budget(for: performanceMode),
-            scannerHealth: scannerHealth,
-            scannerWorkerCount: samplerStats.scannerWorkerCount,
-            skippedOptionalWorkCount: samplerStats.skippedOptionalWorkCount,
-            scannerTaskCount: samplerStats.scannerTaskCount,
-            tinyQueueSequentialCount: samplerStats.tinyQueueSequentialCount,
-            samplerAllocationReuseCount: samplerStats.scratchpadReuseCount,
-            taskInfoReadCount: samplerStats.taskInfoReadCount,
-            reusedProcessRecordCount: samplerStats.reusedRecordCount,
-            duplicateClusterCount: duplicateClusterCount,
-            promotedDuplicateCandidateCount: promotedDuplicateCandidateCount,
-            duplicateDetectorMilliseconds: duplicateDetectorMilliseconds,
-            hardwareOffenderCount: hardwareOffenderCount,
-            hardwareDetectorMilliseconds: hardwareDetectorMilliseconds
-        )
     }
 }

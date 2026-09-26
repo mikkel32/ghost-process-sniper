@@ -427,9 +427,8 @@ struct PopoverView_Previews: PreviewProvider {
 
     @MainActor
     private static func popover(_ scenario: Scenario) -> some View {
-        let fixture = monitor(scenario)
+        let fixture = ProcessMonitor(builder: ProcessFamilyBuilder(currentUserID: 501), store: nil)
         let quickStops = QuickStopAdvisor(monitor: fixture)
-        quickStops.update()
         return PopoverView(
             monitor: fixture,
             notifier: UserNotificationRadarNotifier(),
@@ -441,11 +440,14 @@ struct PopoverView_Previews: PreviewProvider {
             onQuit: {},
             refreshesOnAppear: false
         )
+        // ingest runs the refresh worker, so the fixture fills in once the preview appears.
+        .task {
+            await feed(fixture, scenario, quickStops: quickStops)
+        }
     }
 
     @MainActor
-    private static func monitor(_ scenario: Scenario) -> ProcessMonitor {
-        let monitor = ProcessMonitor(builder: ProcessFamilyBuilder(currentUserID: 501), store: nil)
+    private static func feed(_ monitor: ProcessMonitor, _ scenario: Scenario, quickStops: QuickStopAdvisor) async {
         let start = Date()
         for step in 0..<6 {
             let now = start.addingTimeInterval(Double(step) * 5)
@@ -456,9 +458,9 @@ struct PopoverView_Previews: PreviewProvider {
             case .earlyWarning: process(501, "vite", memoryMB: 300, cpu: 0.2, startedAt: start.addingTimeInterval(-3 * 86_400), at: now)
             case .hot: process(501, "node", memoryMB: 900, cpu: 45, startedAt: start.addingTimeInterval(-120), at: now)
             }
-            monitor.ingest([main, helper], now: now)
+            await monitor.ingest([main, helper], now: now)
         }
-        return monitor
+        quickStops.update()
     }
 
     private static func process(

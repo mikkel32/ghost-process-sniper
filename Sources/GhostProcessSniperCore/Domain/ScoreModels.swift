@@ -15,15 +15,20 @@ public enum GhostScoreComponentKind: String, CaseIterable, Sendable {
 }
 
 public struct GhostScoreComponent: Identifiable, Equatable, Sendable {
-    public let id: String
+    /// What the component measures ("memory", "baseline.cpu",
+    /// "hardware.cpuPressure.0"). It is the identity, so a row keeps its
+    /// place while its title, detail and impact change every refresh.
+    public let slot: String
     public let kind: GhostScoreComponentKind
     public let title: String
     public let detail: String
     public let impact: Double
     public let level: GhostLevel
 
+    public var id: String { slot }
+
     public init(
-        id: String? = nil,
+        slot: String? = nil,
         kind: GhostScoreComponentKind,
         title: String,
         detail: String,
@@ -35,10 +40,10 @@ public struct GhostScoreComponent: Identifiable, Equatable, Sendable {
         self.detail = detail
         self.impact = impact
         self.level = level
-        self.id = id ?? "\(kind.rawValue)-\(title.lowercased())-\(Int(impact.rounded()))"
+        self.slot = slot ?? "\(kind.rawValue).\(title.lowercased())"
     }
 
-    public static func inferred(from reason: String, impact: Double, level: GhostLevel) -> GhostScoreComponent {
+    public static func inferred(from reason: String, impact: Double, level: GhostLevel, slot: String? = nil) -> GhostScoreComponent {
         let lowercased = reason.lowercased()
         let kind: GhostScoreComponentKind
         if lowercased.contains("memory") || lowercased.contains("footprint") {
@@ -66,6 +71,7 @@ public struct GhostScoreComponent: Identifiable, Equatable, Sendable {
         }
 
         return GhostScoreComponent(
+            slot: slot,
             kind: kind,
             title: reason,
             detail: reason,
@@ -76,11 +82,22 @@ public struct GhostScoreComponent: Identifiable, Equatable, Sendable {
 }
 
 enum GhostScoreComponentMath {
+    /// Scales positive impacts to `targetTotal`, keeping one component per
+    /// slot (the larger impact) so identities stay unique.
     static func normalized(
         _ components: [GhostScoreComponent],
         to targetTotal: Double
     ) -> [GhostScoreComponent] {
-        let positive = components.filter { $0.impact > 0 }
+        var positive: [GhostScoreComponent] = []
+        var indexBySlot: [String: Int] = [:]
+        for component in components where component.impact > 0 {
+            if let index = indexBySlot[component.slot] {
+                if component.impact > positive[index].impact { positive[index] = component }
+            } else {
+                indexBySlot[component.slot] = positive.count
+                positive.append(component)
+            }
+        }
         guard targetTotal > 0, !positive.isEmpty else {
             return []
         }
@@ -91,7 +108,7 @@ enum GhostScoreComponentMath {
         let scale = targetTotal / total
         return positive.map { component in
             GhostScoreComponent(
-                id: component.id,
+                slot: component.slot,
                 kind: component.kind,
                 title: component.title,
                 detail: component.detail,

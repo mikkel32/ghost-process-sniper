@@ -9,6 +9,11 @@ enum RadarStoreSchema {
     /// outcome posteriors).
     static let killLearningVersion: Int32 = 4
 
+    /// The version that adds the learned-baseline statistics (variance,
+    /// observed time, sessions). Old rows get defaults that mark them for
+    /// relearning.
+    static let baselineStatisticsVersion: Int32 = 5
+
     /// Append new versions; never edit a version that has shipped.
     static let migrations = [
         // Version 1 is the schema from before versioning. Its statements are
@@ -50,6 +55,16 @@ enum RadarStoreSchema {
         SQLiteMigration(
             version: killLearningVersion,
             statements: killLearningTables.map { "DROP TABLE IF EXISTS \($0)" } + killLearningStatements
+        ),
+        SQLiteMigration(
+            version: baselineStatisticsVersion,
+            statements: [],
+            addedColumns: [
+                SQLiteAddedColumn(table: "baselines", column: "memory_variance", definition: "REAL NOT NULL DEFAULT 0"),
+                SQLiteAddedColumn(table: "baselines", column: "cpu_variance", definition: "REAL NOT NULL DEFAULT 0"),
+                SQLiteAddedColumn(table: "baselines", column: "observed_seconds", definition: "REAL NOT NULL DEFAULT 0"),
+                SQLiteAddedColumn(table: "baselines", column: "session_count", definition: "INTEGER NOT NULL DEFAULT 1")
+            ]
         )
     ]
 

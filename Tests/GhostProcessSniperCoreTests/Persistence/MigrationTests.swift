@@ -136,6 +136,39 @@ final class MigrationTests: XCTestCase {
         XCTAssertFalse(try migrated.hasColumn("graceful_success_rate", in: "kill_calibration_aggregates"))
     }
 
+    func testVersionFourStoreGainsBaselineStatisticsAndKeepsItsRows() async throws {
+        let url = folder.appendingPathComponent("Radar.sqlite")
+        let v4 = SQLiteDatabase(url: url)
+        try v4.open()
+        try v4.migrate(RadarStoreSchema.migrations.filter { $0.version <= RadarStoreSchema.killLearningVersion })
+        try v4.exec("INSERT INTO baselines VALUES('sig', 'node', '/node', 'fp', 7, 1, 1, 1, 1, 0, 0, 1800000000, 1800000010, 1)")
+        XCTAssertEqual(try v4.userVersion(), RadarStoreSchema.killLearningVersion)
+        v4.close()
+
+        let store = RadarStore(url: url)
+        _ = try await store.loadRules(includeBuiltIns: false)
+        await store.close()
+
+        let migrated = SQLiteDatabase(url: url)
+        try migrated.open()
+        defer { migrated.close() }
+        XCTAssertEqual(try migrated.userVersion(), latest)
+        XCTAssertGreaterThanOrEqual(latest, RadarStoreSchema.baselineStatisticsVersion)
+        for column in ["memory_variance", "cpu_variance", "observed_seconds", "session_count"] {
+            XCTAssertTrue(try migrated.hasColumn(column, in: "baselines"), column)
+        }
+        var baselines: [FamilyBaseline] = []
+        try migrated.query("SELECT \(RadarStoreRows.baselineColumns) FROM baselines") { row in
+            baselines.append(RadarStoreRows.baseline(from: row))
+        }
+        let baseline = try XCTUnwrap(baselines.first)
+        XCTAssertEqual(baselines.count, 1)
+        XCTAssertEqual(baseline.sampleCount, 7, "the learned row survives the upgrade")
+        XCTAssertEqual(baseline.memoryVariance, 0)
+        XCTAssertEqual(baseline.observedSeconds, 0)
+        XCTAssertEqual(baseline.sessionCount, 1)
+    }
+
     func testUpgradedAndFreshStoresEndInTheSameSchema() async throws {
         let upgradedURL = folder.appendingPathComponent("Upgraded.sqlite")
         let v3 = SQLiteDatabase(url: upgradedURL)

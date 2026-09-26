@@ -38,6 +38,7 @@ public struct ProcessGPUUsageTracker: Sendable {
     private var cachedPercentByPID: [Int32: Double] = [:]
     private var cachedMeasuredAtByPID: [Int32: Date] = [:]
     private var lastRefreshAt: Date?
+    private var didLogServices = false
 
     public init() {}
 
@@ -59,7 +60,8 @@ public struct ProcessGPUUsageTracker: Sendable {
         }
 
         let start = Date()
-        let raw = IORegistryGPUClientReader.readAccumulatedNanosecondsByPID()
+        let raw = IORegistryGPUClientReader.readAccumulatedNanosecondsByPID(logMatchedServices: !didLogServices)
+        didLogServices = true
         let elapsed = Date().timeIntervalSince(start) * 1_000
         let percent = update(rawNanosecondsByPID: raw, now: now, identitiesByPID: identitiesByPID)
         lastRefreshAt = now
@@ -103,37 +105,87 @@ public struct ProcessGPUUsageTracker: Sendable {
     }
 }
 
+/// One GPU user client's lifetime GPU time.
+struct GPUClientUsage: Equatable, Sendable {
+    let serviceID: UInt64
+    let clientID: UInt64
+    let pid: Int32
+    let nanoseconds: UInt64
+}
+
 public enum IORegistryGPUClientReader {
+    private static let acceleratorClasses = ["AGXAccelerator", "IOAccelerator"]
+
     public static func readAccumulatedNanosecondsByPID() -> [Int32: UInt64] {
+        readAccumulatedNanosecondsByPID(logMatchedServices: false)
+    }
+
+    /// Apple GPUs match both classes (AGXAccelerator subclasses IOAccelerator),
+    /// so services are collected by registry ID and each is walked once.
+    static func readAccumulatedNanosecondsByPID(logMatchedServices: Bool) -> [Int32: UInt64] {
+        var services: [UInt64: io_registry_entry_t] = [:]
+        var matchedByClass: [String: [UInt64]] = [:]
+        for acceleratorClass in acceleratorClasses {
+            matchedByClass[acceleratorClass] = collectServices(acceleratorClass, into: &services)
+        }
+        defer { services.values.forEach { IOObjectRelease($0) } }
+        if logMatchedServices {
+            let summary = acceleratorClasses
+                .map { "\($0): \((matchedByClass[$0] ?? []).map(String.init).joined(separator: ","))" }
+                .joined(separator: "; ")
+            RadarLogger.sampler.debug("GPU accelerator services \(summary, privacy: .public)")
+        }
+
+        var clients: [GPUClientUsage] = []
+        for (serviceID, service) in services {
+            appendClients(of: service, serviceID: serviceID, into: &clients)
+        }
+        return mergeClients(clients)
+    }
+
+    /// Sums GPU time per pid, counting each user client once however many
+    /// times the walk reached it.
+    static func mergeClients(_ clients: [GPUClientUsage]) -> [Int32: UInt64] {
+        var seen = Set<UInt64>()
         var totals: [Int32: UInt64] = [:]
-        for acceleratorClass in ["AGXAccelerator", "IOAccelerator"] {
-            mergeGPUClients(acceleratorClass: acceleratorClass, into: &totals)
+        for client in clients where client.nanoseconds > 0 && seen.insert(client.clientID).inserted {
+            totals[client.pid, default: 0] &+= client.nanoseconds
         }
         return totals
     }
 
-    private static func mergeGPUClients(acceleratorClass: String, into totals: inout [Int32: UInt64]) {
+    /// Returns the registry IDs this class matched; new services are retained
+    /// in `services`, duplicates released.
+    private static func collectServices(_ acceleratorClass: String,
+                                        into services: inout [UInt64: io_registry_entry_t]) -> [UInt64] {
         guard let matching = IOServiceMatching(acceleratorClass) else {
-            return
+            return []
         }
 
         var iterator: io_iterator_t = 0
         guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else {
-            return
+            return []
         }
         defer { IOObjectRelease(iterator) }
 
+        var matched: [UInt64] = []
         while true {
             let accelerator = IOIteratorNext(iterator)
             guard accelerator != 0 else { break }
-            defer { IOObjectRelease(accelerator) }
-            mergeChildren(of: accelerator, into: &totals)
+            guard let serviceID = registryID(accelerator), services[serviceID] == nil else {
+                IOObjectRelease(accelerator)
+                continue
+            }
+            services[serviceID] = accelerator
+            matched.append(serviceID)
         }
+        return matched
     }
 
-    private static func mergeChildren(of parent: io_registry_entry_t, into totals: inout [Int32: UInt64]) {
+    private static func appendClients(of service: io_registry_entry_t, serviceID: UInt64,
+                                      into clients: inout [GPUClientUsage]) {
         var childIterator: io_iterator_t = 0
-        guard IORegistryEntryGetChildIterator(parent, kIOServicePlane, &childIterator) == KERN_SUCCESS else {
+        guard IORegistryEntryGetChildIterator(service, kIOServicePlane, &childIterator) == KERN_SUCCESS else {
             return
         }
         defer { IOObjectRelease(childIterator) }
@@ -143,30 +195,37 @@ public enum IORegistryGPUClientReader {
             guard child != 0 else { break }
             defer { IOObjectRelease(child) }
 
-            guard isGPUUserClient(child),
+            // Most children are not user clients; AppUsage rules them out
+            // before any string work.
+            guard let nanoseconds = accumulatedGPUTimeNanoseconds(child),
+                  isGPUUserClient(child),
                   let creator = stringProperty(child, key: "IOUserClientCreator"),
-                  let pid = pid(fromCreator: creator)
+                  let pid = pid(fromCreator: creator),
+                  let clientID = registryID(child)
             else {
                 continue
             }
-
-            let nanoseconds = accumulatedGPUTimeNanoseconds(child)
-            if nanoseconds > 0 {
-                totals[pid, default: 0] += nanoseconds
-            }
+            clients.append(GPUClientUsage(serviceID: serviceID, clientID: clientID, pid: pid, nanoseconds: nanoseconds))
         }
     }
 
+    private static func registryID(_ entry: io_registry_entry_t) -> UInt64? {
+        var identifier: UInt64 = 0
+        return IORegistryEntryGetRegistryEntryID(entry, &identifier) == KERN_SUCCESS ? identifier : nil
+    }
+
     private static func isGPUUserClient(_ entry: io_registry_entry_t) -> Bool {
-        var className = [CChar](repeating: 0, count: 128)
-        guard IOObjectGetClass(entry, &className) == KERN_SUCCESS else {
-            return false
+        withUnsafeTemporaryAllocation(of: CChar.self, capacity: 128) { buffer in
+            buffer.initialize(repeating: 0)
+            guard let base = buffer.baseAddress, IOObjectGetClass(entry, base) == KERN_SUCCESS else {
+                return false
+            }
+            let length = buffer.firstIndex(of: 0) ?? buffer.count
+            let name = UnsafeBufferPointer(rebasing: buffer[..<length]).withMemoryRebound(to: UInt8.self) {
+                String(decoding: $0, as: UTF8.self)
+            }
+            return name.contains("UserClient")
         }
-        let name = className.withUnsafeBufferPointer { buffer in
-            let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-            return String(decoding: bytes, as: UTF8.self)
-        }
-        return name.contains("DeviceUserClient") || name.contains("UserClient")
     }
 
     private static func stringProperty(_ entry: io_registry_entry_t, key: String) -> String? {
@@ -181,44 +240,30 @@ public enum IORegistryGPUClientReader {
         return value as? String
     }
 
-    private static func accumulatedGPUTimeNanoseconds(_ entry: io_registry_entry_t) -> UInt64 {
+    /// nil when the entry has no AppUsage, which is every non-client child.
+    private static func accumulatedGPUTimeNanoseconds(_ entry: io_registry_entry_t) -> UInt64? {
         guard let value = IORegistryEntryCreateCFProperty(
             entry,
             "AppUsage" as CFString,
             kCFAllocatorDefault,
             0
-        )?.takeRetainedValue() else {
-            return 0
-        }
-        guard let array = value as? [Any] else {
-            return 0
+        )?.takeRetainedValue(), let usage = value as? NSArray else {
+            return nil
         }
 
+        // Stay on the Foundation objects instead of bridging the whole array
+        // to [Any] and every entry to [String: Any].
         var total: UInt64 = 0
-        for item in array {
-            guard let dictionary = item as? [String: Any] else {
-                continue
-            }
-            total += numberValue(dictionary["accumulatedGPUTime"])
-            total += numberValue(dictionary["AccumulatedGPUTime"])
+        for case let record as NSDictionary in usage {
+            total &+= nanoseconds(record["accumulatedGPUTime"]) &+ nanoseconds(record["AccumulatedGPUTime"])
         }
         return total
     }
 
-    private static func numberValue(_ value: Any?) -> UInt64 {
-        if let number = value as? NSNumber {
-            return number.uint64Value
-        }
-        if let value = value as? UInt64 {
-            return value
-        }
-        if let value = value as? Int64, value > 0 {
-            return UInt64(value)
-        }
-        if let value = value as? Int, value > 0 {
-            return UInt64(value)
-        }
-        return 0
+    private static func nanoseconds(_ value: Any?) -> UInt64 {
+        guard let number = value as? NSNumber else { return 0 }
+        let signed = number.int64Value
+        return signed > 0 ? UInt64(signed) : 0
     }
 
     private static func pid(fromCreator creator: String) -> Int32? {

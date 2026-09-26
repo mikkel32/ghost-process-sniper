@@ -21,8 +21,7 @@ final class PerformanceAuditTests: XCTestCase {
                 settings.groupFamilies = false
                 let worker = RadarRefreshWorker(store: nil, builder: ProcessFamilyBuilder(currentUserID: 501))
                 let request = RefreshRequest(settings: settings, currentFamilies: [], currentIncidents: [],
-                                             currentStoreHealth: .empty, previousRefresh: .empty,
-                                             popoverVisible: true,
+                                             currentStoreHealth: .empty, uiVisible: true,
                                              focusedSignatureIDs: [ProcessSignature.from(root: processes[0]).id],
                                              now: now, startedAt: Date())
                 let started = DispatchTime.now().uptimeNanoseconds
@@ -90,6 +89,31 @@ final class PerformanceAuditTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: scaleURL)
         print(String(decoding: data, as: UTF8.self))
+    }
+
+    /// A realistic 600-process developer Mac for 20 ticks through the whole
+    /// pipeline. The budget holds in optimized builds; debug builds only
+    /// exercise the path.
+    func testPipelineTickCostOnADeveloperMac() {
+        var settings = ThresholdSettings.smart
+        settings.radarMode = .all
+        var pipeline = RadarPipeline(builder: ProcessFamilyBuilder(currentUserID: DevWorkstationFixture.user))
+        let context = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: RadarRule.builtIns(settings: settings))
+        let ticks = (0..<20).map { DevWorkstationFixture.processes(count: 600, tick: $0) }
+        var timings: [Double] = []
+        for (tick, processes) in ticks.enumerated() {
+            let started = DispatchTime.now().uptimeNanoseconds
+            let output = pipeline.run(processes: processes, settings: settings, context: context, now: DevWorkstationFixture.date(tick: tick))
+            timings.append(Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)
+            XCTAssertFalse(output.families.isEmpty)
+        }
+        // The first ticks fill the caches; steady state is what the user feels.
+        let steady = timings.dropFirst(2).sorted()
+        let median = steady[steady.count / 2]
+        print("pipeline tick median \(median) ms over \(steady.count) ticks")
+        #if !DEBUG
+        XCTAssertLessThanOrEqual(median, 25, "600-process tick took \(median) ms")
+        #endif
     }
 
     private static func process(index: Int, at now: Date) -> ProcessMetrics {

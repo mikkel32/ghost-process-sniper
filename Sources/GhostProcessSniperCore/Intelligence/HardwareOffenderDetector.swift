@@ -4,17 +4,24 @@ import Foundation
 public struct HardwareOffenderDetector: Sendable {
     private let currentUserID: UInt32
     private let maxOutlierPromotions: Int
+    private let physicalMemoryBytes: UInt64
 
-    public init(currentUserID: UInt32 = UInt32(geteuid()), maxOutlierPromotions: Int = 4) {
+    public init(
+        currentUserID: UInt32 = UInt32(geteuid()),
+        maxOutlierPromotions: Int = 4,
+        physicalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
+    ) {
         self.currentUserID = currentUserID
         self.maxOutlierPromotions = max(1, maxOutlierPromotions)
+        self.physicalMemoryBytes = physicalMemoryBytes
     }
 
     public func detect(
         processes: [ProcessMetrics],
-        settings: ThresholdSettings
+        settings: ThresholdSettings,
+        isEligible: ((ProcessMetrics) -> Bool)? = nil
     ) -> [ProcessIdentity: HardwareOffenderProfile] {
-        let eligible = processes.filter(isEligibleForGenericHardwareDetection)
+        let eligible = processes.filter(isEligible ?? isEligibleForGenericHardwareDetection)
         guard !eligible.isEmpty else {
             return [:]
         }
@@ -35,7 +42,9 @@ public struct HardwareOffenderDetector: Sendable {
         addSampleOutliers(
             eligible,
             metric: { Double($0.memoryForScoringBytes) },
-            floor: Double(max(settings.memoryBytes / 3, 256 * 1_048_576)),
+            // The largest app on a big Mac is not abnormal just for being
+            // largest; scale the floor with the host as well as the limit.
+            floor: Double(max(settings.memoryBytes / 3, physicalMemoryBytes / 25, 256 * 1_048_576)),
             reason: { "memory top offender \(RadarFormat.bytes($0.memoryForScoringBytes))" },
             kind: .memoryPressure,
             signalsByIdentity: &signalsByIdentity
@@ -74,7 +83,8 @@ public struct HardwareOffenderDetector: Sendable {
         return profiles
     }
 
-    private func isEligibleForGenericHardwareDetection(_ process: ProcessMetrics) -> Bool {
+    /// Depends only on static process facts, so callers may cache it.
+    func isEligibleForGenericHardwareDetection(_ process: ProcessMetrics) -> Bool {
         if process.userID == currentUserID {
             return !process.isSystemProcess && !isSystemBundle(process.executablePath)
         }
@@ -122,7 +132,8 @@ public struct HardwareOffenderDetector: Sendable {
                 criticalThreshold: max(settings.cpuPercent * 1.15, 90),
                 watchImpact: 7,
                 hotImpact: 18,
-                reason: process.cpuPercent >= cpuHot ? "sustained CPU pressure \(RadarFormat.percent(process.cpuPercent))" : "CPU pressure \(RadarFormat.percent(process.cpuPercent))"
+                // One reading; "sustained" is reserved for trend-proven heat.
+                reason: "CPU pressure \(RadarFormat.percent(process.cpuPercent))"
             ))
         }
 
@@ -186,17 +197,30 @@ public struct HardwareOffenderDetector: Sendable {
             }
         }
 
+        // Rank says "largest", not "abnormal": an outlier signal only lends
+        // visibility (Watch). Hot and Critical come from fixed thresholds, and
+        // a process gets at most one signal per resource.
         for (offset, entry) in ranked.enumerated() {
             let process = entry.process
-            let value = entry.value
-            let level: GhostLevel = offset == 0 && value >= floor * 1.8 ? .hot : .watch
-            let impact = max(4, min(14, 10 - Double(offset)))
+            if let fixedIndex = signalsByIdentity[process.identity]?.firstIndex(where: { $0.kind == kind }) {
+                if offset == 0, let fixed = signalsByIdentity[process.identity]?[fixedIndex] {
+                    signalsByIdentity[process.identity]?[fixedIndex] = HardwareOffenderSignal(
+                        kind: fixed.kind,
+                        value: fixed.value,
+                        threshold: fixed.threshold,
+                        level: fixed.level,
+                        impact: fixed.impact,
+                        reason: fixed.reason + " (largest on this Mac)"
+                    )
+                }
+                continue
+            }
             signalsByIdentity[process.identity, default: []].append(HardwareOffenderSignal(
                 kind: kind == .gpuPressure ? .gpuPressure : .sampleOutlier,
-                value: value,
+                value: entry.value,
                 threshold: floor,
-                level: level,
-                impact: impact,
+                level: .watch,
+                impact: max(4, min(14, 10 - Double(offset))),
                 reason: reason(process)
             ))
         }

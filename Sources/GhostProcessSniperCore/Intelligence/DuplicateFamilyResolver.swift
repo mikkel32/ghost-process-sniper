@@ -7,15 +7,23 @@ enum DuplicateFamilyResolver {
         _ clusters: [DuplicateProcessCluster],
         families: [ProcessFamily]
     ) -> [DuplicateProcessCluster] {
+        resolve(clusters, memberships: families.map { ($0.familyKey, $0.members) })
+    }
+
+    /// Resolves against family memberships before the families are scored.
+    static func resolve(
+        _ clusters: [DuplicateProcessCluster],
+        memberships: [(familyKey: String, members: [ProcessMetrics])]
+    ) -> [DuplicateProcessCluster] {
         guard !clusters.isEmpty else { return [] }
 
         var owners: [ProcessIdentity: [Int]] = [:]
-        owners.reserveCapacity(families.count)
-        for (index, family) in families.enumerated() {
+        owners.reserveCapacity(memberships.count)
+        for (index, membership) in memberships.enumerated() {
             // Overlapping families are supported, but a repeated member within
             // one family must not inflate the containment count.
             var seen = Set<ProcessIdentity>()
-            for member in family.members where seen.insert(member.identity).inserted {
+            for member in membership.members where seen.insert(member.identity).inserted {
                 owners[member.identity, default: []].append(index)
             }
         }
@@ -29,7 +37,7 @@ enum DuplicateFamilyResolver {
                 }
             }
             return cluster.resolving(
-                relatedFamilyKeys: matches.keys.map { families[$0].familyKey },
+                relatedFamilyKeys: matches.keys.map { memberships[$0].familyKey },
                 isInternalToSingleFamily: matches.values.contains(identities.count)
             )
         }.sorted { lhs, rhs in

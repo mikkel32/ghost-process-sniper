@@ -63,7 +63,7 @@ final class FamilySamplingDemandTests: XCTestCase {
     func testSchedulerUsesRuntimeDemandInItsActualSamplingPlan() {
         let family = RefreshPerformanceFixture.family(RefreshPerformanceFixture.process(0))
         var scheduler = RadarScheduler()
-        let plan = scheduler.plan(settings: .smart, families: [family], popoverVisible: true,
+        let plan = scheduler.plan(settings: .smart, families: [family], uiVisible: true,
             focusedSignatureIDs: [family.familyKey], now: RefreshPerformanceFixture.now)
         XCTAssertEqual(plan.candidateSet.identities, [family.root.identity])
         XCTAssertEqual(plan.includeForensicsFor, [family.root.identity])

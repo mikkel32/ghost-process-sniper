@@ -22,538 +22,127 @@ public extension ProcessSampling {
     }
 }
 
-struct RawProcessSample: Sendable {
-    let pid: pid_t
-    let liteRecord: ProcessLiteRecord
-    let taskInfo: proc_taskallinfo?
-    let usage: rusage_info_v4?
-    let preliminaryPriority: Bool
-    let shouldReadRichMetrics: Bool
-}
-
-struct ParallelProbeResult: Sendable {
-    let samples: [RawProcessSample]
-    let cheapMetricsCount: Int
-    let richMetricsCount: Int
-    let skippedCount: Int
-    let expensiveCallCount: Int
-    let bsdReadCount: Int
-    let taskInfoReadCount: Int
-    let didHitDeadline: Bool
-}
-
-struct TelemetryJob: Sendable {
-    let pid: pid_t
-    let identity: ProcessIdentity
-    let userID: UInt32
-    let priorityRank: Int
-}
-
-struct ForensicsJob: Sendable {
-    let pid: pid_t
-    let identity: ProcessIdentity
-    let priorityRank: Int
-}
-
-struct TelemetryResult: Sendable {
-    let identity: ProcessIdentity
-    let entry: ProcessTelemetryCache.Entry
-}
-
-struct ForensicsResult: Sendable {
-    let identity: ProcessIdentity
-    let forensics: ProcessForensics
-    let expensiveCallCount: Int
-}
-
+/// Every tick measures CPU and memory for each readable process, then spends
+/// the tick deadline on telemetry, forensics and task info, most wanted first.
 public actor NativeProcessSampler: ProcessSampling {
+    private let source: any ProcessProbeSource
     private var cpuTracker = CPUUsageTracker<ProcessIdentity>()
     private var telemetryCache = ProcessTelemetryCache()
     private var forensicsCache = ForensicsCache()
     private var scanCache = ProcessScanCache()
     private var gpuUsageTracker = ProcessGPUUsageTracker()
+    private var nameHints = DeveloperNameHints()
     private var pidBuffer = [pid_t](repeating: 0, count: 4096)
-    private var rawSamplesScratch: [RawProcessSample] = []
-    private var telemetryJobsScratch: [TelemetryJob] = []
-    private var forensicsJobsScratch: [ForensicsJob] = []
+    /// Reused buffers. A tick takes them for its whole run, so a reentrant
+    /// call during an await starts from empty buffers instead of sharing.
+    private var scratch: SamplerTick?
     private var lastCachePruneDate: Date?
     private var probePass: UInt64 = 0
+    private var completedSampleCount = 0
 
-    public init() {}
+    public init() {
+        source = NativeProcessProbeSource()
+    }
+
+    init(source: any ProcessProbeSource) {
+        self.source = source
+    }
 
     public func sample(plan: SamplingPlan) async throws -> ProcessSampleBatch {
         let now = plan.sampledAt
-        let start = Date()
-        let deadline = SamplerDeadline(
-            startedAt: start,
-            budgetMilliseconds: plan.scannerBudget.targetMilliseconds + plan.scannerBudget.optionalMilliseconds
-        )
-        var counters = SamplingCounters()
-        let pidCount = try listPIDCount(counters: &counters)
+        let startedAt = source.now()
+        var tick = scratch.take() ?? SamplerTick()
+        tick.reset(deadline: TickDeadline(startedAt: startedAt,
+            budgetMilliseconds: plan.scannerBudget.targetMilliseconds + plan.scannerBudget.optionalMilliseconds))
+        if tick.reused { tick.counters.scratchpadReuseCount += 1 }
+
+        let pidCount = try source.listPIDs(into: &pidBuffer)
+        tick.counters.expensiveCallCount += 1
+        tick.counters.scannerWorkerCount = pidCount > 0 ? 1 : 0
         let pass = probePass
         probePass &+= 1
-        let stride = max(1, max(plan.unknownProcessStride, plan.probePolicy.quietRichMetricStride))
-        let richBudget = plan.metricsEnrichmentBudget > 0 ? plan.metricsEnrichmentBudget :
-            (plan.trueCheapScanEnabled ? max(1, (pidCount + stride - 1) / stride) : pidCount)
+        let probe = ProcessProbeReader.read(pidBuffer, count: pidCount, plan: plan, source: source,
+            deadline: tick.deadline, pass: pass, known: scanCache, hints: &nameHints,
+            samples: &tick.rawSamples, priorities: &tick.rawPriorities)
+        tick.counters.record(probe)
 
-        let plannedWorkerCount = Self.workerCount(for: pidCount, mode: plan.performanceMode)
-        let workerCount = pidCount < 2_000 ? min(plannedWorkerCount, 1) : plannedWorkerCount
-        counters.scannerWorkerCount = workerCount
-        var chunkedProbes: [ParallelProbeResult] = []
-
-        if workerCount <= 1 || pidCount < 2_000 {
-            chunkedProbes = [
-                ProcessProbeReader.read(
-                    pidBuffer,
-                    startIndex: 0,
-                    endIndex: pidCount,
-                    plan: plan,
-                    deadline: deadline,
-                    pass: pass,
-                    budget: richBudget
-                )
-            ]
-        } else {
-            let pidsSnapshot = Array(pidBuffer.prefix(pidCount))
-            counters.pidBufferCopyCount += 1
-            let chunkSize = (pidCount + workerCount - 1) / workerCount
-            chunkedProbes = try await withThrowingTaskGroup(of: ParallelProbeResult.self) { group in
-                for workerIndex in 0..<workerCount {
-                    let startIdx = workerIndex * chunkSize
-                    let endIdx = min(pidCount, (workerIndex + 1) * chunkSize)
-                    guard startIdx < endIdx else { continue }
-                    counters.scannerTaskCount += 1
-                    let chunkBudget = richBudget / workerCount + (workerIndex < richBudget % workerCount ? 1 : 0)
-
-                    group.addTask {
-                        ProcessProbeReader.read(
-                            pidsSnapshot,
-                            startIndex: startIdx,
-                            endIndex: endIdx,
-                            plan: plan,
-                            deadline: deadline,
-                            pass: pass,
-                            budget: chunkBudget
-                        )
-                    }
-                }
-
-                var results: [ParallelProbeResult] = []
-                for try await result in group {
-                    results.append(result)
-                }
-                return results
-            }
+        tick.samples.reserveCapacity(tick.rawSamples.count)
+        for raw in tick.rawSamples {
+            var sample = measure(raw, counters: &tick.counters)
+            sample.telemetry = cachedTelemetry(for: raw, sampleIndex: tick.samples.count, plan: plan, tick: &tick)
+            sample.forensics = cachedForensics(for: raw, sampleIndex: tick.samples.count, plan: plan, tick: &tick)
+            tick.samples.append(sample)
         }
-
-        // Phase 2: Ingest chunked results sequentially on the actor
-        counters.scratchpadReuseCount += 1
-        rawSamplesScratch.removeAll(keepingCapacity: true)
-        rawSamplesScratch.reserveCapacity(pidCount)
-        for probe in chunkedProbes {
-            rawSamplesScratch.append(contentsOf: probe.samples)
-            counters.skippedPIDCount += probe.skippedCount
-            counters.expensiveCallCount += probe.expensiveCallCount
-            counters.richMetricRefreshCount += probe.richMetricsCount
-            counters.bsdReadCount += probe.bsdReadCount
-            counters.taskInfoReadCount += probe.taskInfoReadCount
-            counters.count(.cheapMetrics, by: probe.cheapMetricsCount)
-            counters.count(.richMetrics, by: probe.richMetricsCount)
-            if probe.didHitDeadline {
-                counters.didHitDeadline = true
-                counters.count(.deadlineSkipped, by: probe.skippedCount)
-            }
+        for index in tick.samples.indices {
+            let identity = tick.samples[index].identity
+            tick.identitiesByPID[identity.pid] = identity
+            tick.indexByIdentity[identity] = index
         }
+        let gpuSnapshot = gpuUsageTracker.sample(now: now, minimumInterval: Self.gpuRefreshInterval(for: plan.performanceMode),
+                                                 identitiesByPID: tick.identitiesByPID)
 
-        var activeSamples: [ActiveProcessSample] = []
-        telemetryJobsScratch.removeAll(keepingCapacity: true)
-        forensicsJobsScratch.removeAll(keepingCapacity: true)
-        telemetryJobsScratch.reserveCapacity(min(pidCount, plan.scannerBudget.maxTelemetryRefreshes * 2))
-        forensicsJobsScratch.reserveCapacity(min(pidCount, plan.maxForensicsPerRefresh * 2 + 8))
-
-        for rawSample in rawSamplesScratch {
-            let pid = rawSample.pid
-            let liteRecord = rawSample.liteRecord
-            let taskInfo = rawSample.taskInfo
-            let usage = rawSample.usage
-            let preliminaryPriority = rawSample.preliminaryPriority
-
-            let identity = liteRecord.identity
-            let cachedRecord = scanCache.record(for: identity)
-            let totalProcessorSeconds: TimeInterval
-            let cpu: Double
-            let cpuMeasurementStatus: ProcessMeasurementStatus
-            let residentMemoryBytes: UInt64
-            let physicalFootprintBytes: UInt64
-            let virtualMemoryBytes: UInt64
-            let threadCount: Int
-            let isSystemProcess: Bool
-
-            if let taskInfo {
-                totalProcessorSeconds = processorSeconds(taskInfo: taskInfo, usage: usage)
-                let measuredCPU = cpuTracker.percent(
-                    key: identity,
-                    totalProcessorSeconds: totalProcessorSeconds,
-                    wallClock: now
-                )
-                if let measuredCPU, measuredCPU.isFinite, measuredCPU >= 0 {
-                    cpu = measuredCPU
-                    cpuMeasurementStatus = .fresh
-                } else if let cachedDate = cachedRecord?.process.cpuMeasurementDate {
-                    cpu = cachedRecord?.process.cpuPercent ?? 0
-                    cpuMeasurementStatus = .cached(cachedDate)
-                } else {
-                    cpu = 0
-                    cpuMeasurementStatus = .unavailable
-                }
-                residentMemoryBytes = usage?.ri_resident_size ?? taskInfo.ptinfo.pti_resident_size
-                physicalFootprintBytes = usage?.ri_phys_footprint ?? taskInfo.ptinfo.pti_resident_size
-                virtualMemoryBytes = taskInfo.ptinfo.pti_virtual_size
-                threadCount = Int(taskInfo.ptinfo.pti_threadnum)
-                isSystemProcess = (taskInfo.pbsd.pbi_flags & UInt32(PROC_FLAG_SYSTEM)) != 0
-            } else if let cached = cachedRecord {
-                counters.reusedRecordCount += 1
-                totalProcessorSeconds = cached.process.totalProcessorSeconds
-                cpu = cached.process.cpuPercent
-                cpuMeasurementStatus = cached.process.cpuMeasurementDate.map { .cached($0) } ?? .unavailable
-                residentMemoryBytes = cached.process.residentMemoryBytes
-                physicalFootprintBytes = cached.process.physicalFootprintBytes
-                virtualMemoryBytes = cached.process.virtualMemoryBytes
-                threadCount = cached.process.threadCount
-                isSystemProcess = liteRecord.isSystemProcess
-            } else {
-                totalProcessorSeconds = 0
-                cpu = 0
-                cpuMeasurementStatus = .unavailable
-                residentMemoryBytes = 0
-                physicalFootprintBytes = 0
-                virtualMemoryBytes = 0
-                threadCount = 0
-                isSystemProcess = liteRecord.isSystemProcess
-            }
-
-            var hasher = Hasher()
-            hasher.combine(liteRecord.parentPID)
-            hasher.combine(liteRecord.userID)
-            hasher.combine(residentMemoryBytes / 8_388_608)
-            hasher.combine(physicalFootprintBytes / 8_388_608)
-            hasher.combine(Int(cpu.rounded()))
-            hasher.combine(threadCount)
-            hasher.combine(isSystemProcess)
-            let probeFingerprint = UInt64(bitPattern: Int64(hasher.finalize()))
-
-            let isPriority = preliminaryPriority
-
-            var sampleItem = ActiveProcessSample(
-                identity: identity,
-                measurementStatus: taskInfo != nil ? .fresh : cachedRecord?.process.measurementDate.map { .cached($0) } ?? .unavailable,
-                cpuMeasurementStatus: cpuMeasurementStatus,
-                parentPID: liteRecord.parentPID,
-                userID: liteRecord.userID,
-                residentMemoryBytes: residentMemoryBytes,
-                physicalFootprintBytes: physicalFootprintBytes,
-                virtualMemoryBytes: virtualMemoryBytes,
-                threadCount: threadCount,
-                isSystemProcess: isSystemProcess,
-                probeFingerprint: probeFingerprint,
-                totalProcessorSeconds: totalProcessorSeconds,
-                cpu: cpu,
-                isPriority: isPriority,
-                telemetry: nil,
-                forensics: nil
-            )
-
-            // TELEMETRY CACHE CHECK
-            if !scanCache.shouldRefreshTelemetry(
-                identity: identity,
-                probeFingerprint: probeFingerprint,
-                now: now,
-                maxAge: plan.commandRefreshInterval,
-                grace: plan.scannerBudget.staleTelemetryGrace,
-                isPriority: isPriority,
-                force: plan.forceCommandRefresh
-            ),
-               let cached = telemetryCache.entry(for: identity) {
-                counters.commandCacheHitCount += 1
-                counters.count(.telemetryCache)
-                sampleItem.telemetry = cached
-            } else if rawSample.taskInfo == nil,
-                      let cached = cachedRecord,
-                      !plan.forceCommandRefresh {
-                counters.commandCacheHitCount += 1
-                counters.count(.telemetryCache)
-                sampleItem.telemetry = ProcessTelemetryCache.Entry(
-                    name: cached.process.name,
-                    executablePath: cached.process.executablePath,
-                    commandLine: cached.process.commandLine,
-                    ownerName: cached.process.ownerName,
-                    refreshedAt: cached.telemetryRefreshedAt
-                )
-            } else {
-                telemetryJobsScratch.append(TelemetryJob(pid: pid, identity: identity, userID: liteRecord.userID, priorityRank: isPriority ? 2 : 0))
-            }
-
-            // FORENSICS CACHE CHECK
-            if let cached = forensicsCache.entry(for: identity, now: now, maxAge: 60) {
-                counters.forensicsCacheHitCount += 1
-                counters.count(.forensicsCache)
-                sampleItem.forensics = cached.forensics
-            } else if let negative = forensicsCache.negativeEntry(
-                for: identity,
-                now: now,
-                maxAge: plan.scannerBudget.negativeForensicsTTL
-            ) {
-                counters.forensicsNegativeCacheHitCount += 1
-                counters.count(.forensicsCache)
-                sampleItem.forensics = negative.forensics
-            } else if !isPriority {
-                counters.forensicsDeferredCount += 1
-                counters.skippedOptionalWorkCount += 1
-                sampleItem.forensics = .unavailable(reason: "forensics deferred for quiet process")
-            } else if deadline.isExpired() {
-                counters.didHitDeadline = true
-                counters.forensicsDeferredCount += 1
-                counters.count(.deadlineSkipped)
-                sampleItem.forensics = .unavailable(reason: "forensics deferred by scanner deadline")
-            } else if let cached = forensicsCache.entry(for: identity) {
-                counters.forensicsCacheHitCount += 1
-                counters.count(.forensicsCache)
-                sampleItem.forensics = cached.forensics
-            } else {
-                forensicsJobsScratch.append(ForensicsJob(pid: pid, identity: identity, priorityRank: isPriority ? 2 : 0))
-            }
-
-            activeSamples.append(sampleItem)
+        // Cold start and big backlogs get a one-off allowance so paths and argv
+        // fill in within a few ticks instead of minutes.
+        if completedSampleCount < 3 || tick.telemetryJobs.count > 64 {
+            tick.deadline.budgetMilliseconds += Self.backlogAllowanceMilliseconds
         }
+        runPathLane(now: now, tick: &tick)
+        let refreshed = await runForensicsJobs(plan: plan, now: now, tick: &tick)
+        runPortCensus(plan: plan, now: now, refreshed: refreshed, tick: &tick)
+        await runArgumentLane(plan: plan, now: now, tick: &tick)
 
-        var identitiesByPID: [Int32: ProcessIdentity] = [:]
-        identitiesByPID.reserveCapacity(activeSamples.count)
-        for sample in activeSamples { identitiesByPID[sample.identity.pid] = sample.identity }
-        let gpuSnapshot = gpuUsageTracker.sample(
-            now: now,
-            minimumInterval: Self.gpuRefreshInterval(for: plan.performanceMode),
-            identitiesByPID: identitiesByPID
-        )
-
-        let activeIndexByIdentity = Dictionary(
-            uniqueKeysWithValues: activeSamples.enumerated().map { ($0.element.identity, $0.offset) }
-        )
-
-        var activeTelemetryJobs: [TelemetryJob] = []
-        var activeForensicsJobs: [ForensicsJob] = []
-
-        // Telemetry Queue Filtering
-        telemetryJobsScratch.sort { $0.priorityRank > $1.priorityRank }
-        for job in telemetryJobsScratch {
-            if deadline.isExpired() || counters.commandRefreshCount >= plan.scannerBudget.maxTelemetryRefreshes {
-                counters.telemetryDeferredCount += 1
-                counters.skippedOptionalWorkCount += 1
-                counters.didHitDeadline = counters.didHitDeadline || deadline.isExpired()
-                counters.count(.deadlineSkipped)
-
-                if let index = activeIndexByIdentity[job.identity] {
-                    if let cached = telemetryCache.entry(for: job.identity) {
-                        counters.commandCacheHitCount += 1
-                        activeSamples[index].telemetry = cached
-                    } else {
-                        let name = processName(for: job.pid, fallbackPath: "")
-                        activeSamples[index].telemetry = ProcessTelemetryCache.Entry(
-                            name: name,
-                            executablePath: "",
-                            commandLine: name,
-                            ownerName: UserNameResolver.name(for: job.userID),
-                            refreshedAt: now
-                        )
-                    }
-                }
-            } else {
-                activeTelemetryJobs.append(job)
-                counters.commandRefreshCount += 1
-            }
-        }
-
-        // Forensics Queue Filtering
-        forensicsJobsScratch.sort { $0.priorityRank > $1.priorityRank }
-        for job in forensicsJobsScratch {
-            let shouldRefresh = plan.allowsOptionalForensics &&
-                counters.forensicsRefreshCount < plan.maxForensicsPerRefresh &&
-                (plan.includeForensicsFor.contains(job.identity) || plan.includeForensicsForPIDs.contains(job.pid))
-
-            if !shouldRefresh {
-                counters.forensicsDeferredCount += 1
-                counters.skippedOptionalWorkCount += 1
-                if let index = activeIndexByIdentity[job.identity] {
-                    activeSamples[index].forensics = .unavailable(
-                        reason: plan.allowsOptionalForensics ? "forensics deferred" : "forensics paused under system pressure"
-                    )
-                }
-            } else if deadline.isExpired() {
-                counters.didHitDeadline = true
-                counters.forensicsDeferredCount += 1
-                counters.skippedOptionalWorkCount += 1
-                counters.count(.deadlineSkipped)
-                if let index = activeIndexByIdentity[job.identity] {
-                    activeSamples[index].forensics = .unavailable(reason: "forensics deferred by scanner deadline")
-                }
-            } else {
-                activeForensicsJobs.append(job)
-                counters.forensicsRefreshCount += 1
-            }
-        }
-
-        let telemetryResults: [TelemetryResult]
-        if activeTelemetryJobs.isEmpty {
-            telemetryResults = []
-        } else if activeTelemetryJobs.count <= 4 {
-            counters.tinyQueueSequentialCount += 1
-            telemetryResults = activeTelemetryJobs.map { job in
-                let executablePath = processPath(for: job.pid)
-                let name = processName(for: job.pid, fallbackPath: executablePath)
-                let command = commandLine(for: job.pid) ?? executablePath.ifNotEmpty ?? name
-                let entry = ProcessTelemetryCache.Entry(
-                    name: name,
-                    executablePath: executablePath,
-                    commandLine: command,
-                    ownerName: UserNameResolver.name(for: job.userID),
-                    refreshedAt: now
-                )
-                return TelemetryResult(identity: job.identity, entry: entry)
-            }
-        } else {
-            telemetryResults = try await runTelemetryJobs(activeTelemetryJobs, now: now, counters: &counters, mode: plan.performanceMode)
-        }
-
-        let forensicsResults: [ForensicsResult]
-        if activeForensicsJobs.isEmpty {
-            forensicsResults = []
-        } else if activeForensicsJobs.count <= 2 {
-            counters.tinyQueueSequentialCount += 1
-            forensicsResults = activeForensicsJobs.map { job in
-                let info = forensics(for: job.pid)
-                return ForensicsResult(
-                    identity: job.identity,
-                    forensics: info.forensics,
-                    expensiveCallCount: info.expensiveCallCount
-                )
-            }
-        } else {
-            forensicsResults = try await runForensicsJobs(activeForensicsJobs, counters: &counters, mode: plan.performanceMode)
-        }
-
-        // Ingest telemetry results back sequentially on the actor
-        for result in telemetryResults {
-            telemetryCache.update(result.entry, for: result.identity)
-            counters.expensiveCallCount += 3
-            counters.count(.telemetryRefresh)
-
-            if let index = activeIndexByIdentity[result.identity] {
-                activeSamples[index].telemetry = result.entry
-            }
-        }
-
-        // Ingest forensics results back sequentially on the actor
-        for result in forensicsResults {
-            forensicsCache.update(result.forensics, for: result.identity, at: now)
-            counters.expensiveCallCount += result.expensiveCallCount
-            counters.count(.forensicsQueue)
-
-            if let index = activeIndexByIdentity[result.identity] {
-                activeSamples[index].forensics = result.forensics
-            }
-        }
-
-        // Build ProcessMetrics and update scan cache
         var processes: [ProcessMetrics] = []
-        processes.reserveCapacity(activeSamples.count)
-
-        for sampleItem in activeSamples {
-            let identity = sampleItem.identity
-            let probeFingerprint = sampleItem.probeFingerprint
-            let totalProcessorSeconds = sampleItem.totalProcessorSeconds
-            let cpu = sampleItem.cpu
-            let gpu = gpuSnapshot.percentByPID[sampleItem.identity.pid] ?? 0
-            let gpuMeasurementStatus: ProcessMeasurementStatus = gpuSnapshot.measuredAtByPID[sampleItem.identity.pid]
-                .map { $0 == now ? .fresh : .cached($0) } ?? .unavailable
-
-            guard let telemetry = sampleItem.telemetry,
-                  let forensics = sampleItem.forensics
-            else {
-                continue
-            }
-
+        processes.reserveCapacity(tick.samples.count)
+        for sample in tick.samples {
+            let telemetry = sample.telemetry
+                ?? .placeholder(name: sample.name, ownerName: UserNameResolver.name(for: sample.userID))
             let process = ProcessMetrics(
-                identity: identity,
-                parentPID: sampleItem.parentPID,
-                userID: sampleItem.userID,
+                identity: sample.identity,
+                parentPID: sample.parentPID,
+                userID: sample.userID,
                 ownerName: telemetry.ownerName,
                 name: telemetry.name,
                 executablePath: telemetry.executablePath,
                 commandLine: telemetry.commandLine,
-                residentMemoryBytes: sampleItem.residentMemoryBytes,
-                physicalFootprintBytes: sampleItem.physicalFootprintBytes,
-                virtualMemoryBytes: sampleItem.virtualMemoryBytes,
-                cpuPercent: cpu,
-                gpuUsagePercent: gpu,
-                totalProcessorSeconds: totalProcessorSeconds,
-                threadCount: sampleItem.threadCount,
-                isSystemProcess: sampleItem.isSystemProcess,
+                residentMemoryBytes: sample.residentMemoryBytes,
+                physicalFootprintBytes: sample.physicalFootprintBytes,
+                virtualMemoryBytes: sample.virtualMemoryBytes,
+                cpuPercent: sample.cpu,
+                gpuUsagePercent: gpuSnapshot.percentByPID[sample.identity.pid] ?? 0,
+                totalProcessorSeconds: sample.totalProcessorSeconds,
+                threadCount: sample.threadCount,
+                isSystemProcess: sample.isSystemProcess,
                 sampledAt: now,
-                forensics: forensics,
-                measurementStatus: sampleItem.measurementStatus,
-                cpuMeasurementStatus: sampleItem.cpuMeasurementStatus,
-                gpuMeasurementStatus: gpuMeasurementStatus
+                forensics: sample.forensics ?? .unavailable(reason: "forensics deferred"),
+                measurementStatus: sample.measurementStatus,
+                cpuMeasurementStatus: sample.cpuMeasurementStatus,
+                gpuMeasurementStatus: gpuSnapshot.measuredAtByPID[sample.identity.pid]
+                    .map { $0 == now ? .fresh : .cached($0) } ?? .unavailable,
+                session: sample.session
             )
-
-            let record = ProcessRecord(
-                identity: identity,
-                process: process,
-                metricsFingerprint: probeFingerprint,
-                telemetryRefreshedAt: telemetry.refreshedAt,
-                lastSeenAt: now
-            )
-            scanCache.update(record)
+            scanCache.update(ProcessRecord(identity: sample.identity, process: process,
+                telemetryRefreshedAt: telemetry.isPlaceholder ? .distantPast : telemetry.refreshedAt))
             processes.append(process)
         }
 
-        if shouldPruneCaches(now: now, processCount: processes.count) {
+        let tickComplete = !tick.counters.didHitDeadline && tick.counters.skippedPIDCount == 0
+        if shouldPruneCaches(now: now, processCount: processes.count, tickComplete: tickComplete) {
             let identities = Set(processes.map(\.identity))
             cpuTracker.prune(keeping: identities)
             telemetryCache.prune(keeping: identities)
             forensicsCache.prune(keeping: identities)
             scanCache.prune(keeping: identities)
+            nameHints.prune(keeping: Set(tick.rawSamples.map(\.kernelName)))
             lastCachePruneDate = now
         } else {
-            counters.skippedOptionalWorkCount += 1
+            tick.counters.skippedOptionalWorkCount += 1
         }
 
-        let elapsed = Date().timeIntervalSince(start) * 1_000
-        counters.didHitDeadline = counters.didHitDeadline || elapsed >= deadline.budgetMilliseconds
-
-        let stats = SamplerStats(
-            processCount: processes.count,
-            commandRefreshCount: counters.commandRefreshCount,
-            commandCacheHitCount: counters.commandCacheHitCount,
-            forensicsRefreshCount: counters.forensicsRefreshCount,
-            forensicsDeferredCount: counters.forensicsDeferredCount,
-            elapsedMilliseconds: elapsed,
-            telemetryDeferredCount: counters.telemetryDeferredCount,
-            forensicsCacheHitCount: counters.forensicsCacheHitCount,
-            forensicsNegativeCacheHitCount: counters.forensicsNegativeCacheHitCount,
-            skippedPIDCount: counters.skippedPIDCount,
-            expensiveCallCount: counters.expensiveCallCount,
-            richMetricRefreshCount: counters.richMetricRefreshCount,
-            scannerWorkerCount: counters.scannerWorkerCount,
-            skippedOptionalWorkCount: counters.skippedOptionalWorkCount,
-            scannerTaskCount: counters.scannerTaskCount,
-            tinyQueueSequentialCount: counters.tinyQueueSequentialCount,
-            didHitDeadline: counters.didHitDeadline,
-            laneCounts: counters.laneCounts,
-            bsdReadCount: counters.bsdReadCount,
-            taskInfoReadCount: counters.taskInfoReadCount,
-            reusedRecordCount: counters.reusedRecordCount,
-            pidBufferCopyCount: counters.pidBufferCopyCount,
-            scratchpadReuseCount: counters.scratchpadReuseCount
-        )
+        let elapsed = tick.deadline.elapsedMilliseconds(at: source.now())
+        tick.counters.didHitDeadline = tick.counters.didHitDeadline || elapsed >= tick.deadline.budgetMilliseconds
+        let stats = tick.counters.stats(processCount: processes.count, elapsedMilliseconds: elapsed)
+        completedSampleCount += 1
+        scratch = tick
 
         return ProcessSampleBatch(
             processes: processes,
@@ -563,104 +152,291 @@ public actor NativeProcessSampler: ProcessSampling {
         )
     }
 
-    private func runTelemetryJobs(
-        _ jobs: [TelemetryJob],
-        now: Date,
-        counters: inout SamplingCounters,
-        mode: RadarPerformanceMode
-    ) async throws -> [TelemetryResult] {
-        let batchSize = Self.maxParallelJobCount(for: mode)
-        var output: [TelemetryResult] = []
-        output.reserveCapacity(jobs.count)
-        var index = 0
-        while index < jobs.count {
-            let end = min(jobs.count, index + batchSize)
-            counters.scannerTaskCount += end - index
-            let results = try await withThrowingTaskGroup(of: TelemetryResult.self) { group in
-                for jobIndex in index..<end {
-                    let job = jobs[jobIndex]
-                    group.addTask {
-                        let executablePath = self.processPath(for: job.pid)
-                        let name = self.processName(for: job.pid, fallbackPath: executablePath)
-                        let command = self.commandLine(for: job.pid) ?? executablePath.ifNotEmpty ?? name
-                        let entry = ProcessTelemetryCache.Entry(
-                            name: name,
-                            executablePath: executablePath,
-                            commandLine: command,
-                            ownerName: UserNameResolver.name(for: job.userID),
-                            refreshedAt: now
-                        )
-                        return TelemetryResult(identity: job.identity, entry: entry)
-                    }
-                }
-                var batchResults: [TelemetryResult] = []
-                batchResults.reserveCapacity(end - index)
-                for try await result in group {
-                    batchResults.append(result)
-                }
-                return batchResults
+    // MARK: - CPU and memory
+
+    private func measure(_ raw: RawProcessSample, counters: inout SamplingCounters) -> ActiveProcessSample {
+        let lite = raw.liteRecord
+        let identity = lite.identity
+        let cached = scanCache.record(for: identity)?.process
+        var cpu = cached?.cpuPercent ?? 0
+        var cpuStatus: ProcessMeasurementStatus = cached?.cpuMeasurementDate.map { .cached($0) } ?? .unavailable
+        var usage = raw.usage
+        if let reading = usage {
+            switch cpuTracker.reading(key: identity, processorSeconds: reading.cpuSeconds,
+                                      uptimeNanoseconds: reading.sampledAtUptimeNanoseconds,
+                                      startStamp: reading.processStartAbsoluteTime) {
+            case .percent(let percent):
+                cpu = percent
+                cpuStatus = .fresh
+            case .startMismatch:
+                // The pid was reused between the BSD and usage reads.
+                usage = nil
+                counters.usageReadCount -= 1
+                counters.usageFailedCount += 1
+            case .baseline, .invalid:
+                break
             }
-            output.append(contentsOf: results)
-            index = end
         }
-        return output
+
+        let threadCount = raw.task?.threadCount ?? cached?.threadCount ?? 0
+        let virtualBytes = raw.task?.virtualBytes ?? cached?.virtualMemoryBytes ?? 0
+        if usage == nil, cached != nil { counters.reusedRecordCount += 1 }
+        return ActiveProcessSample(
+            identity: identity,
+            measurementStatus: usage != nil ? .fresh : cached?.measurementDate.map { .cached($0) } ?? .unavailable,
+            cpuMeasurementStatus: cpuStatus,
+            parentPID: lite.parentPID,
+            userID: lite.userID,
+            name: lite.name,
+            openFileCount: lite.openFileCount,
+            residentMemoryBytes: usage?.residentBytes ?? cached?.residentMemoryBytes ?? 0,
+            physicalFootprintBytes: usage?.physicalFootprintBytes ?? cached?.physicalFootprintBytes ?? 0,
+            virtualMemoryBytes: virtualBytes,
+            threadCount: threadCount,
+            isSystemProcess: lite.isSystemProcess,
+            totalProcessorSeconds: usage?.cpuSeconds ?? cached?.totalProcessorSeconds ?? 0,
+            cpu: cpu,
+            isPriority: raw.priority > 0,
+            // The session never changes after setsid, so getsid runs once per
+            // identity and later passes reuse the cached value.
+            session: lite.session(sessionID: cached?.sessionID ?? source.sessionID(raw.pid))
+        )
     }
 
-    private func runForensicsJobs(
-        _ jobs: [ForensicsJob],
-        counters: inout SamplingCounters,
-        mode: RadarPerformanceMode
-    ) async throws -> [ForensicsResult] {
-        let batchSize = Self.maxParallelJobCount(for: mode)
-        var output: [ForensicsResult] = []
-        output.reserveCapacity(jobs.count)
-        var index = 0
-        while index < jobs.count {
-            let end = min(jobs.count, index + batchSize)
-            counters.scannerTaskCount += end - index
-            let results = try await withThrowingTaskGroup(of: ForensicsResult.self) { group in
-                for jobIndex in index..<end {
-                    let job = jobs[jobIndex]
-                    group.addTask {
-                        let info = self.forensics(for: job.pid)
-                        return ForensicsResult(
-                            identity: job.identity,
-                            forensics: info.forensics,
-                            expensiveCallCount: info.expensiveCallCount
-                        )
-                    }
-                }
-                var batchResults: [ForensicsResult] = []
-                batchResults.reserveCapacity(end - index)
-                for try await result in group {
-                    batchResults.append(result)
-                }
-                return batchResults
+    // MARK: - Telemetry
+
+    private func cachedTelemetry(for raw: RawProcessSample, sampleIndex: Int, plan: SamplingPlan,
+                                 tick: inout SamplerTick) -> ProcessTelemetryCache.Entry? {
+        let identity = raw.liteRecord.identity
+        var entry = telemetryCache.entry(for: identity)
+        var rank = raw.priority
+        if let old = entry, !old.kernelName.isEmpty, !raw.kernelName.isEmpty, old.kernelName != raw.kernelName {
+            // Identity survives exec; a new kernel name is the cheap signal that
+            // the path, argv and working directory all changed.
+            telemetryCache.remove(identity)
+            forensicsCache.remove(identity)
+            entry = nil
+            rank = 3
+        }
+        if let entry, entry.argumentsRead, !scanCache.shouldRefreshTelemetry(
+            identity: identity,
+            now: plan.sampledAt,
+            maxAge: plan.commandRefreshInterval,
+            grace: plan.scannerBudget.staleTelemetryGrace,
+            isPriority: raw.priority > 0
+        ) {
+            tick.counters.commandCacheHitCount += 1
+            tick.counters.count(.telemetryCache)
+            return entry
+        }
+        tick.telemetryJobs.append(TelemetryJob(
+            pid: raw.pid, identity: identity, sampleIndex: sampleIndex, userID: raw.liteRecord.userID,
+            kernelName: raw.kernelName, priorityRank: rank, needsPath: entry == nil,
+            neverRead: entry?.argumentsRead != true, refreshedAt: entry?.refreshedAt ?? .distantPast,
+            executablePath: entry?.executablePath ?? ""))
+        // A real entry keeps serving until the argv lane gets to it.
+        return entry
+    }
+
+    /// Paths are cheap and decide app and bundle recognition, so every
+    /// identity without one gets it this tick, deadline permitting.
+    private func runPathLane(now: Date, tick: inout SamplerTick) {
+        for index in tick.telemetryJobs.indices where tick.telemetryJobs[index].needsPath {
+            if tick.deadline.isExpired(at: source.now()) {
+                tick.counters.didHitDeadline = true
+                return
             }
-            output.append(contentsOf: results)
-            index = end
+            let job = tick.telemetryJobs[index]
+            let path = source.executablePath(job.pid)
+            tick.counters.expensiveCallCount += 1
+            let entry = SamplerJobs.entry(for: job, path: path, arguments: nil, argumentsRead: false, now: now)
+            telemetryCache.update(entry, for: job.identity)
+            tick.samples[job.sampleIndex].telemetry = entry
+            tick.telemetryJobs[index].needsPath = false
+            tick.telemetryJobs[index].executablePath = path
         }
-        return output
     }
 
-    public nonisolated static func recommendedWorkerCount(for processCount: Int, mode: RadarPerformanceMode) -> Int {
-        workerCount(for: processCount, mode: mode)
+    /// argv runs most wanted first while the deadline allows, and never fewer
+    /// than the budget's telemetry floor.
+    private func runArgumentLane(plan: SamplingPlan, now: Date, tick: inout SamplerTick) async {
+        guard !tick.telemetryJobs.isEmpty else { return }
+        tick.telemetryJobs.sort(by: SamplerJobs.argumentOrder)
+        let jobs = tick.telemetryJobs
+        let floor = plan.scannerBudget.maxTelemetryRefreshes
+        // Fan out only when someone is watching and the queue is long enough
+        // to repay the task-group overhead; otherwise stay on the actor.
+        let parallel = plan.uiVisible && jobs.count > Self.sequentialJobLimit
+        let batchSize = parallel ? Self.maxParallelJobCount(for: plan.performanceMode) : 1
+        if !parallel { tick.counters.tinyQueueSequentialCount += 1 }
+        var next = 0
+        while next < jobs.count, next < floor || !tick.deadline.isExpired(at: source.now()) {
+            let end = min(jobs.count, next + batchSize)
+            if parallel {
+                tick.counters.scannerTaskCount += end - next
+                for result in await SamplerJobs.readArguments(jobs[next..<end], source: source, now: now) {
+                    apply(result, tick: &tick)
+                }
+            } else {
+                apply(SamplerJobs.readArguments(jobs[next], source: source, now: now), tick: &tick)
+            }
+            next = end
+        }
+        let deferred = jobs.count - next
+        if deferred > 0 {
+            tick.counters.didHitDeadline = true
+            tick.counters.telemetryDeferredCount += deferred
+            tick.counters.skippedOptionalWorkCount += deferred
+            tick.counters.count(.deadlineSkipped, by: deferred)
+        }
     }
 
-    nonisolated private static func workerCount(for processCount: Int, mode: RadarPerformanceMode) -> Int {
-        guard processCount > 0 else {
-            return 0
-        }
-        if processCount < 180 {
-            return 1
-        }
-        let maxWorkers: Int = switch mode {
-        case .batterySaver: 3
-        case .balanced: 5
-        case .realtime: 8
-        }
-        return min(maxWorkers, max(2, (processCount + 399) / 400))
+    private func apply(_ result: TelemetryResult, tick: inout SamplerTick) {
+        telemetryCache.update(result.entry, for: result.job.identity)
+        tick.samples[result.job.sampleIndex].telemetry = result.entry
+        tick.counters.commandRefreshCount += 1
+        tick.counters.expensiveCallCount += result.job.needsPath ? 3 : 2
+        tick.counters.count(.telemetryRefresh)
     }
+
+    // MARK: - Forensics
+
+    private func cachedForensics(for raw: RawProcessSample, sampleIndex: Int, plan: SamplingPlan,
+                                 tick: inout SamplerTick) -> ProcessForensics? {
+        let identity = raw.liteRecord.identity
+        let now = plan.sampledAt
+        let isPriority = raw.priority > 0
+        let entry = forensicsCache.entry(for: identity)
+        if let entry, !entry.isPortsOnly, now.timeIntervalSince(entry.refreshedAt) <= Self.freshForensicsAge {
+            tick.counters.forensicsCacheHitCount += 1
+            tick.counters.count(.forensicsCache)
+            return entry.forensics
+        }
+        if let negative = forensicsCache.negativeEntry(for: identity, now: now,
+                                                       maxAge: plan.scannerBudget.negativeForensicsTTL) {
+            tick.counters.forensicsNegativeCacheHitCount += 1
+            tick.counters.count(.forensicsCache)
+            return negative.forensics
+        }
+        guard isPriority else {
+            // Quiet processes keep what is known, so their ports stay searchable.
+            if let entry, entry.isPortsOnly || !entry.forensics.isPartial,
+               now.timeIntervalSince(entry.portsRefreshedAt) <= Self.quietForensicsMaxAge {
+                tick.counters.forensicsCacheHitCount += 1
+                tick.counters.count(.forensicsCache)
+                return entry.forensics
+            }
+            tick.counters.forensicsDeferredCount += 1
+            tick.counters.skippedOptionalWorkCount += 1
+            return .unavailable(reason: "forensics deferred for quiet process")
+        }
+        if tick.deadline.isExpired(at: source.now()) {
+            tick.counters.didHitDeadline = true
+            tick.counters.forensicsDeferredCount += 1
+            tick.counters.count(.deadlineSkipped)
+            return entry?.forensics ?? .unavailable(reason: "forensics deferred by scanner deadline")
+        }
+        // Stale-while-revalidate: a server that bound its port after the last
+        // read gets re-read instead of showing "no ports" for its whole life.
+        tick.forensicsJobs.append(ForensicsJob(pid: raw.pid, identity: identity, sampleIndex: sampleIndex,
+            neverRead: entry == nil || entry?.isPortsOnly == true, refreshedAt: entry?.refreshedAt ?? .distantPast))
+        return entry?.forensics
+    }
+
+    /// Returns the sample indices that got a full forensics read.
+    private func runForensicsJobs(plan: SamplingPlan, now: Date, tick: inout SamplerTick) async -> Set<Int> {
+        guard !tick.forensicsJobs.isEmpty else { return [] }
+        tick.forensicsJobs.sort(by: SamplerJobs.forensicsOrder)
+        var accepted: [ForensicsJob] = []
+        for job in tick.forensicsJobs {
+            let wanted = plan.allowsOptionalForensics && accepted.count < plan.maxForensicsPerRefresh &&
+                (plan.includeForensicsFor.contains(job.identity) || plan.includeForensicsForPIDs.contains(job.pid))
+            let reason: String
+            if !wanted {
+                reason = plan.allowsOptionalForensics ? "forensics deferred" : "forensics paused under system pressure"
+            } else if tick.deadline.isExpired(at: source.now()) {
+                tick.counters.didHitDeadline = true
+                tick.counters.count(.deadlineSkipped)
+                reason = "forensics deferred by scanner deadline"
+            } else {
+                accepted.append(job)
+                continue
+            }
+            tick.counters.forensicsDeferredCount += 1
+            tick.counters.skippedOptionalWorkCount += 1
+            if tick.samples[job.sampleIndex].forensics == nil {
+                tick.samples[job.sampleIndex].forensics = .unavailable(reason: reason)
+            }
+        }
+
+        let results: [ForensicsResult]
+        if plan.uiVisible, accepted.count > Self.sequentialJobLimit {
+            tick.counters.scannerTaskCount += accepted.count
+            results = await SamplerJobs.readForensics(accepted[...], source: source)
+        } else {
+            if !accepted.isEmpty { tick.counters.tinyQueueSequentialCount += 1 }
+            results = accepted.map { SamplerJobs.readForensics($0, source: source) }
+        }
+        var refreshed = Set<Int>()
+        for result in results {
+            forensicsCache.update(result.forensics, for: result.job.identity, at: now)
+            tick.samples[result.job.sampleIndex].forensics = result.forensics
+            tick.counters.forensicsRefreshCount += 1
+            tick.counters.expensiveCallCount += result.expensiveCallCount
+            tick.counters.count(.forensicsQueue)
+            refreshed.insert(result.job.sampleIndex)
+        }
+        return refreshed
+    }
+
+    /// Listening ports only: no cwd, no vnode reads. Background census covers
+    /// the few quiet developer processes the plan names; an explicit request
+    /// covers every same-user process with open files, under its own cap.
+    private func runPortCensus(plan: SamplingPlan, now: Date, refreshed: Set<Int>, tick: inout SamplerTick) {
+        if plan.portCensusAll {
+            let cap = TickDeadline(startedAt: source.now(), budgetMilliseconds: Self.fullCensusMilliseconds)
+            let user = source.effectiveUserID
+            for index in tick.samples.indices where !refreshed.contains(index) {
+                guard tick.samples[index].userID == user, tick.samples[index].openFileCount > 0 else { continue }
+                if cap.isExpired(at: source.now()) {
+                    tick.counters.didHitDeadline = true
+                    return
+                }
+                censusPorts(at: index, now: now, tick: &tick)
+            }
+            return
+        }
+        guard plan.allowsOptionalForensics else { return }
+        var remaining = plan.maxForensicsPerRefresh
+        for identity in plan.portCensusIdentities where remaining > 0 {
+            guard let index = tick.indexByIdentity[identity], !refreshed.contains(index) else { continue }
+            if tick.deadline.isExpired(at: source.now()) {
+                tick.counters.didHitDeadline = true
+                return
+            }
+            censusPorts(at: index, now: now, tick: &tick)
+            remaining -= 1
+        }
+    }
+
+    private func censusPorts(at index: Int, now: Date, tick: inout SamplerTick) {
+        let identity = tick.samples[index].identity
+        tick.counters.expensiveCallCount += 1
+        guard let ports = source.listeningPorts(identity.pid) else { return }
+        tick.samples[index].forensics = forensicsCache.mergePorts(ports, for: identity, at: now)
+        tick.counters.portCensusCount += 1
+    }
+
+    // MARK: - Policy
+
+    private static let sequentialJobLimit = 8
+    private static let backlogAllowanceMilliseconds = 30.0
+    private static let fullCensusMilliseconds = 40.0
+    private static let freshForensicsAge: TimeInterval = 60
+    private static let quietForensicsMaxAge: TimeInterval = 600
+    /// Deadline ticks skip pruning, but a machine that always hits the
+    /// deadline must still shed exited identities.
+    private static let forcedPruneInterval: TimeInterval = 60
 
     nonisolated private static func maxParallelJobCount(for mode: RadarPerformanceMode) -> Int {
         switch mode {
@@ -678,240 +454,14 @@ public actor NativeProcessSampler: ProcessSampling {
         }
     }
 
-    private func listPIDCount(counters: inout SamplingCounters) throws -> Int {
-        var bytesWritten = 0
-        while true {
-            let bufferSize = pidBuffer.count * MemoryLayout<pid_t>.stride
-            bytesWritten = Int(pidBuffer.withUnsafeMutableBufferPointer { buffer -> Int32 in
-                proc_listpids(UInt32(PROC_ALL_PIDS), 0, buffer.baseAddress, Int32(bufferSize))
-            })
-            if bytesWritten < bufferSize || pidBuffer.count >= 65_536 {
-                break
-            }
-            pidBuffer.append(contentsOf: repeatElement(0, count: pidBuffer.count))
-        }
-        guard bytesWritten > 0 else {
-            throw ProcessSamplerError.listFailed
-        }
-        counters.expensiveCallCount += 1
-        let count = Int(bytesWritten) / MemoryLayout<pid_t>.stride
-        return count
-    }
-
-    private func shouldPruneCaches(now: Date, processCount: Int) -> Bool {
-        guard processCount > 0 else {
+    private func shouldPruneCaches(now: Date, processCount: Int, tickComplete: Bool) -> Bool {
+        guard processCount > 0, let lastCachePruneDate else {
             return true
         }
-        guard let lastCachePruneDate else {
-            return true
+        let elapsed = now.timeIntervalSince(lastCachePruneDate)
+        guard tickComplete else {
+            return elapsed >= Self.forcedPruneInterval
         }
-        let interval: TimeInterval = processCount > 2_000 ? 5 : 10
-        return now.timeIntervalSince(lastCachePruneDate) >= interval
-    }
-
-    nonisolated private func rusage(for pid: pid_t) -> rusage_info_v4? {
-        var usage = rusage_info_v4()
-        let result = withUnsafeMutablePointer(to: &usage) { pointer in
-            pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { rebound in
-                proc_pid_rusage(pid, RUSAGE_INFO_V4, rebound)
-            }
-        }
-        return result == 0 ? usage : nil
-    }
-
-    nonisolated private func processorSeconds(taskInfo: proc_taskallinfo, usage: rusage_info_v4?) -> TimeInterval {
-        if let usage {
-            return ProcessCPUTime.seconds(user: usage.ri_user_time, system: usage.ri_system_time)
-        }
-        return ProcessCPUTime.seconds(user: taskInfo.ptinfo.pti_total_user, system: taskInfo.ptinfo.pti_total_system)
-    }
-
-    nonisolated private func processPath(for pid: pid_t) -> String {
-        withUnsafeTemporaryAllocation(of: CChar.self, capacity: 4096) { buffer in
-            buffer.initialize(repeating: 0)
-            let length = proc_pidpath(pid, buffer.baseAddress, UInt32(buffer.count))
-            guard length > 0 else {
-                return ""
-            }
-            return string(from: UnsafeBufferPointer(buffer))
-        }
-    }
-
-    nonisolated private func processName(for pid: pid_t, fallbackPath: String) -> String {
-        withUnsafeTemporaryAllocation(of: CChar.self, capacity: 256) { buffer in
-            buffer.initialize(repeating: 0)
-            let length = proc_name(pid, buffer.baseAddress, UInt32(buffer.count))
-            if length > 0 {
-                return string(from: UnsafeBufferPointer(buffer))
-            }
-            let fallback = URL(fileURLWithPath: fallbackPath).lastPathComponent
-            return fallback.isEmpty ? "pid-\(pid)" : fallback
-        }
-    }
-
-    nonisolated private func commandLine(for pid: pid_t) -> String? {
-        var mib = [CTL_KERN, KERN_PROCARGS2, pid]
-        var size = 0
-        guard sysctl(&mib, u_int(mib.count), nil, &size, nil, 0) == 0, size > 0 else {
-            return nil
-        }
-
-        return withUnsafeTemporaryAllocation(of: CChar.self, capacity: size) { buffer in
-            buffer.initialize(repeating: 0)
-            guard sysctl(&mib, u_int(mib.count), buffer.baseAddress, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else {
-                return nil
-            }
-
-            var argc: Int32 = 0
-            memcpy(&argc, buffer.baseAddress, MemoryLayout<Int32>.size)
-
-            var index = MemoryLayout<Int32>.size
-            while index < size && buffer[index] != 0 { index += 1 }
-            while index < size && buffer[index] == 0 { index += 1 }
-
-            var arguments: [String] = []
-            for _ in 0..<max(0, Int(argc)) {
-                guard index < size else { break }
-                let start = index
-                while index < size && buffer[index] != 0 { index += 1 }
-                if index > start {
-                    let count = index - start
-                    let rawPtr = UnsafeRawPointer(buffer.baseAddress?.advanced(by: start))
-                    if let rawPtr {
-                        let subBuffer = UnsafeRawBufferPointer(start: rawPtr, count: count)
-                        arguments.append(String(decoding: subBuffer, as: UTF8.self))
-                    }
-                }
-                index += 1
-            }
-
-            return arguments.isEmpty ? nil : arguments.joined(separator: " ")
-        }
-    }
-
-    nonisolated private func forensics(for pid: pid_t) -> (forensics: ProcessForensics, expensiveCallCount: Int) {
-        var notes: [String] = []
-        var expensiveCallCount = 0
-
-        let vnode = vnodePaths(for: pid)
-        expensiveCallCount += 1
-        if vnode == nil {
-            notes.append("cwd unavailable")
-        }
-
-        let descriptors = fileDescriptors(for: pid)
-        expensiveCallCount += 1
-        if descriptors == nil {
-            notes.append("file descriptors unavailable")
-        }
-
-        var socketCount = 0
-        var ports: [Int] = []
-        for descriptor in descriptors ?? [] where descriptor.proc_fdtype == UInt32(PROX_FDTYPE_SOCKET) {
-            socketCount += 1
-            if let port = localPort(pid: pid, fd: descriptor.proc_fd) {
-                ports.append(port)
-            }
-            expensiveCallCount += 1
-        }
-
-        let forensicsResult = ProcessForensics(
-            currentDirectory: vnode?.currentDirectory,
-            rootDirectory: vnode?.rootDirectory,
-            openFileCount: descriptors?.count,
-            socketCount: descriptors == nil ? nil : socketCount,
-            listeningPorts: Array(Set(ports)).sorted().prefix(8).map { $0 },
-            isPartial: vnode == nil || descriptors == nil,
-            notes: notes
-        )
-        return (forensicsResult, expensiveCallCount)
-    }
-
-    nonisolated private func vnodePaths(for pid: pid_t) -> (currentDirectory: String?, rootDirectory: String?)? {
-        var info = proc_vnodepathinfo()
-        let size = Int32(MemoryLayout<proc_vnodepathinfo>.stride)
-        let result = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size)
-        guard result == size else {
-            return nil
-        }
-        return (
-            tupleString(info.pvi_cdir.vip_path).ifNotEmpty,
-            tupleString(info.pvi_rdir.vip_path).ifNotEmpty
-        )
-    }
-
-    nonisolated private func fileDescriptors(for pid: pid_t) -> [proc_fdinfo]? {
-        let bytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
-        guard bytes > 0 else {
-            return nil
-        }
-
-        let count = Int(bytes) / MemoryLayout<proc_fdinfo>.stride
-        guard count > 0 else {
-            return []
-        }
-
-        var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: count)
-        let result = descriptors.withUnsafeMutableBufferPointer { buffer in
-            proc_pidinfo(
-                pid,
-                PROC_PIDLISTFDS,
-                0,
-                buffer.baseAddress,
-                Int32(buffer.count * MemoryLayout<proc_fdinfo>.stride)
-            )
-        }
-        guard result > 0 else {
-            return nil
-        }
-        return Array(descriptors.prefix(Int(result) / MemoryLayout<proc_fdinfo>.stride))
-    }
-
-    nonisolated private func localPort(pid: pid_t, fd: Int32) -> Int? {
-        var info = socket_fdinfo()
-        let size = Int32(MemoryLayout<socket_fdinfo>.stride)
-        let result = proc_pidfdinfo(pid, fd, PROC_PIDFDSOCKETINFO, &info, size)
-        guard result == size else {
-            return nil
-        }
-
-        let rawPort: Int32
-        switch info.psi.soi_kind {
-        case Int32(SOCKINFO_TCP):
-            rawPort = info.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport
-        case Int32(SOCKINFO_IN):
-            rawPort = info.psi.soi_proto.pri_in.insi_lport
-        default:
-            return nil
-        }
-
-        guard rawPort > 0 else {
-            return nil
-        }
-        return Int(UInt16(bigEndian: UInt16(truncatingIfNeeded: rawPort)))
-    }
-
-    nonisolated private func string(from buffer: UnsafeBufferPointer<CChar>) -> String {
-        guard let firstZero = buffer.firstIndex(of: 0) else {
-            return buffer.withMemoryRebound(to: UInt8.self) { rebound in
-                String(decoding: rebound, as: UTF8.self)
-            }
-        }
-        let subBuffer = UnsafeBufferPointer(start: buffer.baseAddress, count: firstZero)
-        return subBuffer.withMemoryRebound(to: UInt8.self) { rebound in
-            String(decoding: rebound, as: UTF8.self)
-        }
-    }
-
-    nonisolated private func tupleString<T>(_ tuple: T) -> String {
-        var value = tuple
-        return withUnsafeBytes(of: &value) { rawBuffer in
-            let chars = rawBuffer.bindMemory(to: UInt8.self)
-            guard let firstZero = chars.firstIndex(of: 0) else {
-                return String(decoding: chars, as: UTF8.self)
-            }
-            let subBuffer = UnsafeBufferPointer(start: chars.baseAddress, count: firstZero)
-            return String(decoding: subBuffer, as: UTF8.self)
-        }
+        return elapsed >= (processCount > 2_000 ? 5 : 10)
     }
 }

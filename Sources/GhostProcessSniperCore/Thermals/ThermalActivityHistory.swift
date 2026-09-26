@@ -148,10 +148,4 @@ public struct ThermalActivityHistory: Sendable {
                 (date.timeIntervalSince(load.lastMeasuredAt) <= Self.maximumAge && load.value(at: date) >= Self.minimumLoad)
         }
     }
-
-    /// Projects a raw sample and records it; callers without a refresh worker use this.
-    mutating func recordProjection(of processes: [ProcessMetrics], families: [ProcessFamily],
-                                   at now: Date) -> ThermalActivitySummary {
-        record(ThermalActivityAnalyzer.project(processes: processes, families: families, now: now), at: now)
-    }
 }

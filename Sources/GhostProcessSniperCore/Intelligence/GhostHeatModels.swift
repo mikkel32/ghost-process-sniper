@@ -8,7 +8,12 @@ public struct GhostHeat: Equatable, Sendable {
     public let level: GhostLevel
     public let confidence: Double
     public let evidence: [String]
+    /// Trend-proven persistence only (sustained CPU or a sustained leak).
+    /// History gates read this, so it must never count context.
     public let sustainedSignalCount: Int
+    /// Context votes that corroborate urgency without proving persistence:
+    /// a learned-baseline anomaly or host memory pressure.
+    public let corroborationCount: Int
 
     public static let quiet = GhostHeat(
         value: 0,
@@ -23,14 +28,33 @@ public struct GhostHeat: Equatable, Sendable {
         level: GhostLevel,
         confidence: Double,
         evidence: [String],
-        sustainedSignalCount: Int
+        sustainedSignalCount: Int,
+        corroborationCount: Int = 0
     ) {
         self.value = min(100, max(0, value))
         self.level = level
         self.confidence = min(1, max(0, confidence))
         self.evidence = Array(evidence.prefix(5))
         self.sustainedSignalCount = max(0, sustainedSignalCount)
+        self.corroborationCount = max(0, corroborationCount)
     }
+
+    /// A copy with presentation-level changes that keeps confidence and both
+    /// vote counts, for suppression, hysteresis and visibility floors.
+    public func replacing(value: Double? = nil, level: GhostLevel? = nil, evidence: [String]? = nil) -> GhostHeat {
+        GhostHeat(
+            value: value ?? self.value,
+            level: level ?? self.level,
+            confidence: confidence,
+            evidence: evidence ?? self.evidence,
+            sustainedSignalCount: sustainedSignalCount,
+            corroborationCount: corroborationCount
+        )
+    }
+
+    static let sustainedCPUEvidence = "CPU stayed elevated across the sampling window"
+    static let instantCPUEvidence = "CPU is high now, but persistence is not proven yet"
+    static let memoryAboveLimitEvidence = "Memory footprint is above its adaptive limit"
 
     public var valueText: String {
         "\(Int(value.rounded()))"
@@ -42,9 +66,9 @@ public struct GhostHeat: Equatable, Sendable {
 
     /// Heat can react quickly, while disruptive product behavior waits for
     /// corroboration. Critical heat is always actionable; ordinary Hot heat
-    /// needs either reasonable confidence or a sustained signal.
+    /// needs reasonable confidence, a sustained signal, or two context votes.
     public var isConfirmed: Bool {
-        level >= .critical || confidence >= 0.45 || sustainedSignalCount > 0
+        level >= .critical || confidence >= 0.45 || sustainedSignalCount > 0 || corroborationCount >= 2
     }
 
     public var shouldRecordIncident: Bool {
@@ -77,16 +101,19 @@ public enum GhostHeatModel {
     public static func initial(
         memoryRatio: Double,
         cpuRatio: Double,
+        cpuThreshold: Double,
         gpuRatio: Double,
         leakRatio: Double,
         trend: TrendMetrics,
-        hardwareLevel: GhostLevel
+        hardwareLevel: GhostLevel,
+        cpuBehavior: CPUBehavior = .none
     ) -> GhostHeat {
+        // The real limit, never one inferred from the last trend sample: that
+        // sample is stale whenever a cached reading skipped the append.
         let cpuSamples = trend.samples.map(\.cpuPercent)
         let sustainedCPUFraction: Double
-        if cpuSamples.count >= 4, cpuRatio > 0 {
-            let inferredThreshold = max(1, (cpuSamples.last ?? 0) / cpuRatio)
-            sustainedCPUFraction = Double(cpuSamples.filter { $0 >= inferredThreshold }.count) / Double(cpuSamples.count)
+        if cpuSamples.count >= 4, cpuThreshold > 0 {
+            sustainedCPUFraction = Double(cpuSamples.filter { $0 >= cpuThreshold }.count) / Double(cpuSamples.count)
         } else {
             sustainedCPUFraction = 0
         }
@@ -112,9 +139,14 @@ public enum GhostHeatModel {
         if hardwareLevel == .critical { heat = max(68, heat) }
         heat = min(100, heat)
 
-        let sustainedCPU = trend.hasSustainedHistory && sustainedCPUFraction >= 0.6 && cpuRatio >= 1
-        let pattern = MemoryPatternAnalysis.analyze(points: trend.memoryPoints, fitQuality: trend.memoryFitQuality)
-        let sustainedLeak = trend.hasSustainedHistory && trend.memoryFitQuality >= 0.5 && leakRatio >= 1 && pattern.pattern.indicatesAccumulation
+        // Builds and tests are expected to peg the CPU: only the ledger's
+        // fifteen-minute rule makes their CPU sustained.
+        let isBurst = cpuBehavior.kind == .expectedBurst
+        let windowSustained = trend.hasSustainedHistory && sustainedCPUFraction >= 0.6 && cpuRatio >= 1
+        let sustainedCPU = isBurst ? cpuBehavior.isSustained : (windowSustained || cpuBehavior.isSustained)
+        let pattern = trend.resolvedPattern
+        let sustainedLeak = trend.hasSustainedHistory && leakRatio >= 1 && pattern.indicatesAccumulation &&
+            (trend.memoryFitQuality >= 0.5 || pattern.pattern == .risingFloor)
         let corroboratingAxes = axes.filter { $0 >= 55 }.count
         let instantCorroboration = [memoryRatio >= 1, cpuRatio >= 0.8, gpuRatio >= 0.55, leakRatio >= 0.8]
             .filter { $0 }
@@ -124,15 +156,23 @@ public enum GhostHeatModel {
         // then let persistence/corroboration decide whether it ever becomes
         // Critical. This keeps a 2.4x memory breach visible without reviving
         // the old score==severity behavior.
-        let extremeInstantSignal = memoryRatio >= 1.5 || cpuRatio >= 2.5 || gpuRatio >= 1.25
+        let extremeInstantSignal = memoryRatio >= 1.5 || (cpuRatio >= 2.5 && !isBurst) || gpuRatio >= 1.25
         let sustainedCount = (sustainedCPU ? 1 : 0) + (sustainedLeak ? 1 : 0)
+        // Hardware detection reads the same numbers; it only qualifies Hot
+        // when those numbers are themselves near the family's limits.
+        let hardwareCorroborates = hardwareLevel >= .hot && (memoryRatio >= 0.85 || cpuRatio >= 0.75)
 
         var evidence: [String] = []
-        if sustainedCPU { evidence.append("CPU stayed elevated across the sampling window") }
-        else if cpuRatio >= 1 { evidence.append("CPU is high now, but persistence is not proven yet") }
+        if sustainedCPU {
+            evidence.append(GhostHeat.sustainedCPUEvidence)
+            if cpuBehavior.isSustained, let first = cpuBehavior.reason.first {
+                evidence.append(String(first).uppercased() + cpuBehavior.reason.dropFirst())
+            }
+        }
+        else if cpuRatio >= 1 { evidence.append(isBurst ? "Build or test work is using CPU as expected" : GhostHeat.instantCPUEvidence) }
         if sustainedLeak { evidence.append("Memory growth is sustained with a trusted trend") }
         else if leakRatio >= 1 { evidence.append("Memory is rising, but the trend still needs confirmation") }
-        if memoryRatio >= 1 { evidence.append("Memory footprint is above its adaptive limit") }
+        if memoryRatio >= 1 { evidence.append(GhostHeat.memoryAboveLimitEvidence) }
         if gpuRatio >= 0.55 { evidence.append("GPU load is materially elevated") }
         if hardwareLevel >= .hot { evidence.append("Hardware-offender detection also flags this process") }
 
@@ -140,7 +180,8 @@ public enum GhostHeatModel {
             1,
             0.24 +
                 min(0.28, Double(trend.sampleCount) * 0.035) +
-                trend.memoryFitQuality * 0.2 +
+                // R² of two or three points is trivially high; it is no evidence.
+                (trend.sampleCount >= 4 ? trend.memoryFitQuality * 0.2 : 0) +
                 (corroboratingAxes >= 2 ? 0.18 : 0) +
                 (sustainedCount > 0 ? 0.14 : 0)
         )
@@ -149,10 +190,15 @@ public enum GhostHeatModel {
             (sustainedCPU && cpuRatio >= 2) ||
             (sustainedLeak && leakRatio >= 1.65) ||
             (sustainedCount >= 1 && corroboratingAxes >= 2)
+        // Most of every core for minutes slows the whole Mac: at least Hot.
+        if cpuBehavior.kind == .machineSaturation {
+            heat = max(heat, 58)
+        }
         let level: GhostLevel
         if heat >= 80, criticalEvidence, confidence >= 0.58 {
             level = .critical
-        } else if heat >= 58, (extremeInstantSignal || corroboratingAxes >= 2 || instantCorroboration || sustainedCount > 0 || hardwareLevel >= .hot) {
+        } else if heat >= 58, (extremeInstantSignal || corroboratingAxes >= 2 || instantCorroboration || sustainedCount > 0 ||
+                                hardwareCorroborates || cpuBehavior.kind == .machineSaturation) {
             level = .hot
         } else if heat >= 30 || hardwareLevel >= .watch || memoryRatio >= 0.8 || cpuRatio >= 0.8 || leakRatio >= 0.6 || gpuRatio >= 0.4 {
             level = .watch
@@ -175,29 +221,39 @@ public enum GhostHeatModel {
         baseline: FamilyBaseline?,
         recentIncidentCount: Int,
         pressure: SystemMemoryPressure,
+        pressureShare: PressureShare? = nil,
         forecast: RiskForecast
     ) -> GhostHeat {
         var heat = base.value
         var evidence = base.evidence
-        var corroboration = base.sustainedSignalCount
+        var contextVotes = base.corroborationCount
         var confidence = base.confidence
+        var sustained = base.sustainedSignalCount
+
+        // Only the baseline can say a service normally idles, so this
+        // ledger-proven persistence is judged here, not in the builder.
+        if let behavior = forecast.cpuBehavior, behavior.kind == .idleServiceBurning {
+            heat += 12
+            evidence.append(behavior.reason.prefix(1).uppercased() + behavior.reason.dropFirst())
+            confidence += 0.08
+            sustained += 1
+        }
 
         if let baseline, baseline.isMeasurementTrusted {
             let memoryMultiple = baseline.memoryMultiple(for: family.totalPhysicalFootprintBytes)
-            let cpuMultiple = baseline.cpuMultiple(for: family.totalCPUPercent)
-            if memoryMultiple >= 1.6 {
+            if baseline.memoryZScore(for: family.totalPhysicalFootprintBytes) >= 3, memoryMultiple >= 1.3 {
                 heat += min(14, (memoryMultiple - 1) * 7)
-                evidence.append(String(format: "Memory is %.1fx this family's learned normal", memoryMultiple))
+                evidence.append("Memory is \(RadarFormat.fixed1(memoryMultiple))x this family's learned normal")
                 confidence += 0.08
-                if memoryMultiple >= 2.2 { corroboration += 1 }
+                if memoryMultiple >= 2.2 { contextVotes += 1 }
                 if memoryMultiple >= 3 {
                     heat = max(60, heat)
                     confidence = max(0.5, confidence)
                 }
             }
-            if cpuMultiple >= 2.5, family.totalCPUPercent > 20 {
-                heat += min(10, cpuMultiple * 2)
-                evidence.append(String(format: "CPU is %.1fx this family's learned normal", cpuMultiple))
+            if let cpuAnomaly = BaselineCPUAnomaly(baseline: baseline, cpuPercent: family.totalCPUPercent) {
+                heat += min(10, cpuAnomaly.multiple * 2)
+                evidence.append(cpuAnomaly.evidence)
                 confidence += 0.05
             }
         }
@@ -209,20 +265,24 @@ public enum GhostHeatModel {
             // Old incidents are context, not independent evidence of a new problem.
         }
 
+        // Pressure weighs by the family's share of used memory and of its
+        // growth; only a family driving the growth is corroborated by it.
+        let share = pressureShare ?? PressureAttribution.share(for: family, pressure: pressure)
         if pressure.isKnown, pressure.level >= .warning,
-           family.totalPhysicalFootprintBytes > 512 * 1_048_576 {
-            let boost = pressure.level == .critical ? 16.0 : 9.0
-            heat += boost
-            if pressure.level == .critical, family.totalPhysicalFootprintBytes >= 1_073_741_824 {
+           family.totalPhysicalFootprintBytes > 512 * 1_048_576, share.boostScale > 0.05 {
+            heat += (pressure.level == .critical ? 16.0 : 9.0) * share.boostScale
+            if pressure.level == .critical, family.totalPhysicalFootprintBytes >= 1_073_741_824, share.boostScale >= 1 {
                 heat = max(32, heat)
             }
-            evidence.append("Host memory pressure is \(pressure.level.label.lowercased())")
-            confidence += 0.08
-            corroboration += 1
+            evidence.append("Host memory pressure is \(pressure.level.label.lowercased()); this family holds \(share.text)")
+            confidence += 0.08 * share.boostScale
+            if share.corroboratesPressure {
+                contextVotes += 1
+            }
         }
 
         let forecastIsHeatTrusted = forecast.confidence >= 0.55 && family.trend.hasSustainedHistory &&
-            (base.sustainedSignalCount > 0 || family.trend.memoryVelocityMegabytesPerMinute > 0)
+            (sustained > 0 || family.trend.credibleMemoryVelocity > 0)
         if forecastIsHeatTrusted {
             switch forecast.state {
             case .quiet:
@@ -245,6 +305,9 @@ public enum GhostHeatModel {
         heat = min(100, heat)
         confidence = min(1, confidence)
 
+        // Levels weigh persistence and context together; only the history
+        // gates distinguish them.
+        let corroboration = sustained + contextVotes
         let criticalForecast = forecastIsHeatTrusted && forecast.confidence >= 0.62 && forecast.state >= .runaway
         let refinedLevel: GhostLevel
         if heat >= 80, confidence >= 0.62, (corroboration >= 2 || criticalForecast || pressure.level == .critical) {
@@ -264,7 +327,34 @@ public enum GhostHeatModel {
             level: level,
             confidence: confidence,
             evidence: evidence,
-            sustainedSignalCount: corroboration
+            sustainedSignalCount: sustained,
+            corroborationCount: contextVotes
         )
+    }
+}
+
+/// CPU well above a family's learned normal: at least 3x the usual level, 20
+/// points above the top of its usual range, and busy in absolute terms. A
+/// normally idle family qualifies too; its ratio is against a 2% floor.
+struct BaselineCPUAnomaly {
+    let multiple: Double
+    let reason: String
+    let evidence: String
+
+    init?(baseline: FamilyBaseline, cpuPercent: Double) {
+        let multiple = baseline.cpuMultiple(for: cpuPercent)
+        guard baseline.isMeasurementTrusted, multiple >= 3, baseline.cpuExcess(for: cpuPercent) >= 20, cpuPercent > 20 else {
+            return nil
+        }
+        self.multiple = multiple
+        // "200x usual CPU" says less than the two numbers it divides.
+        if baseline.meanCPUPercent < 5 {
+            let comparison = "\(RadarFormat.fixed0(cpuPercent))% CPU vs about \(RadarFormat.fixed1(baseline.meanCPUPercent))% normally"
+            reason = comparison
+            evidence = "CPU is at " + comparison
+        } else {
+            reason = "\(RadarFormat.fixed1(multiple))x usual CPU"
+            evidence = "CPU is \(RadarFormat.fixed1(multiple))x this family's learned normal"
+        }
     }
 }

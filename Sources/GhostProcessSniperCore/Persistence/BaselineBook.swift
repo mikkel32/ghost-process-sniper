@@ -244,7 +244,7 @@ final class BaselineBook {
         try db.execute(
             """
             INSERT INTO baselines(\(RadarStoreRows.baselineColumns))
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(signature_id) DO UPDATE SET
                 display_name = excluded.display_name,
                 canonical_path = excluded.canonical_path,
@@ -258,7 +258,11 @@ final class BaselineBook {
                 incident_count = excluded.incident_count,
                 last_seen_at = excluded.last_seen_at,
                 first_seen_at = excluded.first_seen_at,
-                measurement_version = excluded.measurement_version
+                measurement_version = excluded.measurement_version,
+                memory_variance = excluded.memory_variance,
+                cpu_variance = excluded.cpu_variance,
+                observed_seconds = excluded.observed_seconds,
+                session_count = excluded.session_count
             """,
             .text(baseline.signature.id),
             .text(baseline.signature.displayName),
@@ -273,7 +277,11 @@ final class BaselineBook {
             .int64(Int64(baseline.incidentCount)),
             .double(baseline.firstSeenAt.timeIntervalSince1970),
             .double(baseline.lastSeenAt.timeIntervalSince1970),
-            .int64(Int64(baseline.measurementVersion ?? 0))
+            .int64(Int64(baseline.measurementVersion ?? 0)),
+            .double(baseline.memoryVariance),
+            .double(baseline.cpuVariance),
+            .double(baseline.observedSeconds),
+            .int64(Int64(baseline.sessionCount))
         )
     }
 }

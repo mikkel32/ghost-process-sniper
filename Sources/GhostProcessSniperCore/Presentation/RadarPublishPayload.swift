@@ -159,15 +159,15 @@ public struct RadarPublishPayload: Equatable, Sendable {
             rules: rules,
             duplicateClusters: duplicateClusters
         )
-        let revisedPerformance = performance.updatingSmoothness(contentRevision: contentRevision)
+        var revisedPerformance = performance
+        revisedPerformance.smoothness.contentRevision = contentRevision
         if let previous, previous.contentRevision == contentRevision,
            previous.coversDetails(families: families, requested: detailSignatures) {
-            let diagnosticsPerformance = revisedPerformance.updatingSmoothness(
-                uiCacheHitCount: revisedPerformance.uiCacheHitCount + 1,
-                uiPublishSkippedCount: revisedPerformance.uiPublishSkippedCount + 1,
-                diagnosticsOnlyPublishCount: revisedPerformance.diagnosticsOnlyPublishCount + 1,
-                contentPublishSkippedCount: revisedPerformance.contentPublishSkippedCount + 1
-            )
+            var diagnosticsPerformance = revisedPerformance
+            diagnosticsPerformance.smoothness.uiCacheHitCount += 1
+            diagnosticsPerformance.smoothness.uiPublishSkippedCount += 1
+            diagnosticsPerformance.smoothness.diagnosticsOnlyPublishCount += 1
+            diagnosticsPerformance.smoothness.contentPublishSkippedCount += 1
             let engine = EngineDiagnosticsViewModel(
                 metrics: diagnosticsPerformance,
                 health: health,

@@ -179,19 +179,20 @@ public extension ThresholdSettings {
         )
     }
 
-    func resolvedPerformanceMode(
-        summaryLevel: GhostLevel,
-        popoverVisible: Bool,
-        systemPressure: SystemPressureLevel
-    ) -> RadarPerformanceMode {
+    /// Realtime budgets only while someone is looking; power and heat pick
+    /// the lighter budgets otherwise. An explicit mode always wins.
+    func resolvedPerformanceMode(_ context: RadarSchedulingContext) -> RadarPerformanceMode {
         guard adaptivePerformance else {
             return performanceMode
         }
-        if systemPressure >= .serious, summaryLevel < .hot, !popoverVisible {
+        if context.uiVisible {
+            return .realtime
+        }
+        if context.power.lowPowerMode || context.power.onBattery {
             return .batterySaver
         }
-        if popoverVisible || summaryLevel >= .hot {
-            return .realtime
+        if context.thermalPressure >= .serious, context.summaryLevel < .hot {
+            return .batterySaver
         }
         return .balanced
     }

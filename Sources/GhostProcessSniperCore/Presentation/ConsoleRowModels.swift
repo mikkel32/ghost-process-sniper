@@ -122,7 +122,6 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
     public let storeBacklogText: String
     public let storeCoalescingText: String
     public let pressureText: String
-    public let diagnosticsReport: String
 
     public static let empty = EngineDiagnosticsViewModel(
         statusLine: "Warming up",
@@ -138,8 +137,7 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         expensiveCallText: "0",
         storeBacklogText: "0",
         storeCoalescingText: "0 baseline writes, 0 deferred, 0 flushes skipped",
-        pressureText: "Nominal",
-        diagnosticsReport: "Ghost Process Sniper Diagnostics\nWarming up."
+        pressureText: "Nominal"
     )
 
     public init(
@@ -156,8 +154,7 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         expensiveCallText: String,
         storeBacklogText: String,
         storeCoalescingText: String,
-        pressureText: String,
-        diagnosticsReport: String
+        pressureText: String
     ) {
         self.statusLine = statusLine
         self.refreshCostText = refreshCostText
@@ -173,7 +170,6 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         self.storeBacklogText = storeBacklogText
         self.storeCoalescingText = storeCoalescingText
         self.pressureText = pressureText
-        self.diagnosticsReport = diagnosticsReport
     }
 
     public init(
@@ -187,8 +183,8 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         statusLine = storeError ?? health.errorMessage ?? "\(summary.statusText) - \(health.processCount) processes sampled"
         // Bucketed to 5 ms: the exact per-tick jitter (9 → 12 → 8 ms) is
         // noise, and every distinct string invalidates console layout.
-        refreshCostText = "\(max(5, Int((metrics.lastRefresh.totalMilliseconds / 5).rounded() * 5))) ms"
-        averageCostText = "\(Int(metrics.averageRefreshMilliseconds.rounded())) ms"
+        refreshCostText = "\(max(5, Self.fiveMillisecondBucket(metrics.lastRefresh.totalMilliseconds))) ms"
+        averageCostText = "\(max(5, Self.fiveMillisecondBucket(metrics.averageRefreshMilliseconds))) ms"
         nextRefreshText = String(format: "%.1fs", metrics.nextRefreshInterval)
         forensicsText = "\(metrics.forensicsRefreshCount) refreshed / \(metrics.forensicsDeferredCount) deferred"
         scannerLaneText = ScanLane.allCases
@@ -199,37 +195,18 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         deadlineText = metrics.scannerHealth.didHitDeadline ? "Deadline hit" : "Within budget"
         cacheText = "\(metrics.commandCacheHitCount) command, \(metrics.reusedProcessRecordCount) reused, \(metrics.scannerHealth.forensicsNegativeCacheHitCount) negative"
         let ledger = metrics.scannerHealth.costLedger
-        scannerCostText = "\(ledger.cheapProbeCount) cheap / \(ledger.richMetricCount) rich / \(ledger.taskInfoReadCount) task-info / \(ledger.reusedRecordCount) reused / \(ledger.workerCount) workers / \(ledger.scannerTaskCount) tasks / \(ledger.pidBufferCopyCount) pid copies / \(ledger.skippedCount) skipped / \(metrics.hardwareOffenderCount) hardware"
-        let hitchText = metrics.hitchCount > 0 ? " / \(metrics.hitchCount) hitches, worst \(Int(metrics.worstHitchMilliseconds.rounded())) ms \(metrics.latestSpikePhase)" : ""
-        smoothnessText = "\(Int(metrics.mainActorPublishMilliseconds.rounded())) ms publish / \(metrics.coalescedRefreshCount) coalesced / \(metrics.diagnosticsOnlyPublishCount) diag-only / \(metrics.contentPublishSkippedCount) content skips / \(metrics.uiCacheHitCount) UI hits / \(metrics.uiPublishSkippedCount) UI skips\(hitchText)"
+        scannerCostText = "\(ledger.cheapProbeCount) cheap / \(ledger.richMetricCount) rich / \(ledger.taskInfoReadCount) task-info / \(ledger.reusedRecordCount) reused / \(ledger.scannerTaskCount) tasks / \(ledger.skippedCount) skipped / \(metrics.hardwareOffenderCount) hardware / \(ledger.usageReadCount) measured / \(ledger.usageFailedCount) unmeasured / \(ledger.bsdDeniedCount) hidden (other users) / \(ledger.portCensusCount) port census"
+        let hitchText = metrics.hitchCount > 0 ? " / \(metrics.hitchCount) hitches, worst \(Self.fiveMillisecondBucket(metrics.worstHitchMilliseconds)) ms \(metrics.latestSpikePhase)" : ""
+        smoothnessText = "\(Self.fiveMillisecondBucket(metrics.mainActorPublishMilliseconds)) ms publish / \(metrics.coalescedRefreshCount) coalesced / \(metrics.diagnosticsOnlyPublishCount) diag-only / \(metrics.contentPublishSkippedCount) content skips / \(metrics.uiCacheHitCount) UI hits / \(metrics.uiPublishSkippedCount) UI skips\(hitchText)"
         expensiveCallText = "\(metrics.scannerHealth.expensiveCallCount)"
         storeBacklogText = "\(storeHealth.backlogCount + storeHealth.pendingActionCount)"
         let writes = storeHealth.writeStats
         storeCoalescingText = "\(writes.baselineWrites) baseline writes, \(writes.baselinesDeferred) deferred, \(writes.transactionsSkipped) flushes skipped, \(storeHealth.rulesCacheHitCount) rule hits"
         pressureText = metrics.pressureLevel.rawValue.capitalized
-        let optimization = RadarOptimizationReport(scannerHealth: metrics.scannerHealth, metrics: metrics)
-        diagnosticsReport = [
-            "Ghost Process Sniper Diagnostics",
-            "Generated: \(generatedAt.formatted())",
-            "State: \(summary.statusText)",
-            "Families: \(summary.familyCount), hot: \(summary.hotCount), leaks: \(summary.leakingCount)",
-            "Duplicates: \(metrics.duplicateClusterCount) clusters, \(metrics.promotedDuplicateCandidateCount) promoted candidates, detector \(Int(metrics.duplicateDetectorMilliseconds.rounded()))ms",
-            "Hardware offenders: \(metrics.hardwareOffenderCount), detector \(Int(metrics.hardwareDetectorMilliseconds.rounded()))ms",
-            "Processes: \(health.processCount)",
-            "Refresh: \(refreshCostText), average: \(averageCostText), next: \(nextRefreshText)",
-            "Forensics: \(forensicsText)",
-            "Scanner: \(deadlineText), lanes: \(scannerLaneText)",
-            "Probe cost: \(scannerCostText)",
-            "Smoothness: \(smoothnessText), in flight: \(metrics.refreshInFlight), skipped optional: \(metrics.skippedOptionalWorkCount), status update: \(Int(metrics.statusUpdateMilliseconds.rounded())) ms, content rev: \(metrics.contentRevision.rawValue)",
-            "Scanner tasks: \(metrics.scannerTaskCount), tiny sequential queues: \(metrics.tinyQueueSequentialCount), task-info reads: \(metrics.taskInfoReadCount), reused records: \(metrics.reusedProcessRecordCount), scratch reuse: \(metrics.samplerAllocationReuseCount)",
-            "Recent spikes: \(metrics.smoothnessReport.recentSpikes.isEmpty ? "none" : metrics.smoothnessReport.recentSpikes.joined(separator: " | "))",
-            "Cache: \(cacheText), expensive calls: \(expensiveCallText)",
-            optimization.text,
-            "Store backlog: \(storeBacklogText)",
-            "Store coalescing: \(storeCoalescingText)",
-            "Pressure: \(pressureText)",
-            "Health: \(statusLine)"
-        ].joined(separator: "\n")
+    }
+
+    static func fiveMillisecondBucket(_ milliseconds: Double) -> Int {
+        Int((milliseconds / 5).rounded() * 5)
     }
 }
 

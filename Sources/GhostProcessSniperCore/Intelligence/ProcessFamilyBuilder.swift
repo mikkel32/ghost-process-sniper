@@ -38,18 +38,27 @@ public struct ProcessFamilyBuildResult: Sendable {
 public struct ProcessFamilyBuilder: Sendable {
     private let classifier: DevProcessClassifier
     private let currentUserID: UInt32
-    private let classificationCache = LockedDevClassificationCache()
+    private let staticFacts = ProcessStaticFactsCache()
     private let duplicateDetector: DuplicateClusterDetector
     private let hardwareDetector: HardwareOffenderDetector
+    private let evidenceScorer = FamilyEvidenceScorer()
+    private let directories: DirectoryExistenceCache
+    private let processorCount: Int
+    private let defaultHistory = LockedRadarHistory()
 
     public init(
         classifier: DevProcessClassifier = DevProcessClassifier(),
-        currentUserID: UInt32 = UInt32(geteuid())
+        currentUserID: UInt32 = UInt32(geteuid()),
+        processorCount: Int = ProcessInfo.processInfo.activeProcessorCount,
+        physicalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory,
+        directoryExists: @escaping @Sendable (String) -> Bool = { WorkingDirectoryProbe.exists($0) }
     ) {
         self.classifier = classifier
         self.currentUserID = currentUserID
+        self.processorCount = max(1, processorCount)
+        self.directories = DirectoryExistenceCache(check: directoryExists)
         self.duplicateDetector = DuplicateClusterDetector(classifier: classifier, currentUserID: currentUserID)
-        self.hardwareDetector = HardwareOffenderDetector(currentUserID: currentUserID)
+        self.hardwareDetector = HardwareOffenderDetector(currentUserID: currentUserID, physicalMemoryBytes: physicalMemoryBytes)
     }
 
     public func buildFamilies(
@@ -66,52 +75,59 @@ public struct ProcessFamilyBuilder: Sendable {
         ).families
     }
 
+    /// Keeps its own history across calls on this builder.
     public func buildFamiliesWithDuplicates(
         from processes: [ProcessMetrics],
         settings: ThresholdSettings,
         trendWindow: inout TrendWindow,
         now: Date
     ) -> ProcessFamilyBuildResult {
-        var byPID: [Int32: ProcessMetrics] = [:]
-        var children: [Int32: [ProcessMetrics]] = [:]
-        var classifications: [Int32: DevClassification] = [:]
-        var confidence: [Int32: Double] = [:]
-        var candidates: [ProcessMetrics] = []
-        byPID.reserveCapacity(processes.count)
-        children.reserveCapacity(processes.count / 2)
-        classifications.reserveCapacity(processes.count)
-        confidence.reserveCapacity(processes.count)
-        candidates.reserveCapacity(min(processes.count, 128))
-
-        for process in processes {
-            byPID[process.pid] = process
-            children[process.parentPID, default: []].append(process)
-            let classification = classification(for: process)
-            classifications[process.pid] = classification
-            confidence[process.pid] = classification.confidence
+        var window = trendWindow
+        let result = defaultHistory.withHistory { history in
+            buildFamiliesWithDuplicates(from: processes, settings: settings, trendWindow: &window, history: &history, now: now)
         }
+        trendWindow = window
+        return result
+    }
 
-        let duplicateSet = duplicateDetector.detect(
-            processes: processes,
-            classifications: classifications,
-            children: children,
-            now: now
-        )
+    public func buildFamiliesWithDuplicates(
+        from processes: [ProcessMetrics],
+        settings: ThresholdSettings,
+        trendWindow: inout TrendWindow,
+        history: inout RadarHistory,
+        now: Date
+    ) -> ProcessFamilyBuildResult {
+        let tree = ProcessTree(processes: processes, facts: staticFacts.facts(for: processes, make: makeStaticFacts))
+        history.activity.recordProcesses(processes, now: now)
+
+        let duplicateSet: DuplicateClusterSet
+        do {
+            // Scoped, so this copy is gone before the ledger is written again.
+            let ledger = history.activity
+            duplicateSet = duplicateDetector.detect(
+                processes: processes,
+                classifications: tree.classifications,
+                byPID: tree.byPID,
+                now: now,
+                candidateKey: { tree.facts[$0.pid]?.duplicateKey },
+                lastActive: { ledger.activity(of: $0)?.lastActiveAt }
+            )
+        }
         let hardwareStart = Date()
-        let hardwareProfiles = hardwareDetector.detect(processes: processes, settings: settings)
+        let hardwareProfiles = hardwareDetector.detect(
+            processes: processes,
+            settings: settings,
+            isEligible: { tree.facts[$0.pid]?.isHardwareEligible ?? false }
+        )
         let hardwareDetectorMilliseconds = Date().timeIntervalSince(hardwareStart) * 1_000
         let duplicatePromotedIdentities = duplicateSet.promotedIdentities
-        var duplicateClusterByIdentity: [ProcessIdentity: DuplicateProcessCluster] = [:]
-        for cluster in duplicateSet.clusters {
-            for member in cluster.members {
-                duplicateClusterByIdentity[member.identity] = cluster
-            }
-        }
 
+        var candidates: [ProcessMetrics] = []
+        candidates.reserveCapacity(min(processes.count, 128))
         for process in processes {
             if shouldInclude(
                 process,
-                confidence: confidence[process.pid, default: 0],
+                confidence: tree.confidence(process.pid),
                 hardwareProfile: hardwareProfiles[process.identity],
                 settings: settings
             ) ||
@@ -125,8 +141,8 @@ public struct ProcessFamilyBuilder: Sendable {
             var rootBuckets: [ProcessIdentity: (root: ProcessMetrics, score: Double)] = [:]
             rootBuckets.reserveCapacity(candidates.count)
             for candidate in candidates {
-                let candidateRoot = root(for: candidate, byPID: byPID, confidence: confidence)
-                let score = confidence[candidateRoot.pid, default: 0]
+                let candidateRoot = tree.root(for: candidate)
+                let score = tree.confidence(candidateRoot.pid)
                 if let existing = rootBuckets[candidateRoot.identity] {
                     if score > existing.score ||
                         (score == existing.score && candidateRoot.memoryForScoringBytes > existing.root.memoryForScoringBytes) {
@@ -141,38 +157,55 @@ public struct ProcessFamilyBuilder: Sendable {
             roots = candidates
         }
 
+        // Membership first, so duplicates are resolved against the real
+        // families before any family is scored against them.
         let rootIdentities = Set(roots.map(\.identity))
-
-        let builtFamilies = roots
-            .compactMap {
-                makeFamily(
-                    root: $0,
-                    byPID: byPID,
-                    children: children,
-                    classifications: classifications,
-                    confidence: confidence,
-                    rootIdentities: rootIdentities,
-                    duplicateClusterByIdentity: duplicateClusterByIdentity,
-                    hardwareProfiles: hardwareProfiles,
-                    settings: settings,
-                    trendWindow: &trendWindow,
-                    now: now
-                )
-            }
-            .sorted(by: sortFamilies)
-        let resolvedClusters = DuplicateFamilyResolver.resolve(duplicateSet.clusters, families: builtFamilies)
-        var resolvedClusterByIdentity: [ProcessIdentity: DuplicateProcessCluster] = [:]
+        let memberships = roots.compactMap { root -> (familyKey: String, root: ProcessMetrics, members: [ProcessMetrics])? in
+            let members = tree.members(of: root, rootIdentities: rootIdentities)
+            guard !members.isEmpty else { return nil }
+            return (ProcessFamily.key(signature: signature(of: root, in: tree), root: root.identity), root, members)
+        }
+        let resolvedClusters = DuplicateFamilyResolver.resolve(
+            duplicateSet.clusters,
+            memberships: memberships.map { ($0.familyKey, $0.members) }
+        )
+        var clusterByIdentity: [ProcessIdentity: DuplicateProcessCluster] = [:]
         for cluster in resolvedClusters {
             for member in cluster.members {
-                resolvedClusterByIdentity[member.identity] = cluster
+                clusterByIdentity[member.identity] = cluster
             }
         }
-        let families = builtFamilies
-            .map { family -> ProcessFamily in
-                let cluster = bestDuplicateCluster(for: family.members, clustersByIdentity: resolvedClusterByIdentity)
-                return family.enriched(duplicateCluster: cluster)
+        let parentFamilyKeys = tree.parentFamilyKeys(memberships)
+        let livePIDs = Set(tree.byPID.keys)
+
+        // Unordered: RadarPipeline ranks families after scoring.
+        let families = memberships.map { membership in
+            let activity = history.activity.recordFamily(key: membership.familyKey, members: membership.members, now: now)
+            let forensics = ProcessFamily.aggregateForensics(from: membership.members)
+            let live = membership.members.filter { !$0.isZombie }
+            let step = history.memberTrends.advance(familyKey: membership.familyKey, members: live, now: now)
+            var family = makeFamily(
+                root: membership.root,
+                members: membership.members,
+                tree: tree,
+                duplicateCluster: bestDuplicateCluster(for: membership.members, clustersByIdentity: clusterByIdentity),
+                parentFamilyKey: parentFamilyKeys[membership.familyKey],
+                activity: activity,
+                trendStep: step,
+                forensics: forensics,
+                forgotten: assessForgotten(root: membership.root, facts: tree.facts[membership.root.pid], forensics: forensics,
+                                           activity: activity, livePIDs: livePIDs, now: now),
+                hardwareProfiles: hardwareProfiles,
+                settings: settings,
+                trendWindow: &trendWindow,
+                now: now
+            )
+            // Attribution only matters for a family that is growing.
+            if live.count > 1, family.trend.credibleMemoryVelocity > 0 || step.longTerm.slopeMegabytesPerMinute > 0 {
+                family.attribute(growth: history.memberTrends.growth(of: live))
             }
-        // Resolving cluster ownership changes none of the family sort keys.
+            return family
+        }
         return ProcessFamilyBuildResult(
             families: families,
             duplicateClusters: resolvedClusters,
@@ -184,50 +217,7 @@ public struct ProcessFamilyBuilder: Sendable {
     }
 
     public func summary(for families: [ProcessFamily]) -> RadarSummary {
-        let level = families.map { family in
-            family.forecastIsCredibleEscalation
-                ? max(family.score.level, family.forecast.state.level)
-                : family.score.level
-        }.max() ?? .quiet
-        let hotCount = families.filter { $0.score.level >= .hot || $0.forecastIsCredibleEscalation }.count
-        let leakingCount = families.filter {
-            $0.forecastIsCredibleEscalation && $0.forecast.state >= .leaking
-        }.count
-        let suggestionCount = families.reduce(0) { $0 + $1.suggestions.count }
-        let totalMemory = families.reduce(UInt64(0)) { $0 + $1.totalPhysicalFootprintBytes }
-        let top = families.first
-
-        let statusText: String
-        if let topForecast = families.first(where: { $0.forecastIsCredibleEscalation }) {
-            statusText = topForecast.forecast.state == .leaking ? "Leak \(topForecast.forecast.etaText)" : topForecast.forecast.state.label
-        } else if let topWarming = families.first(where: { $0.forecastIsCredibleEarlyWarning }) {
-            statusText = "Warming \(topWarming.forecast.etaText)"
-        } else if let topGPU = families.first(where: { $0.totalGPUPercent >= 25 }) {
-            statusText = "GPU \(Int(topGPU.totalGPUPercent.rounded()))%"
-        } else if hotCount > 0 {
-            statusText = "\(hotCount) hot"
-        } else if let top, top.score.level == .watch {
-            statusText = "Watching"
-        } else if let top, top.totalPhysicalFootprintBytes > 0 {
-            statusText = formatCompactBytes(top.totalPhysicalFootprintBytes)
-        } else {
-            statusText = "Quiet"
-        }
-
-        return RadarSummary(
-            statusText: statusText,
-            level: level,
-            familyCount: families.count,
-            hotCount: hotCount,
-            totalMemoryBytes: totalMemory,
-            topFamilyName: top?.displayName,
-            leakingCount: leakingCount,
-            suggestionCount: suggestionCount
-        )
-    }
-
-    private func shouldInclude(_ process: ProcessMetrics, confidence: Double, settings: ThresholdSettings) -> Bool {
-        shouldInclude(process, confidence: confidence, hardwareProfile: nil, settings: settings)
+        RadarSummaryBuilder.summary(for: families)
     }
 
     private func shouldInclude(
@@ -247,104 +237,97 @@ public struct ProcessFamilyBuilder: Sendable {
         }
     }
 
-    private func classification(for process: ProcessMetrics) -> DevClassification {
-        classificationCache.classification(for: process, classifier: classifier)
+    private func makeStaticFacts(for process: ProcessMetrics) -> ProcessStaticFacts {
+        let tokens = WorkloadTokens(process)
+        let classification = classifier.classification(for: tokens)
+        return ProcessStaticFacts(
+            classification: classification,
+            signature: ProcessSignature.from(root: process),
+            commandHint: ProcessStaticFacts.commandHint(of: process.commandLine),
+            appBundlePrefix: ProcessStaticFacts.appBundlePrefix(of: process.executablePath),
+            parentDirectory: ProcessStaticFacts.parentDirectory(of: process.executablePath),
+            isHelperNamed: process.name.lowercased().contains("helper"),
+            isAppMainBinary: tokens.isAppMainBinary,
+            isLaunchdManaged: LaunchOrigin.isLaunchdManaged(path: process.executablePath, commandLine: process.commandLine),
+            isHardwareEligible: hardwareDetector.isEligibleForGenericHardwareDetection(process),
+            duplicateKey: duplicateDetector.candidateKey(for: process, tokens: tokens, classification: classification)
+        )
+    }
+
+    private func signature(of root: ProcessMetrics, in tree: ProcessTree) -> ProcessSignature {
+        tree.facts[root.pid]?.signature ?? ProcessSignature.from(root: root)
+    }
+
+    private func assessForgotten(
+        root: ProcessMetrics,
+        facts: ProcessStaticFacts?,
+        forensics: ProcessForensics,
+        activity: FamilyCPUActivity,
+        livePIDs: Set<Int32>,
+        now: Date
+    ) -> ForgottenAssessment {
+        let context = facts.map {
+            LaunchContextResolver.resolve(root: root, livePIDs: livePIDs, isAppMainBinary: $0.isAppMainBinary,
+                                          isLaunchdManaged: $0.isLaunchdManaged)
+        } ?? LaunchContextResolver.resolve(root: root, livePIDs: livePIDs)
+        // Only unattended work earns a file-system check.
+        var missing = false
+        if context.isUnattended || context == .terminalBackground,
+           let directory = forensics.currentDirectory, directory.count > 1 {
+            missing = !directories.exists(directory, now: now)
+        }
+        return ForgottenProcessAssessor.assess(root: root, context: context, activity: activity, forensics: forensics,
+                                               workingDirectoryMissing: missing, now: now)
     }
 
     private func isAboveHardThreshold(_ process: ProcessMetrics, settings: ThresholdSettings) -> Bool {
         process.memoryForScoringBytes >= settings.memoryBytes || process.cpuPercent >= settings.cpuPercent
     }
 
-    private func root(
-        for process: ProcessMetrics,
-        byPID: [Int32: ProcessMetrics],
-        confidence: [Int32: Double]
-    ) -> ProcessMetrics {
-        var current = process
-        var visited = Set<Int32>()
-
-        while let parent = byPID[current.parentPID], !visited.contains(parent.pid) {
-            visited.insert(current.pid)
-            guard parent.userID == current.userID else {
-                break
-            }
-            guard shouldClimb(from: current, to: parent, confidence: confidence) else {
-                break
-            }
-            current = parent
-        }
-
-        return current
-    }
-
-    private func shouldClimb(
-        from child: ProcessMetrics,
-        to parent: ProcessMetrics,
-        confidence: [Int32: Double]
-    ) -> Bool {
-        if confidence[parent.pid, default: 0] >= 0.35 {
-            return true
-        }
-        if sameAppBundle(child.executablePath, parent.executablePath) {
-            return true
-        }
-        if parent.name.lowercased().contains("helper") && samePathNeighborhood(child.executablePath, parent.executablePath) {
-            return true
-        }
-        return false
-    }
-
     private func makeFamily(
         root: ProcessMetrics,
-        byPID: [Int32: ProcessMetrics],
-        children: [Int32: [ProcessMetrics]],
-        classifications: [Int32: DevClassification],
-        confidence: [Int32: Double],
-        rootIdentities: Set<ProcessIdentity>,
-        duplicateClusterByIdentity: [ProcessIdentity: DuplicateProcessCluster],
+        members: [ProcessMetrics],
+        tree: ProcessTree,
+        duplicateCluster: DuplicateProcessCluster?,
+        parentFamilyKey: String?,
+        activity: FamilyCPUActivity,
+        trendStep: FamilyTrendStep,
+        forensics: ProcessForensics,
+        forgotten: ForgottenAssessment,
         hardwareProfiles: [ProcessIdentity: HardwareOffenderProfile],
         settings: ThresholdSettings,
         trendWindow: inout TrendWindow,
         now: Date
-    ) -> ProcessFamily? {
-        let members = familyMembers(
-            of: root,
-            children: children,
-            confidence: confidence,
-            rootIdentities: rootIdentities
-        )
-
-        guard !members.isEmpty else {
-            return nil
-        }
-
-        let resident = members.reduce(UInt64(0)) { $0 + $1.residentMemoryBytes }
-        let footprint = members.reduce(UInt64(0)) { $0 + $1.memoryForScoringBytes }
-        let cpu = members.reduce(0) { $0 + $1.cpuPercent }
-        let gpu = members.reduce(0) { $0 + $1.gpuUsagePercent }
+    ) -> ProcessFamily {
+        // Memory carries each member's last-known value; CPU and GPU count
+        // only current readings, because a helper cached at 300% during a
+        // build would otherwise read as a phantom runaway. Zombies hold
+        // nothing, whatever their last cached reading said.
+        let coverage = FamilyMeasurementCoverage(members: members, root: root, at: now)
+        let live = members.filter { !$0.isZombie }
+        let zombieChildren = members.count - live.count - (root.isZombie ? 1 : 0)
+        let resident = live.reduce(UInt64(0)) { $0 + $1.residentMemoryBytes }
+        let footprint = live.reduce(UInt64(0)) { $0 + $1.memoryForScoringBytes }
+        let cpu = live.reduce(0) { isCurrent($1.cpuMeasurementDate, at: now) ? $0 + $1.cpuPercent : $0 }
+        let gpu = live.reduce(0) { isCurrent($1.gpuMeasurementDate, at: now) ? $0 + $1.gpuUsagePercent : $0 }
         let hardwareSignals = hardwareSignals(for: members, profiles: hardwareProfiles)
-        let familyConfidence = members.map { confidence[$0.pid, default: 0] }.max() ?? 0
-        let familyClassification = members
-            .compactMap { classifications[$0.pid] }
-            .max { classificationPriority($0) < classificationPriority($1) }
-        let duplicateCluster = bestDuplicateCluster(for: members, clustersByIdentity: duplicateClusterByIdentity)
-        let signature = ProcessSignature.from(root: root)
-        // Baselines intentionally learn by logical signature, but live trend
-        // state must be isolated per concrete process-family instance. Two
-        // identical servers running at once must never alternate samples into
-        // one synthetic leak curve.
-        let topology = members.map { "\($0.pid):\($0.identity.startTimeSeconds).\($0.identity.startTimeMicroseconds)" }.sorted().joined(separator: ",")
-        let runtimeTrendKey = "\(signature.id)|members:\(topology)"
-        let measurementDates = members.compactMap(\.measurementDate)
-        let oldestMeasurement = measurementDates.min()
-        let hasCompleteSample = measurementDates.count == members.count && !members.isEmpty
+        let familyConfidence = members.map { tree.confidence($0.pid) }.max() ?? 0
+        let familyClassification = familyClassification(root: root, members: members, facts: tree.facts, footprint: footprint, cpu: cpu, now: now)
+        let signature = signature(of: root, in: tree)
+        // Baselines learn by logical signature, but live trends belong to one
+        // concrete instance: two identical servers must never alternate
+        // samples into one synthetic leak curve. The series is the sum of the
+        // members at their last readings; members joining, leaving or still
+        // settling in restate the history instead of reading as growth.
+        let trendKey = ProcessFamily.key(signature: signature, root: root.identity)
+        trendWindow.shift(signatureID: trendKey, by: trendStep.historyShift)
         let trend: TrendMetrics
-        if hasCompleteSample, let measuredAt = oldestMeasurement, now.timeIntervalSince(measuredAt) <= 15, now >= measuredAt {
-            trend = trendWindow.update(signatureID: runtimeTrendKey, memoryBytes: footprint, cpuPercent: cpu, at: measuredAt)
+        if let measuredAt = trendStep.newestMeasurement {
+            trend = trendWindow.update(signatureID: trendKey, memoryBytes: trendStep.total, cpuPercent: cpu, at: measuredAt)
         } else {
-            trend = .empty
+            trend = trendWindow.metrics(for: trendKey) ?? .empty
         }
-        let score = ghostScore(
+        let score = evidenceScorer.score(
             root: root,
             members: members,
             footprint: footprint,
@@ -354,6 +337,11 @@ public struct ProcessFamilyBuilder: Sendable {
             duplicateCluster: duplicateCluster,
             hardwareSignals: hardwareSignals,
             trend: trend,
+            forgotten: forgotten,
+            zombieChildCount: zombieChildren,
+            cpuBehavior: CPUBehaviorAnalyzer.analyze(activity: activity, classification: familyClassification,
+                                                     memberCount: live.count, baseline: nil,
+                                                     processorCount: processorCount, cpuThreshold: settings.cpuPercent),
             settings: settings,
             now: now
         )
@@ -374,73 +362,66 @@ public struct ProcessFamilyBuilder: Sendable {
             totalCPUPercent: cpu,
             totalGPUPercent: gpu,
             devConfidence: familyConfidence,
-            commandHints: commandHints(from: members),
+            commandHints: tree.commandHints(for: members),
             trend: trend,
             score: score,
             ownedIdentities: owned,
             protectedPIDs: protected,
             signature: signature,
+            forensics: forensics,
             classification: familyClassification,
             duplicateCluster: duplicateCluster,
-            hardwareSignals: hardwareSignals
+            hardwareSignals: hardwareSignals,
+            coverage: coverage,
+            parentFamilyKey: parentFamilyKey,
+            cpuActivity: activity,
+            forgotten: forgotten,
+            zombieChildCount: zombieChildren,
+            longTermTrend: trendStep.longTerm
         )
+    }
+
+    /// The root says what a family is. A member that holds most of the
+    /// family's footprint and CPU this tick names it instead; that changes
+    /// only the label, never membership.
+    private func familyClassification(
+        root: ProcessMetrics,
+        members: [ProcessMetrics],
+        facts: [Int32: ProcessStaticFacts],
+        footprint: UInt64,
+        cpu: Double,
+        now: Date
+    ) -> DevClassification? {
+        let rootClassification = facts[root.pid]?.classification
+        guard members.count > 1, footprint > 0 else { return rootClassification }
+        for member in members where member.identity != root.identity {
+            let memoryShare = Double(member.memoryForScoringBytes) / Double(footprint)
+            let memberCPU = isCurrent(member.cpuMeasurementDate, at: now) ? member.cpuPercent : 0
+            let cpuShare = cpu >= 1 ? memberCPU / cpu : 1
+            if memoryShare >= 0.6, cpuShare >= 0.6, let dominant = facts[member.pid]?.classification {
+                return dominant
+            }
+        }
+        return rootClassification
+    }
+
+    private func isCurrent(_ measuredAt: Date?, at now: Date) -> Bool {
+        measuredAt.map { (0...FamilyMeasurementCoverage.maximumAge).contains(now.timeIntervalSince($0)) } ?? false
     }
 
     private func bestDuplicateCluster(
         for members: [ProcessMetrics],
         clustersByIdentity: [ProcessIdentity: DuplicateProcessCluster]
     ) -> DuplicateProcessCluster? {
+        // Independent copies are what the score is about; an internal pool
+        // is shown only when the family is in no such cluster.
         members
             .compactMap { clustersByIdentity[$0.identity] }
             .max { lhs, rhs in
+                if lhs.countsAsIndependentCopies != rhs.countsAsIndependentCopies { return rhs.countsAsIndependentCopies }
                 if lhs.memberCount != rhs.memberCount { return lhs.memberCount < rhs.memberCount }
                 return lhs.totalPhysicalFootprintBytes < rhs.totalPhysicalFootprintBytes
             }
-    }
-
-    private func familyMembers(
-        of root: ProcessMetrics,
-        children: [Int32: [ProcessMetrics]],
-        confidence: [Int32: Double],
-        rootIdentities: Set<ProcessIdentity>
-    ) -> [ProcessMetrics] {
-        var result: [ProcessMetrics] = []
-        var stack = [root]
-        var seen = Set<Int32>()
-        let rootIsDevFamily = confidence[root.pid, default: 0] >= 0.35
-
-        while let process = stack.popLast() {
-            guard seen.insert(process.pid).inserted else {
-                continue
-            }
-            result.append(process)
-            for child in children[process.pid, default: []] {
-                guard child.userID == root.userID else {
-                    continue
-                }
-                // Candidate roots are exclusive ownership boundaries. Without
-                // this, one hot/helper root can repeatedly absorb and traverse
-                // another family, producing overlapping trees and O(n²)-like
-                // behavior on large process populations.
-                guard child.identity == root.identity || !rootIdentities.contains(child.identity) else {
-                    continue
-                }
-                let related = rootIsDevFamily ||
-                    confidence[child.pid, default: 0] >= 0.2 ||
-                    sameAppBundle(child.executablePath, root.executablePath) ||
-                    samePathNeighborhood(child.executablePath, root.executablePath)
-                guard related else {
-                    continue
-                }
-                stack.append(child)
-            }
-        }
-
-        return result.sorted { lhs, rhs in
-            if lhs.identity == root.identity { return true }
-            if rhs.identity == root.identity { return false }
-            return lhs.pid < rhs.pid
-        }
     }
 
     private func hardwareSignals(
@@ -467,362 +448,5 @@ public struct ProcessFamilyBuilder: Sendable {
             if rhs.identity == root.identity { return true }
             return lhs.pid > rhs.pid
         }
-    }
-
-    private func ghostScore(
-        root: ProcessMetrics,
-        members: [ProcessMetrics],
-        footprint: UInt64,
-        cpu: Double,
-        gpu: Double,
-        confidence: Double,
-        duplicateCluster: DuplicateProcessCluster?,
-        hardwareSignals: [HardwareOffenderSignal],
-        trend: TrendMetrics,
-        settings: ThresholdSettings,
-        now: Date
-    ) -> GhostScore {
-        let memoryRatio = Double(footprint) / Double(max(settings.memoryBytes, 1))
-        let cpuRatio = cpu / max(settings.cpuPercent, 1)
-        let gpuRatio = gpu / 80
-        let leakRatio = max(0, trend.memoryVelocityMegabytesPerMinute) / max(settings.leakVelocityMegabytesPerMinute, 1)
-        let childFanout = max(0, members.count - 6)
-        let duplicateImpact = duplicateCluster.map { min(12, Double($0.memberCount) * 3) } ?? 0
-        let hardwareImpact = min(24, hardwareSignals.reduce(0) { $0 + $1.impact })
-        let ageMinutes = max(0, now.timeIntervalSince(Date(timeIntervalSince1970: TimeInterval(root.identity.startTimeSeconds))) / 60)
-        let orphanBonus = root.parentPID == 1 && confidence >= 0.35 ? 6.0 : 0
-
-        let memoryImpact = memoryRatio * 38
-        let cpuImpact = cpuRatio * 34
-        let gpuImpact = gpuRatio * 28
-        let leakImpact = leakRatio * 26
-        let fanoutImpact = Double(childFanout) * 3
-        let confidenceImpact = confidence * 12
-        let ageImpact = ageMinutes > 180 ? 5.0 : 0
-
-        func componentLevel(_ ratio: Double, hot: Double = 1, critical: Double = 1.25) -> GhostLevel {
-            if ratio >= critical { return .critical }
-            if ratio >= hot { return .hot }
-            if ratio >= 0.45 { return .watch }
-            return .quiet
-        }
-
-        var components: [GhostScoreComponent] = [
-            GhostScoreComponent(
-                kind: .memory,
-                title: memoryRatio >= 1 ? "memory above threshold" : "Memory footprint",
-                detail: String(
-                    format: "%@ is %.1fx the %@ limit",
-                    RadarFormat.bytes(footprint),
-                    memoryRatio,
-                    RadarFormat.bytes(settings.memoryBytes)
-                ),
-                impact: memoryImpact,
-                level: componentLevel(memoryRatio)
-            ),
-            GhostScoreComponent(
-                kind: .cpu,
-                title: cpuRatio >= 1 ? "CPU above threshold" : "CPU activity",
-                detail: String(format: "%.0f%% is %.1fx the %.0f%% limit", cpu, cpuRatio, settings.cpuPercent),
-                impact: cpuImpact,
-                level: componentLevel(cpuRatio, critical: 1.15)
-            ),
-            GhostScoreComponent(
-                kind: .gpu,
-                title: gpuRatio >= 1 ? "GPU above threshold" : "GPU activity",
-                detail: String(format: "%.0f%% GPU utilization", gpu),
-                impact: gpuImpact,
-                level: componentLevel(gpuRatio, hot: 0.55, critical: 1)
-            ),
-            GhostScoreComponent(
-                kind: .leak,
-                title: leakRatio >= 1 ? "memory climbing \(Int(trend.memoryVelocityMegabytesPerMinute.rounded())) MB/min" : "Memory growth",
-                detail: String(
-                    format: "%.0f MB/min is %.1fx the %.0f MB/min limit",
-                    max(0, trend.memoryVelocityMegabytesPerMinute),
-                    leakRatio,
-                    settings.leakVelocityMegabytesPerMinute
-                ),
-                impact: leakImpact,
-                level: componentLevel(leakRatio, critical: 1.6)
-            ),
-            GhostScoreComponent(
-                kind: .background,
-                title: "Process relevance",
-                detail: "\(Int((confidence * 100).rounded()))% confidence this belongs to the selected radar scope",
-                impact: confidenceImpact,
-                level: confidence >= 0.65 ? .watch : .quiet
-            )
-        ]
-
-        if fanoutImpact > 0 {
-            components.append(GhostScoreComponent(
-                kind: .fanout,
-                title: "\(members.count - 1) child processes",
-                detail: "Large process trees consume more resources and are harder to leave behind cleanly",
-                impact: fanoutImpact,
-                level: childFanout >= 6 ? .hot : .watch
-            ))
-        }
-        if let duplicateCluster, duplicateImpact > 0 {
-            components.append(GhostScoreComponent(
-                kind: .fanout,
-                title: "\(duplicateCluster.memberCount) matching instances",
-                detail: duplicateCluster.reason,
-                impact: duplicateImpact,
-                level: duplicateCluster.memberCount >= 4 ? .hot : .watch
-            ))
-        }
-        if orphanBonus > 0 {
-            components.append(GhostScoreComponent(
-                kind: .background,
-                title: "background dev process",
-                detail: "Detached from its original parent and still running in the background",
-                impact: orphanBonus,
-                level: .watch
-            ))
-        }
-        if ageImpact > 0 {
-            components.append(GhostScoreComponent(
-                kind: .background,
-                title: "long-running dev session",
-                detail: "This process family has been alive for more than three hours",
-                impact: ageImpact,
-                level: .watch
-            ))
-        }
-
-        if hardwareImpact > 0 {
-            let rawHardwareImpact = hardwareSignals.reduce(0) { $0 + $1.impact }
-            let hardwareScale = rawHardwareImpact > 0 ? hardwareImpact / rawHardwareImpact : 0
-            components.append(contentsOf: hardwareSignals.map { signal in
-                let kind: GhostScoreComponentKind = switch signal.kind {
-                case .memoryPressure: .memory
-                case .cpuPressure: .cpu
-                case .gpuPressure: .gpu
-                case .threadPressure, .sampleOutlier: .system
-                }
-                return GhostScoreComponent(
-                    kind: kind,
-                    title: signal.reason,
-                    detail: "Host-wide offender evidence: \(signal.kind.label.lowercased())",
-                    impact: signal.impact * hardwareScale,
-                    level: signal.level
-                )
-            })
-        }
-
-        var reasons: [String] = []
-        if memoryRatio >= 1 {
-            reasons.append("memory above threshold")
-        } else if memoryRatio >= 0.55 {
-            reasons.append("large memory footprint")
-        }
-        if cpuRatio >= 1 {
-            reasons.append("CPU above threshold")
-        } else if cpuRatio >= 0.55 {
-            reasons.append("CPU burst")
-        }
-        if gpuRatio >= 1 {
-            reasons.append("GPU above threshold")
-        } else if gpuRatio >= 0.25 {
-            reasons.append("GPU activity \(RadarFormat.percent(gpu))")
-        }
-        if leakRatio >= 1 {
-            reasons.append("memory climbing \(Int(trend.memoryVelocityMegabytesPerMinute.rounded())) MB/min")
-        }
-        for signal in hardwareSignals.prefix(3) where !reasons.contains(signal.reason) {
-            reasons.append(signal.reason)
-        }
-        if childFanout > 0 {
-            reasons.append("\(members.count - 1) child processes")
-        }
-        if let duplicateCluster {
-            reasons.append("\(duplicateCluster.memberCount) matching instances")
-        }
-        if orphanBonus > 0 {
-            reasons.append("background dev process")
-        }
-        if ageMinutes > 180, confidence >= 0.45 {
-            reasons.append("long-running dev session")
-        }
-        if reasons.isEmpty {
-            reasons.append(confidence >= 0.45 ? "dev process is quiet" : "low activity")
-        }
-
-        let value = min(100, components.reduce(0) { $0 + $1.impact })
-
-        let hardwareLevel = hardwareSignals.map(\.level).max() ?? .quiet
-        var heat = GhostHeatModel.initial(
-            memoryRatio: memoryRatio,
-            cpuRatio: cpuRatio,
-            gpuRatio: gpuRatio,
-            leakRatio: leakRatio,
-            trend: trend,
-            hardwareLevel: hardwareLevel
-        )
-        if let duplicateCluster, heat.level == .quiet {
-            heat = GhostHeat(
-                value: max(30, heat.value),
-                level: .watch,
-                confidence: max(0.5, heat.confidence),
-                evidence: heat.evidence + ["\(duplicateCluster.memberCount) independent matching instances need review"],
-                sustainedSignalCount: heat.sustainedSignalCount
-            )
-        }
-
-        return GhostScore(
-            value: value,
-            level: heat.level,
-            reasons: reasons,
-            components: GhostScoreComponentMath.normalized(components, to: value),
-            heat: heat
-        )
-    }
-
-    private func commandHints(from members: [ProcessMetrics]) -> [String] {
-        var hints: [String] = []
-
-        for process in members {
-            if let hint = commandHint(from: process.commandLine) {
-                hints.append(hint)
-            }
-        }
-
-        var seen = Set<String>()
-        return hints.filter { seen.insert($0).inserted }.prefix(4).map { $0 }
-    }
-
-    private func commandHint(from command: String) -> String? {
-        var scannedPieces = 0
-        for piece in command.split(whereSeparator: \.isWhitespace) {
-            scannedPieces += 1
-            guard scannedPieces <= 16 else {
-                break
-            }
-            let lower = piece.lowercased()
-            if lower.contains("node_modules") ||
-                lower.hasSuffix("vite") ||
-                lower.hasSuffix("next") ||
-                lower.hasSuffix("ollama") ||
-                lower.hasSuffix("python") ||
-                lower.hasSuffix("python3") ||
-                lower.hasSuffix("bun") ||
-                lower.hasSuffix("docker") {
-                return lastPathComponent(String(piece))
-            }
-        }
-        return nil
-    }
-
-    private func lastPathComponent(_ value: String) -> String {
-        if let slash = value.lastIndex(of: "/") {
-            return String(value[value.index(after: slash)...])
-        }
-        return value
-    }
-
-    private func sortFamilies(_ lhs: ProcessFamily, _ rhs: ProcessFamily) -> Bool {
-        if lhs.forecast.state != rhs.forecast.state {
-            return lhs.forecast.state > rhs.forecast.state
-        }
-        if lhs.score.level != rhs.score.level {
-            return lhs.score.level > rhs.score.level
-        }
-        if lhs.score.heat.value != rhs.score.heat.value {
-            return lhs.score.heat.value > rhs.score.heat.value
-        }
-        if lhs.score.value != rhs.score.value {
-            return lhs.score.value > rhs.score.value
-        }
-        if lhs.totalPhysicalFootprintBytes != rhs.totalPhysicalFootprintBytes {
-            return lhs.totalPhysicalFootprintBytes > rhs.totalPhysicalFootprintBytes
-        }
-        if lhs.totalCPUPercent != rhs.totalCPUPercent {
-            return lhs.totalCPUPercent > rhs.totalCPUPercent
-        }
-        return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-    }
-
-    private func classificationPriority(_ classification: DevClassification) -> Double {
-        let kindBoost: Double = switch classification.kind {
-        case .unknownHeavy:
-            0
-        case .cliTool:
-            0.03
-        case .electronApp, .localModelRunner, .dockerHelper:
-            0.2
-        default:
-            0.12
-        }
-        return classification.confidence + kindBoost
-    }
-
-    private func sameAppBundle(_ lhs: String, _ rhs: String) -> Bool {
-        guard let left = appBundlePrefix(lhs), let right = appBundlePrefix(rhs) else {
-            return false
-        }
-        return left == right
-    }
-
-    private func samePathNeighborhood(_ lhs: String, _ rhs: String) -> Bool {
-        let left = URL(fileURLWithPath: lhs).deletingLastPathComponent().path
-        let right = URL(fileURLWithPath: rhs).deletingLastPathComponent().path
-        return !left.isEmpty && left == right
-    }
-
-    private func appBundlePrefix(_ path: String) -> String? {
-        guard let range = path.range(of: ".app/", options: [.caseInsensitive]) else {
-            return nil
-        }
-        return String(path[..<range.upperBound]).lowercased()
-    }
-
-    private func formatCompactBytes(_ bytes: UInt64) -> String {
-        if bytes >= 1_073_741_824 {
-            return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
-        }
-        return "\(max(1, Int(Double(bytes) / 1_048_576))) MB"
-    }
-}
-
-private final class LockedDevClassificationCache: @unchecked Sendable {
-    private struct Entry {
-        var fingerprint: UInt64
-        var classification: DevClassification
-    }
-
-    private let lock = NSLock()
-    private var entries: [ProcessIdentity: Entry] = [:]
-    private var pruneCounter = 0
-
-    func classification(for process: ProcessMetrics, classifier: DevProcessClassifier) -> DevClassification {
-        let fingerprint = Self.fingerprint(for: process)
-        lock.lock()
-        if let entry = entries[process.identity], entry.fingerprint == fingerprint {
-            lock.unlock()
-            return entry.classification
-        }
-        lock.unlock()
-
-        let classification = classifier.classification(for: process)
-        lock.lock()
-        entries[process.identity] = Entry(fingerprint: fingerprint, classification: classification)
-        pruneCounter += 1
-        if pruneCounter >= 2_048, entries.count > 12_000 {
-            let keep = Set(entries.keys.suffix(8_000))
-            entries = entries.filter { keep.contains($0.key) }
-            pruneCounter = 0
-        }
-        lock.unlock()
-        return classification
-    }
-
-    private static func fingerprint(for process: ProcessMetrics) -> UInt64 {
-        var hasher = Hasher()
-        hasher.combine(process.name)
-        hasher.combine(process.executablePath)
-        hasher.combine(process.commandLine)
-        return UInt64(bitPattern: Int64(hasher.finalize()))
     }
 }

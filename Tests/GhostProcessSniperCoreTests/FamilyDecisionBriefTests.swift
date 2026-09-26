@@ -21,7 +21,8 @@ final class FamilyDecisionBriefTests: XCTestCase {
 
     func testSawtoothIsWatchedNotStopped() {
         let points: [Double] = [400, 520, 430, 560, 450, 590, 470, 610].map { $0 * mebibyte }
-        let family = makeFamily(points: points, fit: 0.3, forecast: forecast(.warming, confidence: 0.6))
+        // Watch level: a measured Hot level outranks the shape and reads as heavy.
+        let family = makeFamily(points: points, fit: 0.3, forecast: forecast(.warming, confidence: 0.6), level: .watch)
 
         let brief = FamilyDetailPanelModel(family: family).brief
 
@@ -163,7 +164,8 @@ final class FamilyDecisionBriefTests: XCTestCase {
         measurement: ProcessMeasurementStatus = .fresh,
         alert: AlertState = .normal,
         owned: Bool = true,
-        components: [GhostScoreComponent] = []
+        components: [GhostScoreComponent] = [],
+        level: GhostLevel = .hot
     ) -> ProcessFamily {
         let root = process(pid: 4_242, parent: 1, memory: UInt64(points.last ?? 0), measurement: measurement)
         let samples = points.enumerated().map { index, bytes in
@@ -185,7 +187,7 @@ final class FamilyDecisionBriefTests: XCTestCase {
             devConfidence: 0.9,
             commandHints: [root.commandLine],
             trend: trend,
-            score: GhostScore(value: 60, level: .hot, reasons: ["memory climbing"], components: components),
+            score: GhostScore(value: 60, level: level, reasons: ["memory climbing"], components: components),
             ownedIdentities: owned ? [root.identity] : [],
             protectedPIDs: owned ? [] : [root.pid],
             alertState: alert,

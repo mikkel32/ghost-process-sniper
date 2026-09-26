@@ -7,7 +7,7 @@ final class ProcessMonitorKillTests: XCTestCase {
     func testStopResultDoesNotWaitForRecordingAndRefresh() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("gps-kill-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: url) }
-        let sampler = GatedSampler()
+        let sampler = GateOpeningSampler()
         let monitor = ProcessMonitor(sampler: sampler, builder: ProcessFamilyBuilder(currentUserID: 501), store: RadarStore(url: url))
         let table = FakeProcessTable()
         let worker = KillProcessLite.fake(pid: 800, name: "cruncher")
@@ -27,7 +27,7 @@ final class ProcessMonitorKillTests: XCTestCase {
     func testBatchStopsAreRecordedBeforeTheNextPlan() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("gps-kill-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: url) }
-        let sampler = GatedSampler()
+        let sampler = GateOpeningSampler()
         let monitor = ProcessMonitor(sampler: sampler, builder: ProcessFamilyBuilder(currentUserID: 501), store: RadarStore(url: url))
         let table = FakeProcessTable()
         let copies = [KillProcessLite.fake(pid: 820, name: "alpha"), KillProcessLite.fake(pid: 821, name: "beta")]
@@ -76,7 +76,7 @@ final class ProcessMonitorKillTests: XCTestCase {
 
 /// A sampler whose first sample waits until the test opens it, or three
 /// seconds pass, so a test can tell whether a caller waited on a refresh.
-private actor GatedSampler: ProcessSampling {
+private actor GateOpeningSampler: ProcessSampling {
     private(set) var wasOpened = false
 
     func open() {

@@ -91,12 +91,12 @@ final class StopRiskMemoTests: XCTestCase {
     func testPlanWorkloadFollowsTheLatestSample() async {
         let monitor = ProcessMonitor(builder: ProcessFamilyBuilder(currentUserID: 501), store: nil)
         let idle = Self.electronFamily(cpu: 5)
-        monitor.ingest(idle.members)
+        await monitor.ingest(idle.members)
         _ = monitor.stopRisk(for: idle)
         _ = await monitor.killPlan(for: idle)
 
         let runaway = Self.electronFamily(cpu: 300)
-        monitor.ingest(runaway.members)
+        await monitor.ingest(runaway.members)
         let plan = await monitor.killPlan(for: runaway)
 
         XCTAssertEqual(plan.workload?.root?.cpuPercent, 300, "a preview after a spike must not show the idle scan's CPU")

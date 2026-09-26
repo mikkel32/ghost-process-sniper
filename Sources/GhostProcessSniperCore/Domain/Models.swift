@@ -73,7 +73,8 @@ public struct GhostScore: Equatable, Sendable {
                 GhostScoreComponent.inferred(
                     from: reason,
                     impact: distributedImpact + Double(offset) * 0.01,
-                    level: level
+                    level: level,
+                    slot: "reason.\(offset)"
                 )
             }
         } else {

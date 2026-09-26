@@ -20,6 +20,8 @@ struct CoreChecks {
         await run("nativeKillSnapshotProviderUsesLitePath") { try await nativeKillSnapshotProviderUsesLitePath() }
         await run("nativeSamplerDefersForensicsWhenPlanRequestsIt") { try await nativeSamplerDefersForensicsWhenPlanRequestsIt() }
         await run("nativeSamplerUsesBSDFirstCheapGraph") { try await nativeSamplerUsesBSDFirstCheapGraph() }
+        await run("nativeForensicsListOnlyListeningPorts") { try await nativeForensicsListOnlyListeningPorts() }
+        await run("nativePortCensusFindsListeningPort") { try await nativePortCensusFindsListeningPort() }
         await run("classifierScoresDevProcesses") { try classifierScoresDevProcesses() }
         await run("classifierProducesProcessKinds") { try classifierProducesProcessKinds() }
         await run("duplicateDetectorCapturesSmallSameUserProcesses") { try duplicateDetectorCapturesSmallSameUserProcesses() }
@@ -50,6 +52,7 @@ struct CoreChecks {
         await run("memoryPatternAnalyzerClassifiesShapes") { try memoryPatternAnalyzerClassifiesShapes() }
         await run("riskForecasterTreatsSawtoothAsChurn") { try riskForecasterTreatsSawtoothAsChurn() }
         await run("systemPressureBoostsLargeFamilies") { try systemPressureBoostsLargeFamilies() }
+        await run("systemPressureSamplerFollowsKernelVerdict") { try systemPressureSamplerFollowsKernelVerdict() }
         await run("familyVerdictSynthesizesJudgment") { try familyVerdictSynthesizesJudgment() }
         await run("riskForecasterRequiresSustainedCPUEvidence") { try riskForecasterRequiresSustainedCPUEvidence() }
         await run("startupGraceDelaysLeakCalls") { try startupGraceDelaysLeakCalls() }
@@ -59,20 +62,20 @@ struct CoreChecks {
         await run("scannerHealthFeedsDiagnostics") { try scannerHealthFeedsDiagnostics() }
         await run("gpuUsageTrackerComputesDeltaPercent") { try gpuUsageTrackerComputesDeltaPercent() }
         await run("spikeRingBufferBoundsReports") { try spikeRingBufferBoundsReports() }
-        await run("samplerExecutionPlanScalesAndCounts") { try samplerExecutionPlanScalesAndCounts() }
+        await run("scannerBudgetCapsTelemetryBursts") { try scannerBudgetCapsTelemetryBursts() }
         await run("radarPublishPayloadSkipsUnchangedContentRebuild") { try radarPublishPayloadSkipsUnchangedContentRebuild() }
         await run("menuBarStatusPresentationIsIconOnlyAndCompact") { try menuBarStatusPresentationIsIconOnlyAndCompact() }
         await run("menuBarPresentationKeepsDiagnosticsOutOfTitle") { try menuBarPresentationKeepsDiagnosticsOutOfTitle() }
-        await run("refreshGateCoalescesOverlappingRequests") { try await refreshGateCoalescesOverlappingRequests() }
+        await run("monitorRefreshQueuesOneTrailingRerun") { try await monitorRefreshQueuesOneTrailingRerun() }
         await run("radarRefreshWorkerPublishesStableOutcome") { try await radarRefreshWorkerPublishesStableOutcome() }
         await run("radarSchedulerAdaptsCadence") { try radarSchedulerAdaptsCadence() }
         await run("radarSchedulerFocusesSelectedFamilies") { try radarSchedulerFocusesSelectedFamilies() }
         await run("radarPipelineDiffsAndHoldsLevels") { try radarPipelineDiffsAndHoldsLevels() }
         await run("familyScoringCacheReusesUnchangedFamilies") { try familyScoringCacheReusesUnchangedFamilies() }
-        await run("monitorPublishesRadarSummary") { try monitorPublishesRadarSummary() }
-        await run("monitorPublishedStateObserversCanBeRemoved") { try monitorPublishedStateObserversCanBeRemoved() }
-        await run("monitorDiagnosticsOnlyPublishKeepsViewModelStable") { try monitorDiagnosticsOnlyPublishKeepsViewModelStable() }
-        await run("monitorPublishObserversCanMutateRegistrationDuringCallback") { try monitorPublishObserversCanMutateRegistrationDuringCallback() }
+        await run("monitorPublishesRadarSummary") { try await monitorPublishesRadarSummary() }
+        await run("monitorPublishedStateObserversCanBeRemoved") { try await monitorPublishedStateObserversCanBeRemoved() }
+        await run("monitorDiagnosticsOnlyPublishKeepsViewModelStable") { try await monitorDiagnosticsOnlyPublishKeepsViewModelStable() }
+        await run("monitorPublishObserversCanMutateRegistrationDuringCallback") { try await monitorPublishObserversCanMutateRegistrationDuringCallback() }
         await run("radarStorePersistsSettingsRulesAndIncidents") { try await radarStorePersistsSettingsRulesAndIncidents() }
         await run("radarStoreQueriesIncidentsAndTogglesRules") { try await radarStoreQueriesIncidentsAndTogglesRules() }
         await run("radarStoreKeepsForecastsInMemory") { try await radarStoreKeepsForecastsInMemory() }
@@ -141,6 +144,15 @@ private func nativeSamplerSeesCurrentProcess() async throws {
     }
     try check(current.identity.startTimeSeconds > 0, "native sampler should include stable start time")
     try check(!current.name.isEmpty, "native sampler should include process name")
+    // The session facts forgotten-process detection relies on. A CI runner
+    // may have no terminal, so the tty itself is not required.
+    try check(getsid(getpid()) > 0, "getsid should succeed for the checks process")
+    try check(current.sessionID == getsid(getpid()), "native sampler should read the session id")
+    try check(current.processGroupID == getpgrp(), "native sampler should read the process group")
+    try check(current.runState == .running || current.runState == .sleeping, "native sampler should read the run state")
+    if isatty(STDIN_FILENO) != 0 {
+        try check(current.controllingTerminal != nil, "a process with a terminal should report its tty")
+    }
 }
 
 private func nativeKillSnapshotProviderUsesLitePath() async throws {
@@ -164,7 +176,6 @@ private func nativeSamplerDefersForensicsWhenPlanRequestsIt() async throws {
             commandRefreshInterval: 60,
             includeForensicsFor: [],
             includeForensicsForPIDs: [],
-            forceCommandRefresh: false,
             allowsOptionalForensics: false,
             maxForensicsPerRefresh: 0,
             reason: "check"
@@ -177,7 +188,6 @@ private func nativeSamplerDefersForensicsWhenPlanRequestsIt() async throws {
             commandRefreshInterval: 60,
             includeForensicsFor: [],
             includeForensicsForPIDs: [],
-            forceCommandRefresh: false,
             allowsOptionalForensics: false,
             maxForensicsPerRefresh: 0,
             reason: "check"
@@ -187,6 +197,9 @@ private func nativeSamplerDefersForensicsWhenPlanRequestsIt() async throws {
     try check(first.stats.forensicsRefreshCount == 0, "battery saver plan should skip expensive forensics")
     try check(first.stats.forensicsDeferredCount > 0, "sampler should report deferred forensics")
     try check(second.stats.commandCacheHitCount > 0, "sampler should reuse command/path cache on stable processes")
+    let ownProcesses = second.processes.filter { $0.userID == geteuid() }
+    let pathless = ownProcesses.filter { $0.executablePath.isEmpty }
+    try check(Double(pathless.count) < 0.05 * Double(max(1, ownProcesses.count)), "second sample should know the executable path of almost every same-user process, \(pathless.count) of \(ownProcesses.count) missing")
 }
 
 private func nativeSamplerUsesBSDFirstCheapGraph() async throws {
@@ -197,13 +210,10 @@ private func nativeSamplerUsesBSDFirstCheapGraph() async throws {
         commandRefreshInterval: 120,
         includeForensicsFor: [],
         includeForensicsForPIDs: [],
-        forceCommandRefresh: false,
         allowsOptionalForensics: false,
         maxForensicsPerRefresh: 0,
         reason: "bsd-first-check",
-        metricsEnrichmentBudget: 4,
-        unknownProcessStride: 32,
-        trueCheapScanEnabled: true
+        metricsEnrichmentBudget: 4
     )
     let first = try await sampler.sample(plan: plan)
     var secondPlan = plan
@@ -211,14 +221,90 @@ private func nativeSamplerUsesBSDFirstCheapGraph() async throws {
     let second = try await sampler.sample(plan: secondPlan)
 
     try check(first.stats.bsdReadCount >= first.stats.processCount, "cheap graph scan should read BSD identity for sampled processes")
+    try check(Double(first.stats.usageReadCount) >= 0.9 * Double(first.stats.processCount), "every readable process should get a CPU and memory reading each tick")
+    try check(first.stats.taskInfoReadCount <= plan.metricsEnrichmentBudget, "task-info reads should stay within the enrichment budget")
     try check(first.stats.taskInfoReadCount < max(1, first.stats.bsdReadCount), "quiet scan should avoid all-process task-info sweeps")
-    // Successful BSD reads can be fewer than enumerated PIDs due to exits,
-    // permissions, or the deadline. Assert against the selected scan strategy.
-    let expectedPIDCopies = first.stats.scannerWorkerCount > 1 ? 1 : 0
-    try check(first.stats.pidBufferCopyCount == expectedPIDCopies, "sequential scans should avoid PID copies; parallel scans should share exactly one snapshot")
+    try check(first.stats.pidBufferCopyCount == 0, "the single probe pass should read the PID buffer in place")
     try check(second.stats.scratchpadReuseCount > 0, "sampler should reuse actor-owned scratch buffers")
     try check(second.stats.reusedRecordCount > 0 || second.stats.commandCacheHitCount > 0, "stable quiet refresh should reuse cached process records or telemetry")
+    if geteuid() != 0 {
+        try check(first.stats.bsdDeniedCount > 0, "an unprivileged scan should count other users' processes it cannot see")
+    }
 }
+
+private func nativeForensicsListOnlyListeningPorts() async throws {
+    #if os(macOS)
+    try await withLoopbackConnection { listenerPort, clientPort in
+        let sampler = NativeProcessSampler()
+        var plan = SamplingPlan.balanced(now: Date(timeIntervalSince1970: 1_020))
+        plan.includeForensicsForPIDs = [getpid()]
+        let batch = try await sampler.sample(plan: plan)
+        guard let current = batch.processes.first(where: { $0.pid == getpid() }) else {
+            throw CheckFailure(message: "sampler did not include current process")
+        }
+        try check(current.forensics.listeningPorts.contains(listenerPort), "forensics should list the check's TCP listener")
+        try check(!current.forensics.listeningPorts.contains(clientPort), "forensics should not list an outbound connection's ephemeral port")
+    }
+    #endif
+}
+
+private func nativePortCensusFindsListeningPort() async throws {
+    #if os(macOS)
+    try await withLoopbackConnection { listenerPort, _ in
+        let sampler = NativeProcessSampler()
+        var plan = SamplingPlan.balanced(now: Date(timeIntervalSince1970: 1_030))
+        plan.portCensusAll = true
+        let batch = try await sampler.sample(plan: plan)
+        guard let current = batch.processes.first(where: { $0.pid == getpid() }) else {
+            throw CheckFailure(message: "sampler did not include current process")
+        }
+        try check(batch.stats.portCensusCount > 0, "an explicit census should read ports")
+        try check(current.forensics.listeningPorts.contains(listenerPort), "the census should find a quiet process's listener")
+    }
+    #endif
+}
+
+#if os(macOS)
+/// A loopback listener plus one outbound connection to it, both held open while `body` runs.
+private func withLoopbackConnection(_ body: (_ listenerPort: Int, _ clientPort: Int) async throws -> Void) async throws {
+    let listener = socket(AF_INET, SOCK_STREAM, 0)
+    guard listener >= 0 else { throw CheckFailure(message: "socket failed") }
+    defer { close(listener) }
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    address.sin_port = 0
+    let length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let bound = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, length) }
+    }
+    guard bound == 0, listen(listener, 4) == 0 else { throw CheckFailure(message: "listen failed") }
+    let listenerPort = try boundPort(listener)
+
+    let client = socket(AF_INET, SOCK_STREAM, 0)
+    guard client >= 0 else { throw CheckFailure(message: "client socket failed") }
+    defer { close(client) }
+    address.sin_port = in_port_t(UInt16(listenerPort).bigEndian)
+    let connected = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, length) }
+    }
+    guard connected == 0 else { throw CheckFailure(message: "connect failed") }
+    let accepted = accept(listener, nil, nil)
+    defer { if accepted >= 0 { close(accepted) } }
+    try await body(listenerPort, try boundPort(client))
+}
+
+private func boundPort(_ descriptor: Int32) throws -> Int {
+    var address = sockaddr_in()
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let result = withUnsafeMutablePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(descriptor, $0, &length) }
+    }
+    guard result == 0 else { throw CheckFailure(message: "getsockname failed") }
+    return Int(UInt16(bigEndian: address.sin_port))
+}
+#endif
 
 private func classifierScoresDevProcesses() throws {
     let classifier = DevProcessClassifier()
@@ -287,8 +373,8 @@ private func duplicateDetectorCapturesSmallSameUserProcesses() throws {
     try check(result.promotedDuplicateCandidateCount == 2, "duplicate members should be promoted as family candidates")
     try check(result.families.count == 2, "independent duplicate roots should become visible families")
     try check(result.families.allSatisfy { $0.score.level >= .watch }, "duplicate-promoted families should have watch visibility")
-    try check(result.families.contains { $0.score.reasons.contains("2 matching instances") }, "duplicate score should explain matching instances")
-    try check(result.families.contains { $0.score.components.contains(where: { $0.kind == .fanout && $0.title.contains("matching instances") }) }, "duplicate score should expose a fanout component")
+    try check(result.families.contains { $0.score.reasons.contains("2 independent copies") }, "duplicate score should explain the independent copies")
+    try check(result.families.contains { $0.score.components.contains(where: { $0.kind == .fanout && $0.title.contains("independent copies") }) }, "duplicate score should expose a fanout component")
 }
 
 private func duplicateDetectorIgnoresSingletonsAndSystemBundles() throws {
@@ -484,7 +570,8 @@ private func familyBuilderSurfacesGPUHardwareSignals() throws {
         commandLine: "SmallRenderer --canvas",
         memory: 96_000_000,
         cpu: 8,
-        gpu: 64
+        gpu: 64,
+        sampledAt: Date(timeIntervalSince1970: 2_450)
     )
 
     let families = builder.buildFamilies(
@@ -710,7 +797,7 @@ private func compactDefaultsAndEngineIsolationBehave() throws {
         summary: summary,
         incidents: [],
         rules: RadarRule.builtIns(settings: .aggressive),
-        metrics: .empty.updatingSmoothness(mainActorPublishMilliseconds: 5),
+        metrics: performanceMetrics { $0.mainActorPublishMilliseconds = 5 },
         health: SamplerHealth(engineName: "test", lastSampleDate: nil, processCount: 84, familyCount: 1, errorMessage: nil),
         storeHealth: StoreHealth(
             backlogCount: 2,
@@ -788,9 +875,8 @@ private func ruleMatchPreviewCountsLiveFamilies() throws {
 
 private func trendWindowComputesLeakVelocity() throws {
     var trend = TrendWindow()
-    let identity = ProcessIdentity(pid: 200, startTimeSeconds: 10, startTimeMicroseconds: 0)
-    _ = trend.update(identity: identity, memoryBytes: 100 * 1_048_576, cpuPercent: 5, at: Date(timeIntervalSince1970: 1_000))
-    let metrics = trend.update(identity: identity, memoryBytes: 260 * 1_048_576, cpuPercent: 25, at: Date(timeIntervalSince1970: 1_060))
+    _ = trend.update(signatureID: "trend-200", memoryBytes: 100 * 1_048_576, cpuPercent: 5, at: Date(timeIntervalSince1970: 1_000))
+    let metrics = trend.update(signatureID: "trend-200", memoryBytes: 260 * 1_048_576, cpuPercent: 25, at: Date(timeIntervalSince1970: 1_060))
 
     try check(Int(metrics.memoryVelocityMegabytesPerMinute.rounded()) == 160, "trend should compute MB/min leak velocity")
     try check(Int(metrics.cpuSlopePerMinute.rounded()) == 20, "trend should compute CPU slope")
@@ -819,7 +905,7 @@ private func riskForecasterPredictsETAAndState() throws {
 
     try check(forecast.state >= .leaking, "forecaster should promote imminent memory growth")
     try check((forecast.etaSeconds ?? 0) > 180 && (forecast.etaSeconds ?? 999) < 240, "forecaster should compute memory threshold ETA")
-    try check(forecast.whyNow.contains("threshold ETA"), "forecast should explain why now")
+    try check(forecast.whyNow.contains("memory limit in"), "forecast should explain why now")
     try check(forecast.recommendedAction.action == .inspect, "leaking forecast should remain advisory inspect")
 }
 
@@ -850,6 +936,7 @@ private func riskForecasterSuppressesQuietNoise() throws {
 }
 
 private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
+    // Forgotten needs watched idleness, not just age and launchd as parent.
     let stale = forecastFamily(
         pid: 207,
         parentPID: 1,
@@ -857,7 +944,8 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
         memory: 650 * 1_048_576,
         cpu: 0,
         trend: .empty,
-        score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"])
+        score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"]),
+        cpuActivity: FamilyCPUActivity(buckets: [], lastActiveAt: nil, measuredSince: Date(timeIntervalSince1970: 12_000))
     )
     let staleForecast = forecastWithFreshMeasurements(
         family: stale,
@@ -877,7 +965,7 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
     )
     let baseline = FamilyBaseline(
         signature: recurringBase.signature,
-        sampleCount: 20,
+        sampleCount: 40,
         meanMemoryBytes: 160 * 1_048_576,
         peakMemoryBytes: 220 * 1_048_576,
         meanCPUPercent: 2,
@@ -898,8 +986,8 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
 }
 
 private func riskForecasterDetectsLeakAcceleration() throws {
-    let base = Date(timeIntervalSince1970: 20_840)
-    let samples = [100, 140, 220, 340, 500, 700].enumerated().map { index, megabytes in
+    let base = Date(timeIntervalSince1970: 20_790)
+    let samples = [100, 110, 120, 130, 200, 300, 400, 500].enumerated().map { index, megabytes in
         TrendSample(
             date: base.addingTimeInterval(Double(index) * 30),
             memoryBytes: UInt64(megabytes) * 1_048_576,
@@ -908,12 +996,13 @@ private func riskForecasterDetectsLeakAcceleration() throws {
     }
     let family = forecastFamily(
         pid: 209,
-        memory: 700 * 1_048_576,
+        memory: 500 * 1_048_576,
         cpu: 4,
         trend: TrendMetrics(
-            memoryVelocityMegabytesPerMinute: 20,
+            memoryVelocityMegabytesPerMinute: 120,
             cpuSlopePerMinute: 0,
             memoryPoints: samples.map { Double($0.memoryBytes) },
+            memoryFitQuality: 0.9,
             samples: samples
         ),
         score: GhostScore(value: 12, level: .quiet, reasons: ["quiet dev process"])
@@ -924,18 +1013,19 @@ private func riskForecasterDetectsLeakAcceleration() throws {
         now: Date(timeIntervalSince1970: 21_000)
     )
 
-    try check(forecast.state == .runaway, "accelerating leak should become runaway even before fixed thresholds")
+    // Acceleration sharpens a leak call; on its own it is not a runaway.
+    try check(forecast.state == .leaking, "accelerating leak should be called a leak")
     try check(forecast.leakAccelerationMegabytesPerMinute2 > 80, "forecast should expose leak acceleration")
+    try check(forecast.whyNow.contains("accelerating"), "acceleration should be explained")
 }
 
 private func trendWindowRegressionResistsEndpointSpikes() throws {
     var trend = TrendWindow()
-    let identity = ProcessIdentity(pid: 300, startTimeSeconds: 10, startTimeMicroseconds: 0)
     let base = Date(timeIntervalSince1970: 2_000)
     for (index, megabytes) in [100, 100, 100, 100].enumerated() {
-        _ = trend.update(identity: identity, memoryBytes: UInt64(megabytes) * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(Double(index) * 30))
+        _ = trend.update(signatureID: "trend-300", memoryBytes: UInt64(megabytes) * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(Double(index) * 30))
     }
-    let metrics = trend.update(identity: identity, memoryBytes: 400 * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(120))
+    let metrics = trend.update(signatureID: "trend-300", memoryBytes: 400 * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(120))
 
     // Endpoint math would claim 150 MB/min from one spiky sample; the
     // regression stays lower and flags the poor fit.
@@ -944,10 +1034,9 @@ private func trendWindowRegressionResistsEndpointSpikes() throws {
     try check(metrics.sampleCount == 5, "trend metrics should expose the window sample count")
 
     var cleanTrend = TrendWindow()
-    let cleanIdentity = ProcessIdentity(pid: 301, startTimeSeconds: 10, startTimeMicroseconds: 0)
     var cleanMetrics = TrendMetrics.empty
     for (index, megabytes) in [100, 150, 200, 250, 300].enumerated() {
-        cleanMetrics = cleanTrend.update(identity: cleanIdentity, memoryBytes: UInt64(megabytes) * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(Double(index) * 30))
+        cleanMetrics = cleanTrend.update(signatureID: "trend-301", memoryBytes: UInt64(megabytes) * 1_048_576, cpuPercent: 3, at: base.addingTimeInterval(Double(index) * 30))
     }
     try check(Int(cleanMetrics.memoryVelocityMegabytesPerMinute.rounded()) == 100, "regression should recover the true slope of a clean leak")
     try check(cleanMetrics.memoryFitQuality > 0.95, "clean linear leak should earn high fit quality")
@@ -1042,10 +1131,22 @@ private func riskForecasterTreatsSawtoothAsChurn() throws {
     try check(forecast.whyNow.contains("churn"), "forecast should explain the churn pattern")
 }
 
+// Swap growth may raise the level one step, so only the kernel's bounds are exact.
+private func systemPressureSamplerFollowsKernelVerdict() throws {
+    let pressure = SystemPressureSampler().sample()
+    guard let kernel = pressure.kernelLevel else { return }
+    switch kernel {
+    case 4: try check(pressure.level == .critical, "kernel critical pressure should read critical")
+    case 2: try check(pressure.level == .warning, "kernel warning pressure should read warning")
+    default: try check(pressure.level <= .warning, "kernel normal pressure should never read critical")
+    }
+}
+
 private func systemPressureBoostsLargeFamilies() throws {
+    // Half of the memory in use: pressure is largely this family's doing.
     let family = forecastFamily(
         pid: 220,
-        memory: 1_610_612_736,
+        memory: 8_589_934_592,
         cpu: 3,
         trend: .empty,
         score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"])
@@ -1078,6 +1179,18 @@ private func systemPressureBoostsLargeFamilies() throws {
     try check(pressured.score.value >= nominal.score.value + 10, "critical host pressure should boost large families")
     try check(pressured.score.reasons.joined(separator: " ").contains("pressure"), "pressure boost should be explained in reasons")
     try check(pressured.score.level >= .watch, "gigabyte families under critical pressure should be at least watch")
+
+    // A 1.5 GB bystander holding a tenth of used memory is barely moved.
+    let bystander = forecastFamily(pid: 221, memory: 1_610_612_736, cpu: 3, trend: .empty,
+        score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"]))
+    let calm = intelligence.enrich(family: freshMeasurements(bystander, at: now),
+        context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []), settings: .aggressive, now: now)
+    let squeezed = intelligence.enrich(family: freshMeasurements(bystander, at: now),
+        context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: SystemMemoryPressure(
+            level: .critical, usedFraction: 0.95, totalBytes: 17_179_869_184, availableBytes: 858_993_459,
+            compressedBytes: 4_294_967_296)),
+        settings: .aggressive, now: now)
+    try check(squeezed.score.value - calm.score.value < 10, "an idle bystander should get only its share of the pressure boost")
 }
 
 private func familyVerdictSynthesizesJudgment() throws {
@@ -1154,6 +1267,14 @@ private func riskForecasterRequiresSustainedCPUEvidence() throws {
         trend: cpuTrend([90, 90, 90, 90, 4]), score: GhostScore(value: 8, level: .quiet, reasons: []))
     let recoveredForecast = forecastWithFreshMeasurements(family: recovered, settings: .aggressive, now: now)
     try check(recoveredForecast.state == .quiet, "old high CPU must not keep a currently recovered process runaway")
+
+    // A compile pegging every core is expected work, not a runaway.
+    let build = forecastFamily(pid: 236, parentPID: 999, memory: 200 * 1_048_576, cpu: 700,
+        trend: cpuTrend([650, 700, 720, 690, 700]), score: GhostScore(value: 8, level: .quiet, reasons: []),
+        classification: DevClassification(kind: .swiftBuild, confidence: 0.95, reason: "Swift build toolchain", traits: .buildOrTest))
+    let buildForecast = forecastWithFreshMeasurements(family: build, settings: .aggressive, now: now)
+    try check(buildForecast.state != .runaway, "a build at 700% should not be runaway before fifteen minutes")
+    try check(buildForecast.recommendedAction.title == "Let it finish", "a build should be left to finish")
 }
 
 private func startupGraceDelaysLeakCalls() throws {
@@ -1233,6 +1354,15 @@ private func selfUsageMonitorMeasuresOwnCost() throws {
     try check(second.averageCPUPercent > 0, "self usage should keep a rolling average")
 }
 
+private func performanceMetrics(
+    from base: RadarPerformanceMetrics = .empty,
+    _ update: (inout RadarSmoothnessState) -> Void
+) -> RadarPerformanceMetrics {
+    var metrics = base
+    update(&metrics.smoothness)
+    return metrics
+}
+
 private func scannerDeadlineAndCachesBehave() throws {
     let budget = ScannerBudget.budget(for: .batterySaver)
     let deadline = SamplerDeadline(
@@ -1246,47 +1376,30 @@ private func scannerDeadlineAndCachesBehave() throws {
     let record = ProcessRecord(
         identity: process.identity,
         process: process,
-        metricsFingerprint: 10,
-        telemetryRefreshedAt: Date(timeIntervalSince1970: 1_000),
-        lastSeenAt: Date(timeIntervalSince1970: 1_000)
+        telemetryRefreshedAt: Date(timeIntervalSince1970: 1_000)
     )
     var cache = ProcessScanCache()
     cache.update(record)
     try check(!cache.shouldRefreshTelemetry(
         identity: process.identity,
-        probeFingerprint: 10,
         now: Date(timeIntervalSince1970: 1_005),
         maxAge: 10,
         grace: 10,
-        isPriority: false,
-        force: false
+        isPriority: false
     ), "unchanged quiet process should reuse cached telemetry")
-    try check(!cache.shouldRefreshTelemetry(
-        identity: process.identity,
-        probeFingerprint: 11,
-        now: Date(timeIntervalSince1970: 1_005),
-        maxAge: 10,
-        grace: 10,
-        isPriority: false,
-        force: false
-    ), "changed cheap metrics should not force command/path telemetry inside the cache window")
     try check(cache.shouldRefreshTelemetry(
         identity: process.identity,
-        probeFingerprint: 10,
         now: Date(timeIntervalSince1970: 1_030),
         maxAge: 10,
         grace: 10,
-        isPriority: false,
-        force: false
+        isPriority: false
     ), "quiet telemetry should refresh after max age plus grace")
     try check(cache.shouldRefreshTelemetry(
         identity: process.identity,
-        probeFingerprint: 10,
         now: Date(timeIntervalSince1970: 1_012),
         maxAge: 10,
         grace: 10,
-        isPriority: true,
-        force: false
+        isPriority: true
     ), "priority telemetry should use the shorter max-age window")
 
     var forensics = ForensicsCache()
@@ -1294,26 +1407,11 @@ private func scannerDeadlineAndCachesBehave() throws {
     forensics.update(partial, for: process.identity, at: Date(timeIntervalSince1970: 2_000))
     try check(forensics.negativeEntry(for: process.identity, now: Date(timeIntervalSince1970: 2_090), maxAge: 120)?.forensics == partial, "partial forensics should be negative-cached")
 
-    var queue = ForensicsWorkQueue(identities: [process.identity, process.identity])
-    try check(queue.pop() == process.identity, "forensics queue should return priority identity once")
-    try check(queue.isEmpty, "forensics queue should de-duplicate identities")
-
     var cpu = CPUUsageTracker<ProcessIdentity>()
     _ = cpu.percent(key: process.identity, totalProcessorSeconds: 1, wallClock: Date(timeIntervalSince1970: 1))
     cpu.prune(keeping: [])
     let missing = cpu.percent(key: process.identity, totalProcessorSeconds: 2, wallClock: Date(timeIntervalSince1970: 2))
     try check(missing == nil, "CPU tracker pruning should drop old identity state")
-
-    let policy = ProcessProbePolicy(
-        richMetricIdentities: [process.identity],
-        richMetricPIDs: [],
-        quietRichMetricStride: 5,
-        allowsRichMetrics: true
-    )
-    try check(policy.shouldReadRichMetrics(identity: process.identity, pid: process.pid, ordinal: 1, isPriority: false), "focused identity should be promoted to rich metrics")
-    try check(!policy.shouldReadRichMetrics(identity: ProcessIdentity(pid: 216, startTimeSeconds: 1, startTimeMicroseconds: 0), pid: 216, ordinal: 1, isPriority: false), "stable quiet identities should skip rich metrics between strides")
-    try check(policy.shouldReadRichMetrics(identity: ProcessIdentity(pid: 217, startTimeSeconds: 1, startTimeMicroseconds: 0), pid: 217, ordinal: 5, isPriority: false), "quiet identities should receive sparse rich probes by stride")
-    try check(!ProcessProbePolicy(richMetricIdentities: [process.identity], richMetricPIDs: [], quietRichMetricStride: 1, allowsRichMetrics: false).shouldReadRichMetrics(identity: process.identity, pid: process.pid, ordinal: 0, isPriority: true), "pressure policy should disable rich probes")
 }
 
 private func scannerHealthFeedsDiagnostics() throws {
@@ -1365,10 +1463,14 @@ private func scannerHealthFeedsDiagnostics() throws {
         lastStoreFlushDate: nil,
         budget: RadarPerformanceBudget.budget(for: .batterySaver),
         scannerHealth: health,
-        taskInfoReadCount: 2,
-        reusedProcessRecordCount: 7,
-        hardwareOffenderCount: 2,
-        hardwareDetectorMilliseconds: 1
+        smoothness: {
+            var smoothness = RadarSmoothnessState()
+            smoothness.taskInfoReadCount = 2
+            smoothness.reusedProcessRecordCount = 7
+            smoothness.hardwareOffenderCount = 2
+            smoothness.hardwareDetectorMilliseconds = 1
+            return smoothness
+        }()
     )
     let engine = EngineDiagnosticsViewModel(
         metrics: metrics,
@@ -1385,10 +1487,18 @@ private func scannerHealthFeedsDiagnostics() throws {
     try check(engine.scannerCostText.contains("2 rich"), "engine diagnostics should expose rich probe cost")
     try check(engine.scannerCostText.contains("2 task-info"), "engine diagnostics should expose task-info read cost")
     try check(engine.cacheText.contains("7 reused"), "engine diagnostics should expose reused process records")
-    try check(engine.scannerCostText.contains("2 workers"), "engine diagnostics should expose scanner worker count")
+    try check(engine.scannerCostText.contains("0 port census"), "engine diagnostics should expose port census reads")
     try check(engine.scannerCostText.contains("3 tasks"), "engine diagnostics should expose bounded task count")
     try check(engine.scannerCostText.contains("2 hardware"), "engine diagnostics should expose hardware offender count")
-    try check(engine.diagnosticsReport.contains("Hardware offenders: 2"), "diagnostics report should include hardware detector count")
+    let report = EngineDiagnosticsViewModel.diagnosticsReport(
+        metrics: metrics,
+        health: SamplerHealth(engineName: "test", lastSampleDate: nil, processCount: 10, familyCount: 1, errorMessage: nil),
+        storeHealth: .empty,
+        storeError: nil,
+        summary: RadarSummary(statusText: "Quiet", level: .quiet, familyCount: 1, hotCount: 0, totalMemoryBytes: 1, topFamilyName: "node"),
+        generatedAt: Date(timeIntervalSince1970: 2)
+    )
+    try check(report.contains("Hardware offenders: 2"), "diagnostics report should include hardware detector count")
     try check(engine.smoothnessText.contains("0 ms publish"), "engine diagnostics should expose smoothness text")
 }
 
@@ -1425,21 +1535,8 @@ private func spikeRingBufferBoundsReports() throws {
     try check(!report.recentSpikes.contains(where: { $0.contains("sample") }), "spike ring should evict old entries")
 }
 
-private func samplerExecutionPlanScalesAndCounts() throws {
-    try check(NativeProcessSampler.recommendedWorkerCount(for: 0, mode: .balanced) == 0, "empty scan should not create workers")
-    try check(NativeProcessSampler.recommendedWorkerCount(for: 100, mode: .balanced) == 1, "small scans should avoid task-group workers")
-    try check(NativeProcessSampler.recommendedWorkerCount(for: 2_000, mode: .balanced) <= 5, "balanced scans should cap workers")
-    try check(NativeProcessSampler.recommendedWorkerCount(for: 30_000, mode: .batterySaver) <= 3, "battery saver should cap worker fanout")
+private func scannerBudgetCapsTelemetryBursts() throws {
     try check(ScannerBudget.budget(for: .balanced).maxTelemetryRefreshes <= 16, "balanced scanner should cap command/path refresh bursts")
-
-    let plan = SamplerExecutionPlan(
-        workerCount: 1,
-        telemetryJobCount: 2,
-        forensicsJobCount: 0,
-        scannerTaskCount: 0,
-        tinyQueueSequentialCount: 1
-    )
-    try check(plan.tinyQueueSequentialCount == 1 && plan.scannerTaskCount == 0, "tiny queues should run sequentially instead of spawning tasks")
 }
 
 private func radarPublishPayloadSkipsUnchangedContentRebuild() throws {
@@ -1472,7 +1569,7 @@ private func radarPublishPayloadSkipsUnchangedContentRebuild() throws {
         health: SamplerHealth(engineName: "test", lastSampleDate: nil, processCount: 1, familyCount: 1, errorMessage: nil),
         storeHealth: .empty,
         storeError: nil,
-        performance: .empty.updatingSmoothness(mainActorPublishMilliseconds: 4),
+        performance: performanceMetrics { $0.mainActorPublishMilliseconds = 4 },
         previous: first.state.consoleSnapshot,
         generatedAt: Date(timeIntervalSince1970: 2_301)
     )
@@ -1528,10 +1625,10 @@ private func menuBarPresentationKeepsDiagnosticsOutOfTitle() throws {
         topFamilyName: "node",
         leakingCount: 1
     )
-    let metrics = RadarPerformanceMetrics.empty.updatingSmoothness(
-        mainActorPublishMilliseconds: 9,
-        duplicateClusterCount: 3
-    )
+    let metrics = performanceMetrics {
+        $0.mainActorPublishMilliseconds = 9
+        $0.duplicateClusterCount = 3
+    }
     let first = MenuBarStatusPresentation(
         summary: summary,
         engineStatus: .empty,
@@ -1540,7 +1637,7 @@ private func menuBarPresentationKeepsDiagnosticsOutOfTitle() throws {
     let second = MenuBarStatusPresentation(
         summary: summary,
         engineStatus: .empty,
-        metrics: metrics.updatingSmoothness(mainActorPublishMilliseconds: 15)
+        metrics: performanceMetrics(from: metrics) { $0.mainActorPublishMilliseconds = 15 }
     )
 
     try check(first.title.isEmpty, "hot/leak diagnostics should never appear in menu bar title")
@@ -1550,18 +1647,22 @@ private func menuBarPresentationKeepsDiagnosticsOutOfTitle() throws {
     try check(first.renderKey == second.renderKey, "diagnostics-only publish cost changes should not invalidate status presentation")
 }
 
-private func refreshGateCoalescesOverlappingRequests() async throws {
-    let gate = RefreshGate()
-    let first = await gate.begin()
-    let second = await gate.begin()
-    let third = await gate.begin()
-    let finished = await gate.finish()
-    try check(first == .run, "first refresh should enter the gate")
-    try check(second == .coalesced(1), "second refresh should coalesce while one is running")
-    try check(third == .coalesced(2), "third refresh should increment coalesced count")
-    try check(finished == 2, "finish should report coalesced refreshes")
-    let inFlight = await gate.inFlight
-    try check(!inFlight, "gate should clear in-flight state after finish")
+@MainActor
+private func monitorRefreshQueuesOneTrailingRerun() async throws {
+    let monitor = ProcessMonitor(
+        sampler: FakeSampler(samples: [sample(pid: 540, name: "node", commandLine: "node server.js", memory: 40_000_000)]),
+        builder: ProcessFamilyBuilder(currentUserID: 501),
+        settings: .aggressive,
+        store: nil
+    )
+    let before = monitor.sampleRevision
+    async let first: Void = monitor.refresh()
+    async let second: Void = monitor.refresh()
+    async let third: Void = monitor.refresh()
+    _ = await (first, second, third)
+    try check(monitor.sampleRevision == before + 2, "overlapping refreshes should share one trailing rerun, not be dropped")
+    try check(monitor.performanceMetrics.coalescedRefreshCount == 2, "coalesced callers should be counted")
+    try check(!monitor.performanceMetrics.refreshInFlight, "publish should clear the in-flight flag")
 }
 
 private func radarRefreshWorkerPublishesStableOutcome() async throws {
@@ -1581,8 +1682,7 @@ private func radarRefreshWorkerPublishesStableOutcome() async throws {
             currentFamilies: [],
             currentIncidents: [],
             currentStoreHealth: .empty,
-            previousRefresh: .empty,
-            popoverVisible: false,
+            uiVisible: false,
             focusedSignatureIDs: [],
             now: Date(timeIntervalSince1970: 9_500),
             startedAt: Date(timeIntervalSince1970: 9_500)
@@ -1605,13 +1705,13 @@ private func radarSchedulerAdaptsCadence() throws {
     let quiet = RadarSummary(statusText: "Quiet", level: .quiet, familyCount: 0, hotCount: 0, totalMemoryBytes: 0, topFamilyName: nil)
     let hot = RadarSummary(statusText: "1 hot", level: .hot, familyCount: 1, hotCount: 1, totalMemoryBytes: 1, topFamilyName: "node")
 
-    let quietInterval = scheduler.nextInterval(settings: settings, summary: quiet, lastRefresh: .empty, popoverVisible: false)
-    let jitteredQuietInterval = scheduler.nextInterval(settings: settings, summary: quiet, lastRefresh: .empty, popoverVisible: false)
-    let hotInterval = scheduler.nextInterval(settings: settings, summary: hot, lastRefresh: .empty, popoverVisible: false)
-    let plan = scheduler.plan(settings: settings, families: [hotFamily(pid: 900, memory: 300_000_000, cpu: 95)], popoverVisible: false, now: Date())
+    let quietInterval = scheduler.nextInterval(settings: settings, context: RadarSchedulingContext(uiVisible: false, summaryLevel: quiet.level))
+    let hotInterval = scheduler.nextInterval(settings: settings, context: RadarSchedulingContext(uiVisible: false, summaryLevel: hot.level))
+    let visibleInterval = scheduler.nextInterval(settings: settings, context: RadarSchedulingContext(uiVisible: true, summaryLevel: quiet.level))
+    let plan = scheduler.plan(settings: settings, families: [hotFamily(pid: 900, memory: 300_000_000, cpu: 95)], uiVisible: false, now: Date())
 
     try check(quietInterval > hotInterval, "scheduler should back off quiet radar and tighten hot radar")
-    try check(jitteredQuietInterval != quietInterval, "quiet scheduler cadence should add small jitter to avoid one-second alignment")
+    try check(visibleInterval < quietInterval, "an open surface should sample faster than the hidden quiet cadence")
     try check(plan.maxForensicsPerRefresh >= 0, "scheduler should produce a bounded forensics plan")
     try check(plan.commandRefreshInterval >= 20, "quiet balanced plans should avoid frequent command/path sweeps")
 }
@@ -1622,7 +1722,7 @@ private func radarSchedulerFocusesSelectedFamilies() throws {
     let plan = scheduler.plan(
         settings: .aggressive,
         families: [family],
-        popoverVisible: false,
+        uiVisible: false,
         focusedSignatureIDs: [family.signature.id],
         now: Date(timeIntervalSince1970: 9_000)
     )
@@ -1643,8 +1743,8 @@ private func radarPipelineDiffsAndHoldsLevels() throws {
     let first = pipeline.run(processes: hotProcesses, settings: settings, context: context, now: Date(timeIntervalSince1970: 10_000))
     let second = pipeline.run(processes: quietProcesses, settings: settings, context: context, now: Date(timeIntervalSince1970: 10_005))
 
-    try check(first.diff.added.count == 1, "pipeline should detect newly seen process identity")
-    try check(second.diff.changed.count == 1, "pipeline should detect metric changes")
+    try check(first.diff.changedOrAdded.count == 1, "pipeline should detect newly seen process identity")
+    try check(second.diff.changedOrAdded.count == 1, "pipeline should detect metric changes")
     try check(second.families.first?.score.level ?? .quiet >= .watch, "hysteresis should avoid immediate hot-to-quiet flicker")
 }
 
@@ -1666,7 +1766,7 @@ private func familyScoringCacheReusesUnchangedFamilies() throws {
 }
 
 @MainActor
-private func monitorPublishesRadarSummary() throws {
+private func monitorPublishesRadarSummary() async throws {
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 100_000_000
     let monitor = ProcessMonitor(
@@ -1675,7 +1775,7 @@ private func monitorPublishesRadarSummary() throws {
         settings: settings,
         store: nil
     )
-    monitor.ingest(
+    await monitor.ingest(
         [
             sample(pid: 300, name: "node", commandLine: "node api.js", memory: 150_000_000, sampledAt: Date(timeIntervalSince1970: 3_000)),
             sample(pid: 301, name: "Safari", executablePath: "/Applications/Safari.app/Contents/MacOS/Safari", commandLine: "Safari", memory: 20_000_000, sampledAt: Date(timeIntervalSince1970: 3_000))
@@ -1691,7 +1791,7 @@ private func monitorPublishesRadarSummary() throws {
 }
 
 @MainActor
-private func monitorPublishedStateObserversCanBeRemoved() throws {
+private func monitorPublishedStateObserversCanBeRemoved() async throws {
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 100_000_000
     let monitor = ProcessMonitor(
@@ -1707,7 +1807,7 @@ private func monitorPublishedStateObserversCanBeRemoved() throws {
         lastSummary = state.summary
     }
 
-    monitor.ingest(
+    await monitor.ingest(
         [sample(pid: 306, name: "node", commandLine: "node observer.js", memory: 150_000_000)],
         now: Date(timeIntervalSince1970: 3_060)
     )
@@ -1715,7 +1815,7 @@ private func monitorPublishedStateObserversCanBeRemoved() throws {
     try check(lastSummary?.familyCount == 1, "published-state observer should receive the published state")
 
     monitor.removePublishedStateObserver(id)
-    monitor.ingest(
+    await monitor.ingest(
         [sample(pid: 307, name: "node", commandLine: "node observer-2.js", memory: 160_000_000)],
         now: Date(timeIntervalSince1970: 3_070)
     )
@@ -1723,7 +1823,7 @@ private func monitorPublishedStateObserversCanBeRemoved() throws {
 }
 
 @MainActor
-private func monitorDiagnosticsOnlyPublishKeepsViewModelStable() throws {
+private func monitorDiagnosticsOnlyPublishKeepsViewModelStable() async throws {
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 100_000_000
     let process = sample(pid: 308, name: "node", commandLine: "node stable.js", memory: 150_000_000)
@@ -1734,10 +1834,10 @@ private func monitorDiagnosticsOnlyPublishKeepsViewModelStable() throws {
         store: nil
     )
 
-    monitor.ingest([process], now: Date(timeIntervalSince1970: 3_080))
+    await monitor.ingest([process], now: Date(timeIntervalSince1970: 3_080))
     let firstSnapshot = monitor.consoleSnapshot
     let firstPerformance = monitor.performanceMetrics
-    monitor.ingest([process], now: Date(timeIntervalSince1970: 3_081))
+    await monitor.ingest([process], now: Date(timeIntervalSince1970: 3_081))
 
     try check(monitor.consoleSnapshot.contentRevision == firstPerformance.contentRevision, "same content ingest should stay diagnostics-only")
     try check(monitor.performanceMetrics.diagnosticsOnlyPublishCount > firstPerformance.diagnosticsOnlyPublishCount, "same content ingest should count diagnostics-only publish")
@@ -1745,7 +1845,7 @@ private func monitorDiagnosticsOnlyPublishKeepsViewModelStable() throws {
 }
 
 @MainActor
-private func monitorPublishObserversCanMutateRegistrationDuringCallback() throws {
+private func monitorPublishObserversCanMutateRegistrationDuringCallback() async throws {
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 100_000_000
     let monitor = ProcessMonitor(
@@ -1767,14 +1867,14 @@ private func monitorPublishObserversCanMutateRegistrationDuringCallback() throws
         }
     }
 
-    monitor.ingest(
+    await monitor.ingest(
         [sample(pid: 309, name: "node", commandLine: "node mutable-observer.js", memory: 150_000_000)],
         now: Date(timeIntervalSince1970: 3_090)
     )
     try check(firstCount == 1, "observer should fire before removing itself")
     try check(secondCount == 0, "observer added during publish should not fire in the same notification pass")
 
-    monitor.ingest(
+    await monitor.ingest(
         [sample(pid: 309, name: "node", commandLine: "node mutable-observer.js", memory: 150_000_000)],
         now: Date(timeIntervalSince1970: 3_091)
     )
@@ -2039,7 +2139,7 @@ private func radarIntelligenceEscalatesBaselineAnomalies() throws {
     let family = hotFamily(pid: 520, memory: 420_000_000, cpu: 15, score: GhostScore(value: 32, level: .watch, reasons: ["dev process"]))
     let baseline = FamilyBaseline(
         signature: family.signature,
-        sampleCount: 8,
+        sampleCount: 40,
         meanMemoryBytes: 100_000_000,
         peakMemoryBytes: 120_000_000,
         meanCPUPercent: 5,
@@ -2056,14 +2156,14 @@ private func radarIntelligenceEscalatesBaselineAnomalies() throws {
     )
 
     let enriched = intelligence.enrich(
-        families: [freshMeasurements(family, at: Date(timeIntervalSince1970: 5_000))],
+        family: freshMeasurements(family, at: Date(timeIntervalSince1970: 5_000)),
         context: context,
         settings: .aggressive,
         now: Date(timeIntervalSince1970: 5_000)
     )
 
-    try check(enriched.first?.score.level ?? .quiet >= .hot, "baseline anomaly should escalate level")
-    try check(enriched.first?.score.reasons.contains(where: { $0.contains("usual memory") }) == true, "baseline reason should explain memory anomaly")
+    try check(enriched.score.level >= .hot, "baseline anomaly should escalate level")
+    try check(enriched.score.reasons.contains(where: { $0.contains("usual memory") }), "baseline reason should explain memory anomaly")
 }
 
 private func culpritAnalysisExplainsLikelyCause() throws {
@@ -2220,7 +2320,7 @@ private func consoleSnapshotContentRevisionAvoidsGeneratedAtInvalidation() throw
         summary: summary,
         incidents: [],
         rules: RadarRule.builtIns(settings: .aggressive),
-        metrics: .empty.updatingSmoothness(mainActorPublishMilliseconds: 4),
+        metrics: performanceMetrics { $0.mainActorPublishMilliseconds = 4 },
         health: .starting,
         storeHealth: StoreHealth(
             backlogCount: 1,
@@ -2341,7 +2441,7 @@ private func radarSnapshotSurfacesDuplicateRowsAndStableRevision() throws {
         summary: summary,
         incidents: [],
         rules: RadarRule.builtIns(settings: .aggressive),
-        metrics: .empty.updatingSmoothness(duplicateClusterCount: duplicateSet.visibleClusters.count),
+        metrics: performanceMetrics { $0.duplicateClusterCount = duplicateSet.visibleClusters.count },
         health: .starting,
         storeHealth: .empty,
         storeError: nil,
@@ -2354,7 +2454,10 @@ private func radarSnapshotSurfacesDuplicateRowsAndStableRevision() throws {
         summary: summary,
         incidents: [],
         rules: RadarRule.builtIns(settings: .aggressive),
-        metrics: .empty.updatingSmoothness(mainActorPublishMilliseconds: 3, duplicateClusterCount: duplicateSet.visibleClusters.count),
+        metrics: performanceMetrics {
+            $0.mainActorPublishMilliseconds = 3
+            $0.duplicateClusterCount = duplicateSet.visibleClusters.count
+        },
         health: .starting,
         storeHealth: .empty,
         storeError: nil,
@@ -3773,7 +3876,9 @@ private func forecastFamily(
     trend: TrendMetrics,
     score: GhostScore,
     baseline: FamilyBaseline? = nil,
-    recentIncidentCount: Int = 0
+    recentIncidentCount: Int = 0,
+    cpuActivity: FamilyCPUActivity = .empty,
+    classification: DevClassification? = nil
 ) -> ProcessFamily {
     let root = sample(
         pid: pid,
@@ -3798,7 +3903,9 @@ private func forecastFamily(
         ownedIdentities: [root.identity],
         protectedPIDs: [],
         baseline: baseline,
-        recentIncidentCount: recentIncidentCount
+        recentIncidentCount: recentIncidentCount,
+        classification: classification,
+        cpuActivity: cpuActivity
     )
 }
 
@@ -3942,5 +4049,5 @@ private func freshMeasurements(_ family: ProcessFamily, at date: Date) -> Proces
         suggestions: family.suggestions, alertState: family.alertState,
         recentIncidentCount: family.recentIncidentCount, forecast: family.forecast,
         lastScoredAt: date, classification: family.classification, duplicateCluster: family.duplicateCluster,
-        hardwareSignals: family.hardwareSignals)
+        hardwareSignals: family.hardwareSignals, cpuActivity: family.cpuActivity, forgotten: family.forgotten)
 }
