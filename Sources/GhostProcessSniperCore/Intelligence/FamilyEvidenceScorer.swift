@@ -27,7 +27,7 @@ struct FamilyEvidenceScorer: Sendable {
         let duplicateImpact = duplicateCluster.map { min(12, Double($0.memberCount) * 3) } ?? 0
         let hardwareImpact = min(24, hardwareSignals.reduce(0) { $0 + $1.impact })
         let ageMinutes = max(0, now.timeIntervalSince(Date(timeIntervalSince1970: TimeInterval(root.identity.startTimeSeconds))) / 60)
-        let orphanBonus = root.parentPID == 1 && confidence >= 0.35 ? 6.0 : 0
+        let orphanBonus = confidence >= 0.35 && LaunchOrigin.isDetachedFromLauncher(root) ? 6.0 : 0
 
         let memoryImpact = memoryRatio * 38
         let cpuImpact = cpuRatio * 34

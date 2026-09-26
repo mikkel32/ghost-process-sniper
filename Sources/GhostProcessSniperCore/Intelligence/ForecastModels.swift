@@ -294,6 +294,11 @@ public extension ProcessFamily {
         trend.sampleCount >= 4 || score.heat.sustainedSignalCount > 0
     }
 
+    /// Forgotten work is idle work: no reading in the window above 2% CPU.
+    var isIdleAcrossWindow: Bool {
+        totalCPUPercent <= 2 && trend.samples.allSatisfy { $0.cpuPercent <= 2 }
+    }
+
     var forecastIsCredibleEarlyWarning: Bool {
         forecast.isCredibleEarlyWarning && forecastHasUsefulHistory
     }

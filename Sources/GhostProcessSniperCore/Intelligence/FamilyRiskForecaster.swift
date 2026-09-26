@@ -172,7 +172,7 @@ public struct FamilyRiskForecaster: Sendable {
             }
             return .warming
         }
-        if staleLikelihood >= 0.65 {
+        if staleLikelihood >= 0.65, family.isIdleAcrossWindow {
             return .stale
         }
         if horizon == .soon || horizon == .breached || cpuEvidence.isBreached ||
@@ -336,7 +336,7 @@ public struct FamilyRiskForecaster: Sendable {
         let start = Date(timeIntervalSince1970: TimeInterval(family.root.identity.startTimeSeconds))
         let ageMinutes = max(0, now.timeIntervalSince(start) / 60)
         var value = 0.0
-        if family.root.parentPID == 1 { value += 0.35 }
+        if LaunchOrigin.isDetachedFromLauncher(family.root) { value += 0.35 }
         if ageMinutes >= 180 { value += 0.25 }
         if family.devConfidence >= 0.45 { value += 0.2 }
         if family.totalCPUPercent < 5, family.totalPhysicalFootprintBytes > 512 * 1_048_576 { value += 0.15 }
