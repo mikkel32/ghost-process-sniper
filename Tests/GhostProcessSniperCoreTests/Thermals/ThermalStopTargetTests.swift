@@ -37,6 +37,19 @@ final class ThermalStopTargetTests: XCTestCase {
         XCTAssertEqual(target.title, "Stop SourceKitService (Xcode)…")
     }
 
+    func testShortcutFollowsTheFamilysQuickStop() throws {
+        let plain = try XCTUnwrap(ThermalStopTarget.resolve(for: contributor(), family: family(named: "Compiler"), ownPID: 1))
+        XCTAssertEqual(plain.action.targetFamilyKey, family(named: "Compiler").familyKey)
+        XCTAssertNotEqual(plain.action.emphasis, .recommended, "not red unless the radar recommends the stop")
+
+        let app = KillRiskAssessment(kind: .editor, risks: [], supervisor: nil, appQuitPID: 700, graceSeconds: nil,
+                                     forceNeedsConfirmation: false, freedPorts: [], headline: nil,
+                                     shutsDownThroughRoot: false, rootShutdownSignal: nil)
+        let quit = try XCTUnwrap(ThermalStopTarget.resolve(for: contributor(), family: family(named: "Compiler"), risk: app, ownPID: 1))
+        XCTAssertEqual(quit.title, "Quit Compiler…")
+        XCTAssertEqual(quit.action.systemImage, "xmark.app")
+    }
+
     func testMissingProtectedOrOwnFamilyGetsNoShortcut() {
         XCTAssertNil(ThermalStopTarget.resolve(for: contributor(), family: nil, ownPID: 1))
         XCTAssertNil(ThermalStopTarget.resolve(for: contributor(), family: family(named: "Compiler", owned: false), ownPID: 1))

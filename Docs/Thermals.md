@@ -73,7 +73,7 @@ Rows rank by the larger of CPU capacity (process CPU divided by the logical proc
 
 `ThermalActivityHistory` keeps, per contributor, a decayed accumulated load, because chip temperature integrates power over roughly a minute:
 
-- Every measured contributor at 5% or more updates it: `ewma = ewma·(1−α) + activity·α` with `α = 1 − exp(−Δt/60)`, where Δt is the time since that contributor's last measurement, capped at 15 s. 1 s and 5 s refresh cadences therefore agree.
+- Every measured contributor at 5% or more updates it: `ewma = ewma·exp(−gap/60) + activity·(1 − exp(−min(gap, 15)/60))`, where gap is the time since that contributor's last measurement. The old average decays over the whole gap; only the new reading's weight is capped at 15 s. With gaps of 15 s or less this is the usual `ewma·(1−α) + activity·α`, so 1 s and 5 s refresh cadences agree.
 - A new contributor starts at `activity·(1 − exp(−Δt/60))` for the time since the previous sample, so one reading can never reach full weight.
 - A reading without a measurement only lets the load decay: `load(t) = ewma·exp(−(t − lastMeasured)/60)`. Entries below 1% or older than 180 s are dropped. Re-publishing the same sample replaces its contribution instead of counting twice.
 
@@ -81,7 +81,7 @@ Rows rank by the larger of CPU capacity (process CPU divided by the logical proc
 
 ### Path to stopping
 
-The thermal panel never signals anything. `ThermalStopTarget` resolves the process family a stop would actually open (a contributor groups a whole app, but its family key points at the busiest member family, so the button can read "Stop SourceKitService (Xcode)…"). It is offered only for user work with owned processes: never for system work, known macOS sources, protected families or Ghost Process Sniper itself. The attribution card shows it only for repeated evidence while heat needs review; the contributor sheet shows it whenever a target resolves. Both go through `RadarConsoleSession.prepareKill`, so the usual stop preview, risk assessment and confirmation apply.
+The thermal panel never signals anything. `ThermalStopTarget` resolves the process family a stop would actually open (a contributor groups a whole app, but its family key points at the busiest member family, so the button can read "Stop SourceKitService (Xcode)…"). It is offered only for user work with owned processes: never for system work, known macOS sources, families with none of the user's processes or Ghost Process Sniper itself; processes the user does not own are left for the stop preview to lock. The attribution card shows it only for repeated evidence while heat needs review; the contributor sheet shows it whenever a target resolves. It follows the family's Quick Stop: "Quit" for an app, red only when the stop is recommended, and it goes through `RadarConsoleSession.quickStop`, which opens the family's page and then the usual stop preview, risk assessment and confirmation.
 
 ### Compare readings
 

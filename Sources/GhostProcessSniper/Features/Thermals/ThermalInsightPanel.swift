@@ -12,7 +12,7 @@ struct ThermalInsightPanel: View {
     /// Resolves the family a stop would target; nil when stopping is not offered.
     let stopTarget: (ThermalContributor) -> ThermalStopTarget?
     let onInspect: (String) -> Void
-    let onStop: (String) -> Void
+    let onStop: (QuickStopAction) -> Void
     let onBrowse: () -> Void
     let onRefresh: () async -> Void
     @State private var sort: ThermalActivitySort = .activity
