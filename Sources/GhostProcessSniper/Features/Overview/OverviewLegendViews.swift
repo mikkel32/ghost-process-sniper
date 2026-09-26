@@ -156,3 +156,22 @@ struct MemoryPressureBadge: View {
         .font(.caption)
     }
 }
+
+/// A cheap, static ambient wash. It avoids the offscreen surfaces created by
+/// a full-window material or mesh gradient while retaining level context.
+struct AmbientLevelBackdrop: View {
+    let level: GhostLevel
+
+    var body: some View {
+        LinearGradient(
+            colors: [
+                RadarTheme.accent(for: level).opacity(0.055),
+                RadarTheme.canvas,
+                RadarTheme.canvas
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .allowsHitTesting(false)
+    }
+}

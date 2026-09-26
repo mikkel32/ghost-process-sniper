@@ -306,23 +306,6 @@ struct EngineHealthStrip: View {
     }
 }
 
-struct CompactEngineHealthStrip: View {
-    let status: EngineStatusSnapshot
-
-    var body: some View {
-        HStack(spacing: 10) {
-            CompactRadarChip(title: "Refresh", value: status.refreshText, systemImage: "timer")
-            CompactRadarChip(title: "Next", value: status.nextRefreshText, systemImage: "clock.arrow.2.circlepath")
-            CompactRadarChip(title: "Processes", value: status.processText, systemImage: "list.bullet.rectangle")
-            CompactRadarChip(title: "Scanner", value: status.scannerText, systemImage: "speedometer", level: status.scannerText == "within budget" ? .quiet : .watch)
-            CompactRadarChip(title: "Backlog", value: status.backlogText, systemImage: "externaldrive")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .radarSurface(tint: RadarTheme.brand, cornerRadius: 14)
-    }
-}
-
 struct RadarToastView: View {
     let toast: RadarToast
 

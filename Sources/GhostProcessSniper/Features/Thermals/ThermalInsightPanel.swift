@@ -1,7 +1,10 @@
 import GhostProcessSniperCore
 import SwiftUI
 
-/// Temperature, a named workload, and its next step share the first screen.
+/// Temperature, a named workload, and its next step share one panel. On the
+/// Overview it sits below the queues and metrics, and moves up to second,
+/// under the verdict, only while the Mac is throttling or has stayed very
+/// hot (OverviewThermalBandTracker).
 struct ThermalInsightPanel: View {
     let summary: ThermalActivitySummary
     let snapshot: ThermalSnapshot
