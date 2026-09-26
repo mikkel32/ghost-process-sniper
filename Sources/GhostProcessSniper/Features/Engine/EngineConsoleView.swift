@@ -233,7 +233,7 @@ struct EngineInspectorView: View {
                         row("Probe cost", monitor.engineDiagnostics.scannerCostText)
                         row("Smoothness", monitor.engineDiagnostics.smoothnessText)
                         row("Cache", monitor.engineDiagnostics.cacheText)
-                        row("Updated", monitor.health.lastSampleDate?.formatted(date: .omitted, time: .standard) ?? "warming")
+                        row("Updated", monitor.lastSampleDate?.formatted(date: .omitted, time: .standard) ?? "warming")
                     }
                 }
 

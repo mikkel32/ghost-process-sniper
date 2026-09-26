@@ -8,7 +8,10 @@ public final class ProcessMonitor {
     public var settings: ThresholdSettings
     public private(set) var families: [ProcessFamily] = []
     public private(set) var summary: RadarSummary = .empty
+    /// Counts and errors only; the per-tick time is `lastSampleDate`, so
+    /// readers of the counts do not re-render every tick.
     public private(set) var health: SamplerHealth = .starting
+    public private(set) var lastSampleDate: Date?
     public private(set) var incidents: [RadarIncident] = []
     public private(set) var rules: [RadarRule] = []
     public private(set) var model: RadarModel = .empty
@@ -184,7 +187,7 @@ public final class ProcessMonitor {
                 }
                 selfUsage = usage
             }
-            apply(outcome, coalescedRefreshCount: coalescedCount)
+            apply(outcome)
             await notifier.process(model: model)
         } catch {
             var metrics = performanceMetrics
@@ -193,7 +196,7 @@ public final class ProcessMonitor {
             performanceMetrics = metrics
             health = SamplerHealth(
                 engineName: "libproc",
-                lastSampleDate: health.lastSampleDate,
+                lastSampleDate: nil,
                 processCount: health.processCount,
                 familyCount: families.count,
                 errorMessage: error.localizedDescription
@@ -207,7 +210,7 @@ public final class ProcessMonitor {
     public func ingest(_ processes: [ProcessMetrics], now: Date = Date()) async {
         let batch = ProcessSampleBatch(processes: processes, sampledAt: now, stats: .empty)
         let outcome = await worker.ingest(batch: batch, request: refreshRequest(now: now, startedAt: now))
-        apply(outcome, coalescedRefreshCount: 0)
+        apply(outcome)
     }
 
     private func refreshRequest(now: Date, startedAt: Date) -> RefreshRequest {
@@ -221,18 +224,23 @@ public final class ProcessMonitor {
             uiVisible: uiVisible,
             focusedSignatureIDs: focusedSignatureIDs,
             portCensusRequested: portCensusRequested,
+            hitchReport: hitchMonitor.report,
+            lastPublishMilliseconds: lastCompletedPublishMilliseconds,
+            coalescedRefreshCount: coalescedCount,
             now: now,
             startedAt: startedAt
         )
     }
 
-    private func apply(_ outcome: RefreshOutcome, coalescedRefreshCount: Int) {
+    private func apply(_ outcome: RefreshOutcome) {
         if outcome.systemPressure != systemPressure {
             systemPressure = outcome.systemPressure
         }
-        thermalActivity = outcome.thermalActivity
+        if outcome.thermalActivity != thermalActivity {
+            thermalActivity = outcome.thermalActivity
+        }
         recordSample(outcome.processes)
-        publish(payload: outcome.payload, coalescedRefreshCount: coalescedRefreshCount)
+        publish(payload: outcome.payload)
     }
 
     private func recordSample(_ processes: [ProcessMetrics]) {
@@ -418,7 +426,14 @@ public final class ProcessMonitor {
     }
 
     public func diagnosticsReport() -> String {
-        engineDiagnostics.diagnosticsReport
+        EngineDiagnosticsViewModel.diagnosticsReport(
+            metrics: performanceMetrics,
+            health: health,
+            storeHealth: storeHealth,
+            storeError: storeError,
+            summary: summary,
+            generatedAt: Date()
+        )
     }
 
     public func exportDiagnosticsReport() async -> String {
@@ -494,7 +509,9 @@ public final class ProcessMonitor {
         }
     }
 
-    private func publish(payload: RadarPublishPayload, coalescedRefreshCount: Int) {
+    /// The worker already folded in the hitch report and last publish cost
+    /// and built the engine diagnostics, so this only assigns what changed.
+    private func publish(payload: RadarPublishPayload) {
         let publishStart = Date()
         // Measure assignments and observer callbacks too. Report the last
         // completed publish on the next refresh, without self-triggering a loop.
@@ -504,41 +521,24 @@ public final class ProcessMonitor {
         }
         var state = payload.state
         var performance = state.performanceMetrics
-        performance.smoothness.coalescedRefreshCount = coalescedRefreshCount
         performance.smoothness.refreshInFlight = false
-        performance.smoothness.record(performance.smoothness.smoothnessReport.merging(hitchMonitor.report))
-        storeError = state.storeError
-        storeHealth = state.storeHealth
-        scannerHealth = state.scannerHealth
-
-        let finalPublishCost = lastCompletedPublishMilliseconds
-        performance.smoothness.mainActorPublishMilliseconds = finalPublishCost
-        performance.smoothness.record(performance.smoothness.smoothnessReport.merging(hitchMonitor.report))
-        let finalEngine = EngineDiagnosticsViewModel(
-            metrics: performance,
-            health: state.health,
-            storeHealth: state.storeHealth,
-            storeError: state.storeError,
-            summary: state.summary,
-            generatedAt: payload.generatedAt
-        )
-        let finalConsoleSnapshot = state.consoleSnapshot.updatingEngine(
-            finalEngine,
-            health: state.health,
-            generatedAt: payload.generatedAt
-        )
+        if storeError != state.storeError { storeError = state.storeError }
+        if storeHealth != state.storeHealth { storeHealth = state.storeHealth }
+        if scannerHealth != state.scannerHealth { scannerHealth = state.scannerHealth }
         let contentChanged = payload.delta.mode == .contentChanged ||
-            finalConsoleSnapshot.contentRevision != consoleSnapshot.contentRevision
+            state.consoleSnapshot.contentRevision != consoleSnapshot.contentRevision
 
-        engineDiagnostics = finalEngine
-        engineStatus = finalConsoleSnapshot.compact.engineStatus
-        health = SamplerHealth(
+        if engineDiagnostics != state.engineDiagnostics { engineDiagnostics = state.engineDiagnostics }
+        if engineStatus != state.engineStatus { engineStatus = state.engineStatus }
+        let nextHealth = SamplerHealth(
             engineName: state.health.engineName,
-            lastSampleDate: state.health.lastSampleDate,
+            lastSampleDate: nil,
             processCount: state.health.processCount,
             familyCount: contentChanged ? state.health.familyCount : health.familyCount,
             errorMessage: state.health.errorMessage
         )
+        if nextHealth != health { health = nextHealth }
+        lastSampleDate = state.health.lastSampleDate
         // Rendering buckets are not a data cache. Stable displayed numbers
         // must never freeze measurement timestamps or intervention inputs.
         families = state.families
@@ -549,10 +549,7 @@ public final class ProcessMonitor {
             incidents = state.incidents
             triageFamilies = state.triageFamilies
             detailViewModels = state.detailViewModels
-            consoleSnapshot = finalConsoleSnapshot
-        }
-
-        if contentChanged {
+            consoleSnapshot = state.consoleSnapshot
             viewModel = RadarViewModel(
                 summary: state.summary,
                 families: state.viewModel.families,
@@ -560,7 +557,7 @@ public final class ProcessMonitor {
                 generatedAt: payload.generatedAt
             )
         }
-        performanceMetrics = performance
+        if performance != performanceMetrics { performanceMetrics = performance }
         state = ProcessMonitorPublishedState(
             families: families,
             summary: summary,
@@ -581,7 +578,7 @@ public final class ProcessMonitor {
         )
         publishedState = state
         notifyPublishedStateObservers(state)
-        RadarLogger.performance.debug("Refresh \(performance.lastRefresh.totalMilliseconds, privacy: .public)ms, next \(performance.nextRefreshInterval, privacy: .public)s, publish \(finalPublishCost, privacy: .public)ms, hitches \(performance.smoothness.hitchCount, privacy: .public), forensics \(performance.forensicsRefreshCount, privacy: .public)/\(performance.forensicsDeferredCount, privacy: .public)")
+        RadarLogger.performance.debug("Refresh \(performance.lastRefresh.totalMilliseconds, privacy: .public)ms, next \(performance.nextRefreshInterval, privacy: .public)s, publish \(performance.mainActorPublishMilliseconds, privacy: .public)ms, hitches \(performance.smoothness.hitchCount, privacy: .public), forensics \(performance.forensicsRefreshCount, privacy: .public)/\(performance.forensicsDeferredCount, privacy: .public)")
     }
 
     private func notifyPublishedStateObservers(_ state: ProcessMonitorPublishedState) {

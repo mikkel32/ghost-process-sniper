@@ -18,6 +18,11 @@ public struct RefreshRequest: Equatable, Sendable {
     public let focusedSignatureIDs: Set<String>
     /// Read every same-user process's listening ports this tick (a `port:` search).
     public let portCensusRequested: Bool
+    /// Main-actor figures the worker folds into the published diagnostics,
+    /// so the main actor does not rebuild them after every tick.
+    public let hitchReport: RadarSmoothnessReport
+    public let lastPublishMilliseconds: Double
+    public let coalescedRefreshCount: Int
     public let now: Date
     public let startedAt: Date
 
@@ -30,6 +35,9 @@ public struct RefreshRequest: Equatable, Sendable {
         uiVisible: Bool,
         focusedSignatureIDs: Set<String>,
         portCensusRequested: Bool = false,
+        hitchReport: RadarSmoothnessReport = .empty,
+        lastPublishMilliseconds: Double = 0,
+        coalescedRefreshCount: Int = 0,
         now: Date,
         startedAt: Date
     ) {
@@ -41,6 +49,9 @@ public struct RefreshRequest: Equatable, Sendable {
         self.uiVisible = uiVisible
         self.focusedSignatureIDs = focusedSignatureIDs
         self.portCensusRequested = portCensusRequested
+        self.hitchReport = hitchReport
+        self.lastPublishMilliseconds = lastPublishMilliseconds
+        self.coalescedRefreshCount = coalescedRefreshCount
         self.now = now
         self.startedAt = startedAt
     }
@@ -289,7 +300,9 @@ public actor RadarRefreshWorker {
         spikeRing.record(trace: phaseTrace, threshold: spikeThreshold, at: request.now)
         let spikeReport = spikeRing.report
         var tracedPerformance = performance
-        tracedPerformance.smoothness.record(spikeReport)
+        tracedPerformance.smoothness.record(spikeReport.merging(request.hitchReport))
+        tracedPerformance.smoothness.mainActorPublishMilliseconds = request.lastPublishMilliseconds
+        tracedPerformance.smoothness.coalescedRefreshCount = request.coalescedRefreshCount
         tracedPerformance.smoothness.scannerTaskCount = batch.stats.scannerTaskCount
         tracedPerformance.smoothness.tinyQueueSequentialCount = batch.stats.tinyQueueSequentialCount
         let payload = RadarPublishPayload.build(

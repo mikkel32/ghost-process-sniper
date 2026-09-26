@@ -1445,7 +1445,15 @@ private func scannerHealthFeedsDiagnostics() throws {
     try check(engine.scannerCostText.contains("2 workers"), "engine diagnostics should expose scanner worker count")
     try check(engine.scannerCostText.contains("3 tasks"), "engine diagnostics should expose bounded task count")
     try check(engine.scannerCostText.contains("2 hardware"), "engine diagnostics should expose hardware offender count")
-    try check(engine.diagnosticsReport.contains("Hardware offenders: 2"), "diagnostics report should include hardware detector count")
+    let report = EngineDiagnosticsViewModel.diagnosticsReport(
+        metrics: metrics,
+        health: SamplerHealth(engineName: "test", lastSampleDate: nil, processCount: 10, familyCount: 1, errorMessage: nil),
+        storeHealth: .empty,
+        storeError: nil,
+        summary: RadarSummary(statusText: "Quiet", level: .quiet, familyCount: 1, hotCount: 0, totalMemoryBytes: 1, topFamilyName: "node"),
+        generatedAt: Date(timeIntervalSince1970: 2)
+    )
+    try check(report.contains("Hardware offenders: 2"), "diagnostics report should include hardware detector count")
     try check(engine.smoothnessText.contains("0 ms publish"), "engine diagnostics should expose smoothness text")
 }
 
