@@ -23,54 +23,6 @@ public extension ProcessLookup {
     }
 }
 
-public struct DefaultProcessLookup: ProcessLookup {
-    private let sampler: ProcessSampling
-
-    public init(sampler: ProcessSampling = NativeProcessSampler()) {
-        self.sampler = sampler
-    }
-
-    public func processes() async throws -> [ProcessMetrics] {
-        try await sampler.sample()
-    }
-
-    public func killSnapshot(policy: KillSnapshotPolicy) async throws -> KillProcessSnapshot {
-        let started = Date()
-        let budget = ScannerBudget(
-            targetMilliseconds: 18,
-            optionalMilliseconds: 0,
-            maxTelemetryRefreshes: 0,
-            maxForensicsRefreshes: 0,
-            negativeForensicsTTL: 300,
-            staleTelemetryGrace: 300
-        )
-        let batch = try await sampler.sample(
-            plan: SamplingPlan(
-                sampledAt: started,
-                performanceMode: .batterySaver,
-                commandRefreshInterval: 3_600,
-                includeForensicsFor: [],
-                includeForensicsForPIDs: [],
-                allowsOptionalForensics: false,
-                maxForensicsPerRefresh: 0,
-                reason: "kill-\(policy.rawValue)",
-                scannerBudget: budget,
-                // Only the process graph matters here; no path or argv reads.
-                telemetryDisabled: true
-            )
-        )
-        return KillProcessSnapshot(
-            processes: batch.processes,
-            sampledAt: batch.sampledAt,
-            policy: policy,
-            elapsedMilliseconds: Date().timeIntervalSince(started) * 1_000,
-            usedCheapPath: true,
-            expensiveCallCount: batch.stats.expensiveCallCount,
-            arena: KillGraphArena(processes: batch.processes.map { KillProcessLite(process: $0) }, sampledAt: batch.sampledAt, pidReadCount: batch.processes.count)
-        )
-    }
-}
-
 public struct SignalFailure: Error, Equatable, Sendable {
     public let pid: Int32
     public let signal: Int32
