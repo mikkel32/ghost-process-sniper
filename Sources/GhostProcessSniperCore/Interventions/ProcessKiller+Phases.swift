@@ -34,8 +34,9 @@ struct KillPhaseWalk {
     let adopted: [KillTarget]
     /// Processes born during the stop that were only reported.
     let reportedLate: [KillTarget]
-    /// When the last signal went out; a restart must come after it.
-    let lastSignalAt: Date
+    /// When the stop first acted; a supervisor's restart comes after it,
+    /// even one that happened during the grace wait before a force.
+    let firstSignalAt: Date
 }
 
 extension ProcessKiller {
@@ -54,7 +55,7 @@ extension ProcessKiller {
         var adopted: [KillTarget] = []
         var reportedLate: [KillTarget] = []
         var quitAccepted: Int32?
-        var lastSignalAt = clock()
+        let firstSignalAt = clock()
         for (index, phase) in phases.enumerated() {
             if index > 0 {
                 guard !live.isEmpty else { break }
@@ -109,7 +110,6 @@ extension ProcessKiller {
                 dropped = await deliver(phase, to: recipients, stage: stage, context: context,
                                         report: &report, quitAccepted: &quitAccepted)
             }
-            lastSignalAt = clock()
             remaining.removeAll { dropped.contains($0.identity) }
             live.removeAll { dropped.contains($0.identity) }
             guard !live.isEmpty else { break }
@@ -146,7 +146,7 @@ extension ProcessKiller {
             }
         }
         return KillPhaseWalk(remaining: remaining, quitAcceptedPID: quitAccepted, adopted: adopted,
-                             reportedLate: reportedLate, lastSignalAt: lastSignalAt)
+                             reportedLate: reportedLate, firstSignalAt: firstSignalAt)
     }
 
     /// Sends one phase's action and returns the targets it can never reach:

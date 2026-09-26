@@ -282,7 +282,8 @@ public final class ProcessKiller: Sendable {
             // hold the result back.
             if let supervisor = preflight.preview.riskAssessment.supervisor,
                report.survivorPIDs.isEmpty, report.partiallySucceeded, report.launchdBootout?.accepted != true {
-                respawned = await detectRespawn(of: targets, by: supervisor, since: walk.lastSignalAt, operationID: operationID,
+                respawned = await detectRespawn(of: targets, by: supervisor, since: walk.firstSignalAt,
+                                                excluding: Set((walk.adopted + walk.reportedLate).map(\.identity)), operationID: operationID,
                                                 report: &report, eventSink: eventSink)
             }
             report.realizedMemoryReclaimBytes = reclaimEstimator.realizedEstimate(
