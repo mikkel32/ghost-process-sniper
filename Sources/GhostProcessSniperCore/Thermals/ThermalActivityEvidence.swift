@@ -76,6 +76,14 @@ public extension ThermalContributor {
         return max(cpu ?? 0, gpu ?? 0)
     }
 
+    /// Every later instant at which one of this group's readings stops counting as current.
+    func expiryDates(after now: Date) -> [Date] {
+        var dates = [cpuMeasuredAt, gpuMeasuredAt, measuredAt]
+        for process in processes { dates += [process.cpuMeasuredAt, process.gpuMeasuredAt] }
+        return Set(dates.compactMap { $0?.addingTimeInterval(ThermalActivitySummary.maximumAge) }.filter { $0 > now })
+            .sorted()
+    }
+
     func isSubstantial(at now: Date) -> Bool {
         let cpu = cpuCapacityPercent(at: now)
         let gpu = gpuActivityPercent(at: now)

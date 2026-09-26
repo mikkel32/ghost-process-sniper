@@ -17,7 +17,7 @@ struct ThermalInsightPanel: View {
     @State private var coolingCheck: ThermalCoolingCheck?
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 3)) { _ in
+        TimelineView(.explicit(ThermalExpirySchedule.dates(summary.expiryDates(after: .now) + [snapshot.expiresAt]))) { _ in
             let now = Date()
             let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot, activity: summary,
                 observations: observations, pressure: .current(at: now), at: now)
@@ -184,5 +184,14 @@ struct ThermalInsightPanel: View {
         refreshing = true
         defer { refreshing = false }
         await onRefresh()
+    }
+}
+
+/// Readings expire at known instants, so thermal views re-render then instead of on a
+/// fixed timer; monitor publishes cover everything else. The margin lands each render
+/// just past a closed validity boundary.
+enum ThermalExpirySchedule {
+    static func dates(_ dates: [Date], after now: Date = Date()) -> [Date] {
+        Set(dates.filter { $0 > now }).sorted().map { $0.addingTimeInterval(0.05) }
     }
 }

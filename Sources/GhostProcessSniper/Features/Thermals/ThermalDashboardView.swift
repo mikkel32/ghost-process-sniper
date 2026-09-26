@@ -6,10 +6,9 @@ struct ThermalDashboardView: View {
     var observations: ThermalObservationWindow? = nil
 
     var body: some View {
-        // An inexpensive freshness clock, not an animation loop. It expires
-        // sensor values even when sampling is paused or fails to publish.
-        TimelineView(.periodic(from: .now, by: 5)) { context in
-            content(at: context.date)
+        // Expires sensor values even when sampling is paused or fails to publish.
+        TimelineView(.explicit(ThermalExpirySchedule.dates([snapshot.expiresAt]))) { _ in
+            content(at: Date())
         }
     }
 

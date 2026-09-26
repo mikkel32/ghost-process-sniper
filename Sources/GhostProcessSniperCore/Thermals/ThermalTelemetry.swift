@@ -46,6 +46,9 @@ public struct ThermalSnapshot: Equatable, Sendable {
         }
     }
 
+    /// After this instant the readings no longer count as current.
+    public var expiresAt: Date { sampledAt.addingTimeInterval(15) }
+
     var cpuSeries: String? { cpuSeriesID ?? cpuSensorKey }
     var gpuSeries: String? { gpuSeriesID ?? gpuSensorKey }
 

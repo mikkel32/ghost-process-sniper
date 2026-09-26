@@ -114,6 +114,20 @@ public struct ThermalActivitySummary: Equatable, Sendable {
         }
     }
 
+    /// The next instant a reading here expires, so a view can re-render exactly then
+    /// instead of on a fixed timer. Nil once everything has expired.
+    public func nextExpiry(after now: Date) -> Date? {
+        expiryDates(after: now).first
+    }
+
+    /// Every later expiry boundary, in order, for a view's explicit timeline.
+    public func expiryDates(after now: Date) -> [Date] {
+        var dates: Set<Date> = [sampledAt.addingTimeInterval(Self.maximumAge)]
+        for contributor in contributors { dates.formUnion(contributor.expiryDates(after: now)) }
+        for recent in recentContributors { dates.insert(recent.lastActiveAt.addingTimeInterval(ThermalActivityHistory.maximumAge)) }
+        return dates.filter { $0 > now }.sorted()
+    }
+
     /// Every measured group, quiet ones included, so the history sees moderate long loads.
     var measuredContributorsForHistory: [ThermalContributor] { measuredContributors }
 
