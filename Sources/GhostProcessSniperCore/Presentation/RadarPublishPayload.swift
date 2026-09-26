@@ -223,7 +223,8 @@ public struct RadarPublishPayload: Equatable, Sendable {
             families: families, duplicateClusters: duplicateClusters, summary: summary,
             incidents: incidents, rules: rules, metrics: revisedPerformance, health: health,
             storeHealth: storeHealth, storeError: storeError, previous: previous,
-            generatedAt: generatedAt, detailSignatures: detailSignatures
+            generatedAt: generatedAt, detailSignatures: detailSignatures,
+            contentRevision: contentRevision
         )
         let triage = snapshot.families
         let engineDiagnostics = snapshot.engine

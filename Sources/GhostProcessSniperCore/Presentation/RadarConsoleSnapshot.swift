@@ -72,13 +72,38 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
         generatedAt: Date,
         detailSignatures: Set<String>? = nil
     ) -> RadarConsoleSnapshot {
-        let contentRevision = SnapshotContentRevision.compute(
-            families: families,
-            summary: summary,
-            incidents: incidents,
-            rules: rules,
-            duplicateClusters: duplicateClusters
+        build(
+            families: families, duplicateClusters: duplicateClusters, summary: summary,
+            incidents: incidents, rules: rules, metrics: metrics, health: health,
+            storeHealth: storeHealth, storeError: storeError, previous: previous,
+            generatedAt: generatedAt, detailSignatures: detailSignatures,
+            contentRevision: SnapshotContentRevision.compute(
+                families: families,
+                summary: summary,
+                incidents: incidents,
+                rules: rules,
+                duplicateClusters: duplicateClusters
+            )
         )
+    }
+
+    /// `contentRevision` must be the revision of exactly these inputs; the
+    /// publish payload computes it once and passes it here.
+    static func build(
+        families: [ProcessFamily],
+        duplicateClusters: [DuplicateProcessCluster],
+        summary: RadarSummary,
+        incidents: [RadarIncident],
+        rules: [RadarRule],
+        metrics: RadarPerformanceMetrics,
+        health: SamplerHealth,
+        storeHealth: StoreHealth,
+        storeError: String?,
+        previous: RadarConsoleSnapshot?,
+        generatedAt: Date,
+        detailSignatures: Set<String>?,
+        contentRevision: SnapshotContentRevision
+    ) -> RadarConsoleSnapshot {
         let engine = EngineDiagnosticsViewModel(
             metrics: metrics,
             health: health,
@@ -100,14 +125,16 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
 
         let previousPanels = previous?.detailPanels ?? [:]
         let classifier = DevProcessClassifier()
-        let triage = families.map { family in
-            let classification = family.classification ?? classifier.classification(for: family)
-            return FamilyTriageViewModel(family: family, classification: classification,
-                                         culprit: CulpritAnalysis(family: family, classifier: classifier, classification: classification))
-        }.sorted { FamilyTriageViewModel.areInIncreasingOrder($0, $1, by: .smart) }
+        let rows = families.map { family in
+            FamilyTriageViewModel(family: family, classification: family.classification ?? classifier.classification(for: family))
+        }
+        let keys = rows.map(FamilyTriageViewModel.SmartSortKey.init)
+        let triage = keys.indices.sorted { keys[$0] < keys[$1] }.map { rows[$0] }
+        let compactRows = triage.map(CompactSidebarRowModel.init(item:))
+        let priorities = CompactConsoleSnapshot.priorityRows(from: compactRows)
+
         var wantedKeys: Set<String>?
         if let detailSignatures {
-            let priorities = CompactConsoleSnapshot.priorityRows(from: triage.map(CompactSidebarRowModel.init(item:)))
             var keys = Set(priorities.risk.prefix(8).map(\.familyKey))
             keys.formUnion(priorities.warming.prefix(6).map(\.familyKey))
             // A signature may describe hundreds of identical instances. Prepare
@@ -154,7 +181,8 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             engine: engine,
             compact: CompactConsoleSnapshot.build(
                 summary: summary,
-                triage: triage,
+                rows: compactRows,
+                priorities: priorities,
                 detailPanels: detailPanels,
                 engineStatus: engineStatus,
                 duplicateCount: duplicateRows.count

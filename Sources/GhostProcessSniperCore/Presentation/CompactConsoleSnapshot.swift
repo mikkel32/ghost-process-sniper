@@ -351,7 +351,25 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
         duplicateCount: Int = 0
     ) -> CompactConsoleSnapshot {
         let rows = triage.map(CompactSidebarRowModel.init(item:))
-        let priorities = priorityRows(from: rows)
+        return build(
+            summary: summary,
+            rows: rows,
+            priorities: priorityRows(from: rows),
+            detailPanels: detailPanels,
+            engineStatus: engineStatus,
+            duplicateCount: duplicateCount
+        )
+    }
+
+    /// For callers that already built the rows and their priorities.
+    static func build(
+        summary: RadarSummary,
+        rows: [CompactSidebarRowModel],
+        priorities: (risk: [CompactSidebarRowModel], warming: [CompactSidebarRowModel]),
+        detailPanels: [String: FamilyDetailPanelModel],
+        engineStatus: EngineStatusSnapshot,
+        duplicateCount: Int
+    ) -> CompactConsoleSnapshot {
         let topRiskRows = priorities.risk
         let warmingRows = priorities.warming
         let intelligenceBrief = RadarIntelligenceBrief.build(
