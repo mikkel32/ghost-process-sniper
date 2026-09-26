@@ -194,6 +194,10 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         // Transient UI must not resurface on the next open: the view that
         // would dismiss a toast goes away with the window.
         session?.pendingKill = nil
+        // A preview still being prepared checks this id before it presents,
+        // so it lands nowhere instead of reopening with the next console and
+        // blocking the stop that open was for.
+        session?.preparingStop = nil
         session?.toast = nil
         session?.showQuickGuide = false
         window = nil
