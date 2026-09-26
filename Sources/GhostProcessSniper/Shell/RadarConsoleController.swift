@@ -198,6 +198,9 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         // so it lands nowhere instead of reopening with the next console and
         // blocking the stop that open was for.
         session?.preparingStop = nil
+        // A cull still stopping copies carries on and shows its progress on
+        // the next open; one that is done or not yet started is dropped.
+        if session?.cullRun?.isRunning != true { session?.cullRun = nil }
         session?.toast = nil
         session?.showQuickGuide = false
         window = nil

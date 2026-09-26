@@ -8,7 +8,6 @@ struct DuplicatesConsoleView: View {
     let session: RadarConsoleSession
     @State private var selectedID: DuplicateClusterViewModel.ID?
     @State private var plans: [String: DuplicateCullPlan] = [:]
-    @State private var cullRun: DuplicateCullRun?
 
     private var rows: [DuplicateClusterViewModel] {
         session.duplicateRows
@@ -65,17 +64,6 @@ struct DuplicatesConsoleView: View {
         .task(id: PlanInput(sampleRevision: session.monitor.sampleRevision, rows: rows)) {
             await updatePlans()
         }
-        .sheet(item: $cullRun) { run in
-            DuplicateCullSheet(
-                run: run,
-                start: {
-                    Task { await session.stopDuplicateCopies(run) }
-                },
-                close: {
-                    cullRun = nil
-                }
-            )
-        }
     }
 
     private var header: some View {
@@ -113,9 +101,11 @@ struct DuplicatesConsoleView: View {
         }
     }
 
+    /// One run at a time: a second one would preview and stop the same
+    /// copies while the first still waits out their grace periods.
     private func stopExtras(_ row: DuplicateClusterViewModel) {
-        guard cullRun == nil, let plan = plans[row.id], plan.stopCount > 0 else { return }
-        cullRun = DuplicateCullRun(plan: plan)
+        guard session.cullRun == nil, let plan = plans[row.id], plan.stopCount > 0 else { return }
+        session.cullRun = DuplicateCullRun(plan: plan)
     }
 
     private func updatePlans() async {

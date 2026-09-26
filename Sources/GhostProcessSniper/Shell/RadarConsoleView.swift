@@ -164,6 +164,19 @@ struct RadarConsoleView: View {
         .sheet(isPresented: $session.showQuickGuide) {
             RadarQuickGuideView()
         }
+        // On the root, not the Duplicates page, so a run keeps its sheet
+        // when a menu command or a notification moves the console.
+        .sheet(item: $session.cullRun) { run in
+            DuplicateCullSheet(
+                run: run,
+                start: {
+                    Task { await session.stopDuplicateCopies(run) }
+                },
+                close: {
+                    session.cullRun = nil
+                }
+            )
+        }
         .onDisappear {
             session.setVisible(false)
             searchDebounceTask?.cancel()
