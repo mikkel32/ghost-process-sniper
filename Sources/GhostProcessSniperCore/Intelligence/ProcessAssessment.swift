@@ -151,9 +151,14 @@ public struct ProcessAssessment: Equatable, Sendable {
             recommendation = "Let the next scan confirm the resource use before deciding."
             systemImage = "clock"
         } else if family.hasCredibleLeak, family.trend.hasSustainedHistory {
+            let velocity = max(family.trend.credibleMemoryVelocity, family.longTermTrend.slopeMegabytesPerMinute)
             cause = "Sustained memory growth"
-            evidence = "\(memory) in use; growing \(RadarFormat.leak(family.trend.credibleMemoryVelocity))."
-            recommendation = "Inspect the growing member and its work before previewing a stop."
+            evidence = "\(memory) in use; growing \(RadarFormat.leak(velocity))."
+            if let culprit = family.culprit, family.members.count > 1 {
+                recommendation = "\(culprit.name) holds \(Int((culprit.share * 100).rounded()))% of the growth; stopping only it may be enough."
+            } else {
+                recommendation = "Inspect the growing member and its work before previewing a stop."
+            }
             systemImage = "chart.line.uptrend.xyaxis"
         } else if family.totalCPUPercent >= 80 {
             cause = "CPU activity"

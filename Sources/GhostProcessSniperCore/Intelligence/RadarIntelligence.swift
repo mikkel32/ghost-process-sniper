@@ -215,7 +215,7 @@ public struct RadarIntelligence: Sendable {
         if finalSuppression.isEmpty {
             finalSuggestions = mergedSuggestions(
                 finalRules + forecastSuggestion(for: heatResolvedFamily) + duplicateSuggestion(for: heatResolvedFamily, now: now) +
-                    zombieSuggestion(for: heatResolvedFamily, now: now)
+                    zombieSuggestion(for: heatResolvedFamily, now: now) + culpritSuggestion(for: heatResolvedFamily, now: now)
             )
         } else {
             // Muted families keep their underlying diagnostics, but should not
@@ -325,6 +325,27 @@ public struct RadarIntelligence: Sendable {
                 detail: "\(cluster.independentRootCount) copies of \(cluster.displayName) are running; keeps PID \(keep.pid), \(cluster.keepReason).",
                 createdAt: now,
                 targetIdentities: redundant
+            )
+        ]
+    }
+
+    /// When one member accounts for most of a leak, stopping it alone (a
+    /// language server, a renderer) is often enough and spares the rest of
+    /// the tree, through the single-process stop path.
+    private func culpritSuggestion(for family: ProcessFamily, now: Date) -> [RadarActionSuggestion] {
+        guard let culprit = family.culprit, culprit.identity != family.root.identity, family.hasCredibleLeak,
+              family.ownedIdentities.contains(culprit.identity)
+        else {
+            return []
+        }
+        return [
+            RadarActionSuggestion(
+                id: RadarActionSuggestion.stableID(scope: "culprit", type: .suggestKill),
+                type: .suggestKill,
+                title: "Stop only \(culprit.name) (\(Int((culprit.share * 100).rounded()))% of growth)",
+                detail: "It grows \(Int(culprit.slopeMegabytesPerMinute.rounded())) MB/min; the rest of \(family.displayName) keeps running.",
+                createdAt: now,
+                targetIdentities: [culprit.identity]
             )
         ]
     }

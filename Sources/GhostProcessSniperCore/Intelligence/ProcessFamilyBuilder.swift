@@ -44,6 +44,7 @@ public struct ProcessFamilyBuilder: Sendable {
     private let evidenceScorer = FamilyEvidenceScorer()
     private let directories: DirectoryExistenceCache
     private let processorCount: Int
+    private let defaultHistory = LockedRadarHistory()
 
     public init(
         classifier: DevProcessClassifier = DevProcessClassifier(),
@@ -73,16 +74,19 @@ public struct ProcessFamilyBuilder: Sendable {
         ).families
     }
 
-    /// Without history: every call sees processes for the first time, so
-    /// nothing is known about idleness or CPU minutes.
+    /// Keeps its own history across calls on this builder.
     public func buildFamiliesWithDuplicates(
         from processes: [ProcessMetrics],
         settings: ThresholdSettings,
         trendWindow: inout TrendWindow,
         now: Date
     ) -> ProcessFamilyBuildResult {
-        var history = RadarHistory()
-        return buildFamiliesWithDuplicates(from: processes, settings: settings, trendWindow: &trendWindow, history: &history, now: now)
+        var window = trendWindow
+        let result = defaultHistory.withHistory { history in
+            buildFamiliesWithDuplicates(from: processes, settings: settings, trendWindow: &window, history: &history, now: now)
+        }
+        trendWindow = window
+        return result
     }
 
     public func buildFamiliesWithDuplicates(
@@ -173,13 +177,16 @@ public struct ProcessFamilyBuilder: Sendable {
         let families = memberships.map { membership in
             let activity = history.activity.recordFamily(key: membership.familyKey, members: membership.members, now: now)
             let forensics = ProcessFamily.aggregateForensics(from: membership.members)
-            return makeFamily(
+            let live = membership.members.filter { !$0.isZombie }
+            let step = history.memberTrends.advance(familyKey: membership.familyKey, members: live, now: now)
+            var family = makeFamily(
                 root: membership.root,
                 members: membership.members,
                 tree: tree,
                 duplicateCluster: bestDuplicateCluster(for: membership.members, clustersByIdentity: clusterByIdentity),
                 parentFamilyKey: parentFamilyKeys[membership.familyKey],
                 activity: activity,
+                trendStep: step,
                 forensics: forensics,
                 forgotten: assessForgotten(root: membership.root, forensics: forensics, activity: activity,
                                            livePIDs: livePIDs, now: now),
@@ -188,6 +195,11 @@ public struct ProcessFamilyBuilder: Sendable {
                 trendWindow: &trendWindow,
                 now: now
             )
+            // Attribution only matters for a family that is growing.
+            if live.count > 1, family.trend.credibleMemoryVelocity > 0 || step.longTerm.slopeMegabytesPerMinute > 0 {
+                family.attribute(growth: history.memberTrends.growth(of: live))
+            }
+            return family
         }
         return ProcessFamilyBuildResult(
             families: families,
@@ -269,6 +281,7 @@ public struct ProcessFamilyBuilder: Sendable {
         duplicateCluster: DuplicateProcessCluster?,
         parentFamilyKey: String?,
         activity: FamilyCPUActivity,
+        trendStep: FamilyTrendStep,
         forensics: ProcessForensics,
         forgotten: ForgottenAssessment,
         hardwareProfiles: [ProcessIdentity: HardwareOffenderProfile],
@@ -291,17 +304,18 @@ public struct ProcessFamilyBuilder: Sendable {
         let familyConfidence = members.map { tree.confidence($0.pid) }.max() ?? 0
         let familyClassification = familyClassification(root: root, members: members, facts: tree.facts, footprint: footprint, cpu: cpu, now: now)
         let signature = signature(of: root, in: tree)
-        // Baselines intentionally learn by logical signature, but live trend
-        // state must be isolated per concrete process-family instance. Two
-        // identical servers running at once must never alternate samples into
-        // one synthetic leak curve.
-        let topology = members.map { "\($0.pid):\($0.identity.startTimeSeconds).\($0.identity.startTimeMicroseconds)" }.sorted().joined(separator: ",")
-        let runtimeTrendKey = "\(signature.id)|members:\(topology)"
+        // Baselines learn by logical signature, but live trends belong to one
+        // concrete instance: two identical servers must never alternate
+        // samples into one synthetic leak curve. The series is the sum of the
+        // members at their last readings; members joining, leaving or still
+        // settling in restate the history instead of reading as growth.
+        let trendKey = ProcessFamily.key(signature: signature, root: root.identity)
+        trendWindow.shift(signatureID: trendKey, by: trendStep.historyShift)
         let trend: TrendMetrics
-        if coverage.memoryCoverage >= 0.9, let measuredAt = coverage.newestFreshMeasurement {
-            trend = trendWindow.update(signatureID: runtimeTrendKey, memoryBytes: footprint, cpuPercent: cpu, at: measuredAt)
+        if let measuredAt = trendStep.newestMeasurement {
+            trend = trendWindow.update(signatureID: trendKey, memoryBytes: trendStep.total, cpuPercent: cpu, at: measuredAt)
         } else {
-            trend = .empty
+            trend = trendWindow.metrics(for: trendKey) ?? .empty
         }
         let score = evidenceScorer.score(
             root: root,
@@ -352,7 +366,8 @@ public struct ProcessFamilyBuilder: Sendable {
             parentFamilyKey: parentFamilyKey,
             cpuActivity: activity,
             forgotten: forgotten,
-            zombieChildCount: zombieChildren
+            zombieChildCount: zombieChildren,
+            longTermTrend: trendStep.longTerm
         )
     }
 

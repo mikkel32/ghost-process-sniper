@@ -23,9 +23,13 @@ public struct CulpritAnalysis: Equatable, Sendable {
         for signal in family.hardwareSignals.prefix(3) {
             evidence.append(signal.reason)
         }
-        let growth = family.trend.credibleMemoryVelocity
+        let growth = max(family.trend.credibleMemoryVelocity,
+                         family.forecast.state == .leaking ? family.longTermTrend.slopeMegabytesPerMinute : 0)
         if growth > 0 {
             evidence.append("Memory rising \(Int(growth.rounded())) MB/min")
+        }
+        if let culprit = family.culprit, family.members.count > 1 {
+            evidence.append("\(culprit.name) holds \(Int((culprit.share * 100).rounded()))% of the growth")
         }
         if family.totalCPUPercent >= 50 {
             evidence.append("CPU burst \(Int(family.totalCPUPercent.rounded()))%")

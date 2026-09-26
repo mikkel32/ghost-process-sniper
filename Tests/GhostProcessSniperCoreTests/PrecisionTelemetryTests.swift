@@ -269,7 +269,9 @@ final class PrecisionTelemetryTests: XCTestCase {
         let updated = try XCTUnwrap(builder.buildFamilies(from: [refreshedRoot, child], settings: settings,
             trendWindow: &window, now: now.addingTimeInterval(5)).first { $0.root.pid == root.pid })
         XCTAssertEqual(updated.members.count, 2)
-        XCTAssertEqual(updated.trend.sampleCount, 1)
+        // One continuous series: the child's arrival restates history
+        // instead of starting over or reading as 300 MB of growth.
+        XCTAssertEqual(updated.trend.sampleCount, 2)
         XCTAssertEqual(updated.trend.memoryVelocityMegabytesPerMinute, 0)
     }
 

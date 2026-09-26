@@ -45,6 +45,15 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public let forgotten: ForgottenAssessment?
     /// Exited children the root never reaped.
     public let zombieChildCount: Int
+    /// Growth over the last ninety minutes, from the members' minute buckets.
+    public let longTermTrend: LongTermTrend
+    /// Which members the growth comes from, largest share first.
+    public private(set) var growth: [MemberGrowth]
+
+    /// The one member most of the growth comes from, on a clean trend.
+    public var culprit: MemberGrowth? {
+        growth.first.flatMap { $0.isCulprit ? $0 : nil }
+    }
 
     public var displayName: String { root.name }
     public var childCount: Int { max(0, members.count - 1) }
@@ -81,7 +90,9 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         parentFamilyKey: String? = nil,
         cpuActivity: FamilyCPUActivity = .empty,
         forgotten: ForgottenAssessment? = nil,
-        zombieChildCount: Int? = nil
+        zombieChildCount: Int? = nil,
+        longTermTrend: LongTermTrend = .none,
+        growth: [MemberGrowth] = []
     ) {
         self.root = root
         self.members = members
@@ -116,6 +127,8 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.cpuActivity = cpuActivity
         self.forgotten = forgotten
         self.zombieChildCount = zombieChildCount ?? members.filter { $0.isZombie && $0.identity != root.identity }.count
+        self.longTermTrend = longTermTrend
+        self.growth = growth
     }
 
     /// The forgotten-process judgment: the builder's, or one made now from
@@ -135,6 +148,10 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     /// One concrete instance of a signature: the signature plus the root.
     public static func key(signature: ProcessSignature, root: ProcessIdentity) -> String {
         "\(signature.id)|pid:\(root.pid)|start:\(root.startTimeSeconds).\(root.startTimeMicroseconds)"
+    }
+
+    mutating func attribute(growth: [MemberGrowth]) {
+        self.growth = growth
     }
 
     /// Families launched by this one (see parentFamilyKey), for a stop that

@@ -173,6 +173,19 @@ public struct ActivityLedger: Sendable {
 /// What the builder remembers between ticks besides the family trends.
 public struct RadarHistory: Sendable {
     public var activity = ActivityLedger()
+    public var memberTrends = MemberTrendStore()
 
     public init() {}
+}
+
+/// History for callers of the builder that do not keep their own.
+final class LockedRadarHistory: @unchecked Sendable {
+    private let lock = NSLock()
+    private var history = RadarHistory()
+
+    func withHistory<Result>(_ body: (inout RadarHistory) -> Result) -> Result {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(&history)
+    }
 }

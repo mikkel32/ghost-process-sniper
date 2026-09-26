@@ -2,10 +2,15 @@ import Foundation
 
 public struct FamilyRiskForecaster: Sendable {
     private let processorCount: Int
+    private let physicalMemoryBytes: UInt64
 
-    /// Tests pass a fixed core count; the Mac's own is the default.
-    public init(processorCount: Int = ProcessInfo.processInfo.activeProcessorCount) {
+    /// Tests pass a fixed core count and RAM; the Mac's own are the default.
+    public init(
+        processorCount: Int = ProcessInfo.processInfo.activeProcessorCount,
+        physicalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
+    ) {
         self.processorCount = max(1, processorCount)
+        self.physicalMemoryBytes = physicalMemoryBytes
     }
 
     public func forecast(
@@ -16,7 +21,11 @@ public struct FamilyRiskForecaster: Sendable {
         let baseline = AnomalyBaseline(family: family)
         let trustedWindow = family.trend.hasSustainedHistory && family.hasRecentMeasurements(at: now)
         let patternAnalysis = family.trend.resolvedPattern
-        let memoryVelocity = forecastVelocity(trend: family.trend, pattern: patternAnalysis, trusted: trustedWindow)
+        // The long horizon catches the 5-40 MB/min creep the short window's
+        // noise hides; it is proven over twenty minutes, not a minute.
+        let slowLeak = family.longTermTrend.isSlowLeak(physicalMemoryBytes: physicalMemoryBytes)
+        let shortVelocity = forecastVelocity(trend: family.trend, pattern: patternAnalysis, trusted: trustedWindow)
+        let memoryVelocity = slowLeak ? max(shortVelocity, family.longTermTrend.slopeMegabytesPerMinute) : shortVelocity
         let cpuSlope = trustedWindow ? max(0, family.trend.cpuSlopePerMinute) : 0
         let acceleration = trustedWindow && patternAnalysis.indicatesAccumulation ? leakAcceleration(samples: family.trend.samples) : 0
         // Only memory has a meaningful time-to-limit. A linear CPU% ETA is an
@@ -45,6 +54,7 @@ public struct FamilyRiskForecaster: Sendable {
             pattern: patternAnalysis,
             cpuEvidence: cpuEvidence,
             inStartupGrace: inStartupGrace,
+            slowLeak: slowLeak,
             settings: settings
         )
         let confidence = confidence(
@@ -55,7 +65,8 @@ public struct FamilyRiskForecaster: Sendable {
             memoryVelocity: memoryVelocity,
             recurrenceRisk: recurrenceRisk,
             staleLikelihood: staleLikelihood,
-            acceleration: acceleration
+            acceleration: acceleration,
+            slowLeak: slowLeak
         )
         let whyNow = whyNow(
             family: family,
@@ -69,6 +80,7 @@ public struct FamilyRiskForecaster: Sendable {
             pattern: patternAnalysis,
             cpuEvidence: cpuEvidence,
             inStartupGrace: inStartupGrace,
+            slowLeak: slowLeak,
             settings: settings
         )
 
@@ -164,6 +176,7 @@ public struct FamilyRiskForecaster: Sendable {
         pattern: MemoryPatternAnalysis,
         cpuEvidence: CPUEvidence,
         inStartupGrace: Bool,
+        slowLeak: Bool,
         settings: ThresholdSettings
     ) -> ForecastState {
         if family.score.level >= .critical {
@@ -186,6 +199,9 @@ public struct FamilyRiskForecaster: Sendable {
                 return .leaking
             }
             return .warming
+        }
+        if slowLeak, !inStartupGrace {
+            return .leaking
         }
         if staleLikelihood >= 0.65, family.isIdleAcrossWindow {
             return .stale
@@ -210,7 +226,8 @@ public struct FamilyRiskForecaster: Sendable {
         memoryVelocity: Double,
         recurrenceRisk: Double,
         staleLikelihood: Double,
-        acceleration: Double
+        acceleration: Double,
+        slowLeak: Bool
     ) -> Double {
         var value = 0.18 + family.devConfidence * 0.22
         if family.trend.memoryPoints.count >= 3 { value += 0.16 }
@@ -222,7 +239,9 @@ public struct FamilyRiskForecaster: Sendable {
         value += staleLikelihood * 0.08
         // With enough samples, a clean linear trend earns confidence and a
         // noisy one costs it; below 4 samples R² is meaningless either way.
-        if family.trend.sampleCount >= 4, memoryVelocity > 0 {
+        if slowLeak {
+            value += (family.longTermTrend.rSquared - 0.5) * 0.16
+        } else if family.trend.sampleCount >= 4, memoryVelocity > 0 {
             value += (family.trend.memoryFitQuality - 0.5) * 0.16
         }
         if state == .quiet { value = min(value, 0.46) }
@@ -380,6 +399,7 @@ public struct FamilyRiskForecaster: Sendable {
         pattern: MemoryPatternAnalysis,
         cpuEvidence: CPUEvidence,
         inStartupGrace: Bool,
+        slowLeak: Bool,
         settings: ThresholdSettings
     ) -> String {
         var parts: [String] = []
@@ -395,7 +415,13 @@ public struct FamilyRiskForecaster: Sendable {
         if horizon == .breached {
             parts.append("above its memory limit")
         }
-        if memoryVelocity > 0 {
+        if slowLeak {
+            let minutes = Int(family.longTermTrend.spanMinutes)
+            parts.append("memory has crept up \(Int(memoryVelocity.rounded())) MB/min for \(minutes) min")
+            if let culprit = family.culprit, family.members.count > 1 {
+                parts.append("mostly \(culprit.name) (\(Int((culprit.share * 100).rounded()))% of the growth)")
+            }
+        } else if memoryVelocity > 0 {
             parts.append("memory is rising \(Int(memoryVelocity.rounded())) MB/min")
         }
         if inStartupGrace, memoryVelocity > 0 {

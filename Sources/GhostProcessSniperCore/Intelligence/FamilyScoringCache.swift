@@ -63,6 +63,8 @@ public struct FamilyScoringCache: Sendable {
         // CPU behavior and idleness are judged per ledger minute.
         hasher.combine(family.cpuActivity.buckets.last?.start)
         hasher.combine(family.cpuActivity.buckets.count)
+        hasher.combine(Int(family.longTermTrend.slopeMegabytesPerMinute.rounded()))
+        hasher.combine(family.culprit?.identity)
         if let cluster = family.duplicateCluster, cluster.countsAsIndependentCopies {
             hasher.combine(cluster.copyPlanHash)
         }

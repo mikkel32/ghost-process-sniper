@@ -45,7 +45,10 @@ final class MeasurementCoverageTests: XCTestCase {
 
         XCTAssertFalse(family.coverage.isScorable)
         XCTAssertEqual(family.score.level, .quiet)
-        XCTAssertEqual(family.trend.sampleCount, 0)
+        // The trend holds the stale worker at its last reading instead of
+        // dropping the sample; scoring is what stays gated.
+        XCTAssertEqual(family.trend.sampleCount, 1)
+        XCTAssertEqual(family.trend.samples.last?.memoryBytes, family.totalPhysicalFootprintBytes)
         XCTAssertEqual(ProcessAssessment(family: family).status, "Measuring")
     }
 

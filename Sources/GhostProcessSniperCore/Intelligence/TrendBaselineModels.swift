@@ -323,6 +323,23 @@ public struct TrendWindow: Sendable {
         return result
     }
 
+    /// The latest metrics for a series, without adding a sample.
+    public func metrics(for signatureID: String) -> TrendMetrics? {
+        latestMetrics[signatureID]
+    }
+
+    /// Restates a series' stored history by `bytes`, e.g. when a member
+    /// joins or leaves a family, so the change never reads as growth.
+    public mutating func shift(signatureID: String, by bytes: Int64) {
+        guard bytes != 0, var values = signatureSamples[signatureID], !values.isEmpty else { return }
+        values = values.map { sample in
+            let shifted = Int64(clamping: sample.memoryBytes) + bytes
+            return TrendSample(date: sample.date, memoryBytes: UInt64(max(0, shifted)), cpuPercent: sample.cpuPercent)
+        }
+        signatureSamples[signatureID] = values
+        latestMetrics[signatureID] = metrics(for: values)
+    }
+
     private func prune(_ values: inout [TrendSample], keeping date: Date) {
         values.removeAll { date.timeIntervalSince($0.date) > retention }
         if values.count > maxSamples {
