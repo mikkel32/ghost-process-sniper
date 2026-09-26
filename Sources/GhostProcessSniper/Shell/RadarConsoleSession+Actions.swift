@@ -9,6 +9,18 @@ extension RadarConsoleSession {
         queries.snapshot.browserRows
     }
 
+    /// A `port:` search has every same-user process's listening ports read on
+    /// the next refresh, so a quiet dev server's port is findable. It asks
+    /// again only when the searched ports change, not on every keystroke.
+    func requestPortCensusIfNeeded(for searchText: String) {
+        let ports = Set(ProcessSearchQuery(searchText).ports.filter { !$0.isNegated }.flatMap(\.values))
+        guard ports != censusPorts else { return }
+        censusPorts = ports
+        if !ports.isEmpty {
+            monitor.requestPortCensus()
+        }
+    }
+
     /// Stops any live process, tracked or not, through the usual preview.
     func prepareKill(processIdentity identity: ProcessIdentity, name: String) {
         guard let family = ProcessFamily.adHoc(rootedAt: identity, in: monitor.sampledProcesses, currentUserID: geteuid()) else {

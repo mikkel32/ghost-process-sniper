@@ -46,6 +46,8 @@ final class RadarConsoleSession {
     @ObservationIgnored private var familyIndex: [String: Int] = [:]
     @ObservationIgnored private var familyIndexRevision: UInt64 = .max
     @ObservationIgnored private var recentStopOrder: [String] = []
+    /// The ports the last `port:` census was requested for.
+    @ObservationIgnored var censusPorts: Set<Int> = []
 
     init(
         monitor: ProcessMonitor,

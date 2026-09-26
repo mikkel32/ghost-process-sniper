@@ -108,6 +108,7 @@ struct RadarConsoleView: View {
             }
         }
         .onChange(of: session.state.searchText) { _, value in
+            session.requestPortCensusIfNeeded(for: value)
             guard value != searchDraft else { return }
             searchDebounceTask?.cancel()
             searchDraft = value
