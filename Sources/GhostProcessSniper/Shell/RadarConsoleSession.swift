@@ -32,7 +32,7 @@ final class RadarConsoleSession {
     @ObservationIgnored private var requestedQueryKey: ConsoleDerivedSnapshotKey?
     @ObservationIgnored private var lastFocusedFamilySignatures: Set<String> = []
     @ObservationIgnored private var nextRefreshCostSequence: UInt64 = 0
-    @ObservationIgnored private var isVisible = false
+    @ObservationIgnored private(set) var isVisible = false
     @ObservationIgnored private var familyIndex: [String: Int] = [:]
     @ObservationIgnored private var familyIndexRevision: UInt64 = .max
 

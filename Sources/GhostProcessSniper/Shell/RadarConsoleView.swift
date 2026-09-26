@@ -80,6 +80,12 @@ struct RadarConsoleView: View {
                 session.updateFocusedFamilies()
             }
         }
+        .onChange(of: session.state.showInspector) { _, shown in
+            // Remember how the user left the inspector on a family page, however
+            // it was dismissed; other pages close it automatically.
+            guard session.isVisible, session.state.focusedSelection.familyKey != nil else { return }
+            ConsolePreferences.showInspector = shown
+        }
         .onChange(of: searchDraft) { _, value in
             // Results live on the process list (Duplicates filters in place).
             // Only a user edit navigates; syncing from state never does.
