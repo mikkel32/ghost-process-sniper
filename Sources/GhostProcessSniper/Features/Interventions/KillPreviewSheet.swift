@@ -215,7 +215,7 @@ struct KillPreviewSheet: View {
             },
             canStopPortHolder: { session.family(containingPID: $0) != nil },
             stopPortHolder: { pid in
-                close()
+                session.dismissStopSheetForFollowUp()
                 session.prepareKill(portHolder: pid)
             }
         )

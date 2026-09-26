@@ -373,26 +373,12 @@ public final class ProcessMonitor {
         if skipForce { await operationControl.holdForce() }
         let report = await KillOperationRunner().runReport(plan: plan, killer: killer, forceKillDelay: forceKillDelay ?? settings.forceKillDelay,
                                                            control: operationControl, eventSink: eventSink)
-        postKillTask = Task { @MainActor [weak self] in
-            await self?.recordKill(report: report, family: family, learnsFromOutcome: learnsFromOutcome)
-            await self?.refresh()
+        // Behind any batch recorded while this stop ran.
+        enqueuePostKill { monitor in
+            await monitor.recordKill(report: report, family: family, learnsFromOutcome: learnsFromOutcome)
+            await monitor.refresh()
         }
         return report
-    }
-
-    /// Records stops that ran outside `confirmKill`, such as a batch of
-    /// duplicate copies, then refreshes once. They queue behind any other
-    /// stop's follow-ups, and the next plan waits for them.
-    public func recordKills(_ stops: [(family: ProcessFamily, report: KillReport)]) {
-        guard !stops.isEmpty else { return }
-        let previous = postKillTask
-        postKillTask = Task { @MainActor [weak self] in
-            await previous?.value
-            for stop in stops {
-                await self?.recordKill(report: stop.report, family: stop.family)
-            }
-            await self?.refresh()
-        }
     }
 
     public func killPlan(for family: ProcessFamily) async -> KillPlan {

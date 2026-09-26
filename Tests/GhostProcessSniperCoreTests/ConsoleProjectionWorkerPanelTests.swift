@@ -33,6 +33,35 @@ final class ConsoleProjectionWorkerPanelTests: XCTestCase {
         XCTAssertEqual(snapshot.detailPanel(for: hot.familyKey)?.stopRisk, expected)
     }
 
+    /// The panel's risk covers the real stop set, like the monitor's memo:
+    /// a database another family owns, started under an unchanged runner,
+    /// changes it even though the runner's members did not.
+    func testForeignDescendantUnderAnUnchangedFamilyChangesThePanelRisk() {
+        for level in [GhostLevel.hot, .quiet] {
+            let runner = family(pid: 900, parent: 1, name: "node", level: level, command: "node /usr/local/bin/foreman start")
+            // The radar gives postgres a family of its own.
+            let database = family(pid: 901, parent: runner.root.pid, name: "postgres", level: .quiet,
+                                  command: KillFixture.postgresCommand)
+            let postgres = database.root
+            let before = request(families: [runner], processes: [runner.root])
+            let after = request(families: [runner, database], processes: [runner.root, postgres], previous: before.source)
+
+            let first = ConsoleProjectionWorker.buildPanel(familyKey: runner.familyKey, request: before)
+            let second = ConsoleProjectionWorker.buildPanel(familyKey: runner.familyKey, request: after, reusing: first)
+            let expected = KillRiskAssessor().assess(KillWorkloadProfile(family: runner, sample: [runner.root, postgres]))
+
+            XCTAssertNotEqual(first?.stopRisk?.kind, .dataStore, "level \(level)")
+            XCTAssertEqual(expected.kind, .dataStore)
+            XCTAssertEqual(second?.stopRisk, expected, "level \(level)")
+
+            // And back: once the database exits, the reused panel drops it.
+            let gone = request(families: [runner], processes: [runner.root], previous: after.source)
+            let third = ConsoleProjectionWorker.buildPanel(familyKey: runner.familyKey, request: gone, reusing: second)
+            XCTAssertEqual(third?.stopRisk, first?.stopRisk, "level \(level)")
+            XCTAssertNil(third?.stopBlockedReason)
+        }
+    }
+
     func testStaleSelectionDoesNotPublish() async throws {
         let (families, processes) = sample()
         let request = request(families: families, processes: processes)
@@ -81,10 +110,11 @@ final class ConsoleProjectionWorkerPanelTests: XCTestCase {
         return ([hot, quiet], [supervisor, hot.root, quiet.root])
     }
 
-    private func request(families: [ProcessFamily], processes: [ProcessMetrics]) -> ConsoleProjectionRequest {
+    private func request(families: [ProcessFamily], processes: [ProcessMetrics],
+                         previous: RadarConsoleSnapshot? = nil) -> ConsoleProjectionRequest {
         let snapshot = RadarConsoleSnapshot.build(
             families: families, summary: .empty, incidents: [], rules: [], metrics: .empty,
-            health: .starting, storeHealth: .empty, storeError: nil, previous: nil,
+            health: .starting, storeHealth: .empty, storeError: nil, previous: previous,
             generatedAt: now, detailSignatures: [], processes: processes
         )
         return ConsoleProjectionRequest(source: snapshot, incidents: [], state: .default,
@@ -100,8 +130,9 @@ final class ConsoleProjectionWorkerPanelTests: XCTestCase {
                        threadCount: 2, isSystemProcess: false, sampledAt: now)
     }
 
-    private func family(pid: Int32, parent: Int32, name: String, level: GhostLevel, samples: [TrendSample] = []) -> ProcessFamily {
-        let root = process(pid: pid, parent: parent, name: name)
+    private func family(pid: Int32, parent: Int32, name: String, level: GhostLevel, samples: [TrendSample] = [],
+                        command: String? = nil) -> ProcessFamily {
+        let root = process(pid: pid, parent: parent, name: name, command: command)
         let trend = TrendMetrics(memoryVelocityMegabytesPerMinute: 0, cpuSlopePerMinute: 0,
                                  memoryPoints: samples.map { Double($0.memoryBytes) }, samples: samples)
         return ProcessFamily(root: root, members: [root], totalResidentMemoryBytes: root.residentMemoryBytes,

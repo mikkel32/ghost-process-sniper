@@ -157,20 +157,16 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             }
             wantedKeys = keys
         }
-        // The PID index is built at most once, and only when a tree changed
-        // since the previous snapshot assessed it.
+        // The PID index is built at most once per snapshot; an assessment
+        // only reruns when a family's stop set changed.
         var sampleIndex: KillSampleIndex?
-        func stopRisk(for family: ProcessFamily) -> KillRiskAssessment? {
+        func stopFacts(for family: ProcessFamily) -> FamilyDetailPanelModel.StopFacts? {
             guard !processes.isEmpty else {
                 return nil
             }
-            if let previous = previousPanels[family.familyKey], let risk = previous.stopRisk,
-               previous.workloadKey == FamilyDetailPanelModel.workloadKey(for: family) {
-                return risk
-            }
             let index = sampleIndex ?? KillSampleIndex(processes)
             sampleIndex = index
-            return FamilyDetailPanelModel.stopRisk(for: family, index: index)
+            return FamilyDetailPanelModel.StopFacts(family: family, index: index, reusing: previousPanels[family.familyKey])
         }
         var detailPanels: [String: FamilyDetailPanelModel] = [:]
         detailPanels.reserveCapacity((wantedKeys?.count ?? families.count) * 2)
@@ -179,7 +175,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             let culprit = CulpritAnalysis(family: family, classifier: classifier, classification: classification)
             let panel = FamilyDetailPanelModel(
                 family: family,
-                stopRisk: stopRisk(for: family),
+                stop: stopFacts(for: family),
                 classifier: classifier,
                 classification: classification,
                 culprit: culprit

@@ -17,11 +17,14 @@ struct RadarConsoleDetail: View {
                     let panel = session.detailPanel(for: family)
                     FamilyDetailConsoleView(
                         panel: panel,
-                        // Panels carry the assessment, built off the main actor;
-                        // the monitor's memo covers a first frame without one.
+                        // Panels carry the assessment and protection floor, built
+                        // off the main actor over the same stop set as the
+                        // monitor's memo; the memo covers a first frame without one.
                         stop: FamilyStopState(
                             risk: panel.stopRisk ?? session.monitor.stopRisk(for: family),
-                            blockedReason: session.monitor.stopBlockedReason(for: family),
+                            blockedReason: panel.stopRisk == nil
+                                ? session.monitor.stopBlockedReason(for: family)
+                                : panel.stopBlockedReason,
                             isPreparing: session.isPreparingIntervention,
                             stopSupervisor: { session.prepareKillSupervisor(of: family) }
                         ),

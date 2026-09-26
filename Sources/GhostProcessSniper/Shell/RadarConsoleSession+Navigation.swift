@@ -85,6 +85,13 @@ extension RadarConsoleSession {
         showToast(message)
     }
 
+    /// Closes the sheet so another preview can open in its place, such as
+    /// the process still holding a port: no return navigation, no toast.
+    func dismissStopSheetForFollowUp() {
+        pendingKill = nil
+        lastStopResult = nil
+    }
+
     /// A preview that takes longer than this is stuck; say so rather than
     /// leaving the click unanswered.
     func expirePreparation(_ stop: PreparingStop) {

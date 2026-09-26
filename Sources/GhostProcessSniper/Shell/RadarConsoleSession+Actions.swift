@@ -125,8 +125,17 @@ extension RadarConsoleSession {
     func prepareKillRespawner(of report: KillReport) {
         let sample = monitor.sampledProcesses
         guard let pid = report.respawnedPIDs.first,
-              let child = sample.first(where: { $0.pid == pid }),
-              let parent = sample.first(where: { $0.pid == child.parentPID }), parent.pid > 1 else {
+              let child = sample.first(where: { $0.pid == pid }) else {
+            showToast("\(report.respawnedBy ?? "The supervisor") is no longer running", systemImage: "checkmark.circle")
+            return
+        }
+        // A launchd job restarted it: there is no parent process to stop.
+        // A fresh stop of the restarted process offers booting out the job.
+        guard child.parentPID > 1 else {
+            prepareKill(processIdentity: child.identity, name: child.name)
+            return
+        }
+        guard let parent = sample.first(where: { $0.pid == child.parentPID }) else {
             showToast("\(report.respawnedBy ?? "The supervisor") is no longer running", systemImage: "checkmark.circle")
             return
         }

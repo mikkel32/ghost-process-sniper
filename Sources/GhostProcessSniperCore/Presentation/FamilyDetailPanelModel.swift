@@ -137,8 +137,14 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
     /// What stopping this family would do. Nil when the panel was built
     /// without a process sample, which the supervisor lookup needs.
     public let stopRisk: KillRiskAssessment?
-    /// Identifies the stop workload, so an unchanged tree can reuse `stopRisk`.
-    let workloadKey: Int
+    /// Why the family's root can never be stopped, such as Ghost running
+    /// inside it. Looked up from the same sample as `stopRisk`, and only
+    /// meaningful when that is set.
+    public let stopBlockedReason: String?
+    /// Identifies the stop set `stopRisk` assessed, the same way the
+    /// monitor's memo does, so a panel reuses it only while that set is
+    /// unchanged. Nil when the panel has no assessment.
+    let workloadKey: Int?
 
     /// Panels are stateless, so a panel built for one refresh can be reused
     /// by any later one with the same content.
@@ -151,7 +157,7 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
     ) {
         self.init(
             family: family,
-            stopRisk: sampleIndex.map { Self.stopRisk(for: family, index: $0) },
+            stop: sampleIndex.map { StopFacts(family: family, index: $0) },
             classifier: classifier,
             classification: classification,
             culprit: culprit
@@ -160,7 +166,7 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
 
     init(
         family: ProcessFamily,
-        stopRisk: KillRiskAssessment?,
+        stop: StopFacts?,
         classifier: DevProcessClassifier = DevProcessClassifier(),
         classification providedClassification: DevClassification? = nil,
         culprit providedCulprit: CulpritAnalysis? = nil
@@ -233,8 +239,9 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         hasOwnedTargets = !family.ownedIdentities.isEmpty
         protectedPIDs = family.protectedPIDs
         lastScoredText = Self.lastScoredText(family.lastScoredAt)
-        self.stopRisk = stopRisk
-        workloadKey = Self.workloadKey(for: family)
+        stopRisk = stop?.risk
+        stopBlockedReason = stop?.blockedReason
+        workloadKey = stop?.key
     }
 
     /// Views format live dates with these, because a reused panel's strings
@@ -243,21 +250,27 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         date?.formatted(date: .omitted, time: .standard) ?? "warming"
     }
 
-    static func stopRisk(for family: ProcessFamily, index: KillSampleIndex) -> KillRiskAssessment {
-        KillRiskAssessor().assess(KillWorkloadProfile(root: family.root, index: index, family: family))
-    }
+    /// What stopping the family would do, from one sample. The stop set is
+    /// every same-user descendant of the root, including processes of other
+    /// families, so it is keyed like `StopRiskCache` and the family page
+    /// agrees with the stop preview.
+    struct StopFacts {
+        let risk: KillRiskAssessment
+        let blockedReason: String?
+        let key: Int
 
-    /// Everything the stop assessment reads from the family itself; names
-    /// and command lines only change with membership.
-    static func workloadKey(for family: ProcessFamily) -> Int {
-        var hasher = Hasher()
-        hasher.combine(family.root.identity)
-        hasher.combine(family.root.parentPID)
-        for member in family.members {
-            hasher.combine(member.identity)
-            hasher.combine(member.forensics.listeningPorts)
+        /// Reuses `previous`'s assessment when it covered the same stop set;
+        /// the protection floor is looked up on every sample.
+        init(family: ProcessFamily, index: KillSampleIndex, reusing previous: FamilyDetailPanelModel? = nil) {
+            let stopSet = KillWorkloadProfile.stopSet(root: family.root, index: index, family: family)
+            key = StopRiskCache.key(root: family.root, stopSet: stopSet)
+            if let previous, previous.workloadKey == key, let reused = previous.stopRisk {
+                risk = reused
+            } else {
+                risk = KillRiskAssessor().assess(KillWorkloadProfile(root: family.root, stopSet: stopSet, index: index))
+            }
+            blockedReason = KillProtectionPolicy().neverReason(forRoot: family.root) { index.byPID[$0]?.parentPID }
         }
-        return hasher.finalize()
     }
 
     private static func baselineCards(for family: ProcessFamily) -> [FamilyMetricCard] {

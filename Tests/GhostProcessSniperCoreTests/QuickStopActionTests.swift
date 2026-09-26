@@ -100,6 +100,31 @@ final class QuickStopActionTests: XCTestCase {
         XCTAssertNil(KillReport(displayName: "node", rootPID: 1, stalePIDs: [1]).cleanStopToastText)
     }
 
+    /// The page only moves on when the stop did everything it promised.
+    func testCleanStopToastWaitsOutEveryUnfinishedOutcome() {
+        func stopped(_ change: (inout KillReport) -> Void) -> KillReport {
+            var report = KillReport(displayName: "node", rootPID: 1, gracefulPIDs: [1])
+            change(&report)
+            return report
+        }
+        XCTAssertNotNil(stopped { $0.portOutcomes = [.freed(3000)] }.cleanStopToastText)
+        XCTAssertNil(stopped { $0.portOutcomes = [.heldBy(port: 3000, pid: 9, name: "node", startedDuringStop: true)] }
+            .cleanStopToastText, "a port is still held")
+        XCTAssertNil(stopped { $0.signalDeniedPIDs = [2] }.cleanStopToastText, "macOS refused a process")
+        XCTAssertNil(KillReport(displayName: "node", rootPID: 1, gracefulPIDs: [1], deniedPIDs: [2]).cleanStopToastText)
+        let job = LaunchdJob(label: "homebrew.mxcl.postgresql@16", pid: 1, domain: "gui/501", plistPath: nil, keepAlive: true)
+        XCTAssertNil(stopped {
+            $0.launchdBootout = LaunchdBootout(job: job, keepOff: false, accepted: false, disabled: false, status: 5)
+        }.cleanStopToastText, "the bootout failed")
+        XCTAssertNotNil(stopped {
+            $0.launchdBootout = LaunchdBootout(job: job, keepOff: false, accepted: true, disabled: false, status: 0)
+        }.cleanStopToastText)
+        let late = KillTarget(identity: ProcessIdentity(pid: 7, startTimeSeconds: 1, startTimeMicroseconds: 0), parentPID: 1,
+                              name: "node", ownerName: "me", depth: 1, memoryBytes: 0, cpuPercent: 0,
+                              state: .locked, reason: "started during the stop", isRoot: false)
+        XCTAssertNil(stopped { $0.lateTargets = [late] }.cleanStopToastText, "a late process was only reported")
+    }
+
     // MARK: - Fixtures
 
     private func make(name: String = "node", risk: KillRiskAssessment, level: GhostLevel, heatConfirmed: Bool) -> QuickStopAction {

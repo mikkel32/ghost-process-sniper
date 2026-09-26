@@ -87,13 +87,10 @@ public actor ConsoleProjectionWorker: ConsoleProjecting {
         guard let family = request.families.first(where: { $0.familyKey == familyKey }) else {
             return nil
         }
-        // The panel follows every sample; the stop assessment only changes
-        // with the process tree.
-        if let previous, let risk = previous.stopRisk,
-           previous.workloadKey == FamilyDetailPanelModel.workloadKey(for: family) {
-            return FamilyDetailPanelModel(family: family, stopRisk: risk)
-        }
-        return FamilyDetailPanelModel(family: family, sampleIndex: KillSampleIndex(request.processes))
+        // The panel follows every sample; the stop assessment only reruns
+        // when the stop set changed.
+        let stop = FamilyDetailPanelModel.StopFacts(family: family, index: KillSampleIndex(request.processes), reusing: previous)
+        return FamilyDetailPanelModel(family: family, stop: stop)
     }
 }
 

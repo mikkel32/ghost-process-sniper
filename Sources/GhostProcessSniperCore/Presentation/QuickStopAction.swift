@@ -194,10 +194,15 @@ public extension QuickStopAction {
 }
 
 public extension KillReport {
-    /// The confirmation after a stop that left nothing running; nil when the
-    /// user should stay on the result to see what survived or came back.
+    /// The confirmation after a stop that did everything it promised; nil
+    /// when the user should stay on the result: something survived, came
+    /// back, was refused by macOS, still holds a port, started during the
+    /// stop and was left running, or launchd refused the bootout.
     var cleanStopToastText: String? {
-        guard partiallySucceeded, survivorPIDs.isEmpty, respawnedPIDs.isEmpty else { return nil }
+        guard succeeded, respawnedPIDs.isEmpty, signalDeniedPIDs.isEmpty, !appStillOpen,
+              !portOutcomes.contains(where: { $0.holderPID != nil }),
+              launchdBootout?.accepted ?? true,
+              !lateTargets.contains(where: { $0.state == .locked }) else { return nil }
         let freed = realizedMemoryReclaimBytes > 0 ? " — freed \(RadarFormat.bytes(realizedMemoryReclaimBytes))" : ""
         return "Stopped \(displayName)\(freed)"
     }

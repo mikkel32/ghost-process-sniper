@@ -19,7 +19,9 @@ struct RecentStopView: View {
         } actions: {
             Button("Browse Processes", action: browse)
                 .buttonStyle(.borderedProminent)
-            if !report.respawnedPIDs.isEmpty {
+            // Plain launchd (no job to boot out) has nothing to stop instead;
+            // the outcome already says to quit the app or its login item.
+            if !report.respawnedPIDs.isEmpty, report.respawnedBy != "launchd" {
                 Button("Stop \(report.respawnedBy ?? "the Supervisor") Instead\u{2026}", action: stopRespawner)
             }
         }

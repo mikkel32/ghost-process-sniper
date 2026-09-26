@@ -7,7 +7,7 @@
   "legacy_line_budgets": {
     "GhostProcessSniperCore/Sampling/ProcessSampler.swift": 917,
     "GhostProcessSniperCore/Intelligence/ProcessFamilyBuilder.swift": 828,
-    "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 657,
+    "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 643,
     "GhostProcessSniperCore/Domain/ScannerModels.swift": 695,
     "GhostProcessSniperCore/Configuration/SettingsPerformanceModels.swift": 771,
     "GhostProcessSniperCore/Intelligence/ForecastModels.swift": 767
