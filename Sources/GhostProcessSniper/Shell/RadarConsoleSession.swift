@@ -20,7 +20,6 @@ final class RadarConsoleSession {
     private(set) var isRefreshing = false
     private(set) var refreshCostHistory: [RefreshCostSample] = []
     private(set) var memoryPulse: [MemoryPulseSample] = []
-    private(set) var thermalHistory = ThermalTraceHistory()
 
     @ObservationIgnored private let commands = RadarCommandCoordinator()
     @ObservationIgnored private var presentationObserverID: UUID?
@@ -122,8 +121,6 @@ final class RadarConsoleSession {
     }
 
     func recordEngineSample() {
-        var updatedThermals = thermalHistory
-        if updatedThermals.append(monitor.thermals, at: Date()) { thermalHistory = updatedThermals }
         let milliseconds = monitor.performanceMetrics.lastRefresh.totalMilliseconds
         if milliseconds > 0 {
             nextRefreshCostSequence &+= 1

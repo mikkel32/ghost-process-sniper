@@ -140,7 +140,7 @@ final class ThermalInterpretationTests: XCTestCase {
         var (window, _) = history([82, 84, 86, 88])
         let latest = snapshot(88, at: now.addingTimeInterval(60))
         window.record(latest, at: latest.sampledAt)
-        XCTAssertEqual(window.readings.count, 1)
+        XCTAssertEqual(window.segments(for: .cpu, at: latest.sampledAt).map(\.points.count), [4, 1])
         let result = ThermalTemperatureAssessment.evaluate(snapshot: latest, observations: window, at: latest.sampledAt)
         XCTAssertEqual(result.trajectory.direction, .measuring)
         XCTAssertEqual(result.trajectory.hotSeconds, 0)

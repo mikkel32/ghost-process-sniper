@@ -4,7 +4,7 @@ import SwiftUI
 struct ThermalTemperatureHero: View {
     let diagnosis: ThermalDiagnosis
     let snapshot: ThermalSnapshot
-    let history: ThermalTraceHistory?
+    let observations: ThermalObservationWindow
     let now: Date
 
     private var tint: Color {
@@ -35,7 +35,7 @@ struct ThermalTemperatureHero: View {
                   systemImage: diagnosis.temperature.trajectory.direction == .falling ? "arrow.down.right" : "chart.xyaxis.line")
                 .font(.caption).foregroundStyle(tint)
                 .help(diagnosis.temperature.trajectory.detail)
-            if let history, diagnosis.temperature.band != .unavailable {
+            if diagnosis.temperature.band != .unavailable {
                 let component: ThermalComponent = diagnosis.temperature.component == "GPU sensor" ? .gpu : .cpu
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
@@ -47,7 +47,7 @@ struct ThermalTemperatureHero: View {
                             .lineLimit(1)
                     }
                     .foregroundStyle(.secondary)
-                    ThermalTraceView(segments: history.segments(for: component, at: now), tint: tint, now: now)
+                    ThermalTraceView(segments: observations.segments(for: component, at: now), tint: tint, now: now)
                         .frame(height: 48)
                 }
                 .accessibilityElement(children: .combine)

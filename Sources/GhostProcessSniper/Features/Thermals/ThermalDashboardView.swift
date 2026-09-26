@@ -3,7 +3,7 @@ import SwiftUI
 
 struct ThermalDashboardView: View {
     let snapshot: ThermalSnapshot
-    var history: ThermalTraceHistory? = nil
+    var observations: ThermalObservationWindow? = nil
 
     var body: some View {
         // An inexpensive freshness clock, not an animation loop. It expires
@@ -39,7 +39,7 @@ struct ThermalDashboardView: View {
                     systemReport
                 }
             }
-            Text(snapshot.unavailableReason ?? (history == nil
+            Text(snapshot.unavailableReason ?? (observations == nil
                  ? "Hottest sensor per component · Measured °C, not process scores"
                  : "Hottest sensor per component · Measured °C, not process scores · Up to 3 minutes of real readings"))
                 .font(.caption)
@@ -64,7 +64,7 @@ struct ThermalDashboardView: View {
             Label("Read-only sensors", systemImage: "checkmark.shield").font(.caption.weight(.medium))
             Text("No fan or power changes").font(.caption2).foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, minHeight: history == nil ? 100 : 142, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: observations == nil ? 100 : 142, alignment: .topLeading)
         .padding(14)
         .background(Color.primary.opacity(0.02), in: RoundedRectangle(cornerRadius: 13))
         .overlay { RoundedRectangle(cornerRadius: 13).strokeBorder(Color.primary.opacity(0.06), lineWidth: 1) }
@@ -72,7 +72,7 @@ struct ThermalDashboardView: View {
 
     private func temperature(_ label: String, value: Double?, symbol: String, component: ThermalComponent, tint: Color, at now: Date) -> some View {
         let text = snapshot.temperatureText(value, at: now)
-        let segments = history?.segments(for: component, at: now) ?? []
+        let segments = observations?.segments(for: component, at: now) ?? []
         return VStack(alignment: .leading, spacing: 8) {
             Label(label, systemImage: symbol)
                 .font(.caption.weight(.semibold))
@@ -82,11 +82,11 @@ struct ThermalDashboardView: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-            if history != nil {
+            if observations != nil {
                 ThermalTraceView(segments: segments, tint: tint, now: now)
                     .frame(height: 48)
             }
-            Text(text == "Unavailable" ? "Waiting for a fresh reading" : history == nil ? "Measured in Celsius" : ThermalTraceView.rangeLabel(segments))
+            Text(text == "Unavailable" ? "Waiting for a fresh reading" : observations == nil ? "Measured in Celsius" : ThermalTraceView.rangeLabel(segments))
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -94,7 +94,7 @@ struct ThermalDashboardView: View {
         .background(tint.opacity(0.055), in: RoundedRectangle(cornerRadius: 13))
         .overlay { RoundedRectangle(cornerRadius: 13).strokeBorder(tint.opacity(0.13), lineWidth: 1) }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(label) hardware temperature, \(text). \(history == nil ? "" : ThermalTraceView.summary(segments))")
+        .accessibilityLabel("\(label) hardware temperature, \(text). \(observations == nil ? "" : ThermalTraceView.summary(segments))")
     }
 }
 

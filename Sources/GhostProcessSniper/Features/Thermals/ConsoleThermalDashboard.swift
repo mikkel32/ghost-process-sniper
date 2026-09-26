@@ -7,7 +7,7 @@ struct ConsoleThermalDashboard: View {
 
     var body: some View {
         ThermalInsightPanel(summary: session.monitor.thermalActivity,
-            snapshot: session.monitor.thermals, history: session.thermalHistory,
+            snapshot: session.monitor.thermals, observations: session.monitor.thermalObservations,
             onInspect: { session.focus(.family($0)) },
             onBrowse: { session.browseFamilies() },
             onRefresh: { await session.monitor.refresh() })

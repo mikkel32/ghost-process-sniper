@@ -5,7 +5,7 @@ import SwiftUI
 struct ThermalInsightPanel: View {
     let summary: ThermalActivitySummary
     let snapshot: ThermalSnapshot
-    let history: ThermalTraceHistory?
+    let observations: ThermalObservationWindow
     let onInspect: (String) -> Void
     let onBrowse: () -> Void
     let onRefresh: () async -> Void
@@ -14,7 +14,6 @@ struct ThermalInsightPanel: View {
     @State private var showEvidence = false
     @State private var refreshing = false
     @State private var selected: ThermalContributor?
-    @State private var observations = ThermalObservationWindow()
     @State private var coolingCheck: ThermalCoolingCheck?
 
     var body: some View {
@@ -27,7 +26,7 @@ struct ThermalInsightPanel: View {
             VStack(alignment: .leading, spacing: 18) {
                 header(diagnosis: diagnosis)
                 AdaptivePairLayout(breakpoint: 760, spacing: 14) {
-                    ThermalTemperatureHero(diagnosis: diagnosis, snapshot: snapshot, history: history, now: now)
+                    ThermalTemperatureHero(diagnosis: diagnosis, snapshot: snapshot, observations: observations, now: now)
                     ThermalAttributionCard(summary: summary, diagnosis: diagnosis, insight: insight, now: now,
                         onInspect: { selected = $0 },
                         onCompare: { coolingCheck = ThermalCoolingCheck(contributor: $0, snapshot: snapshot, at: now) },
@@ -74,7 +73,7 @@ struct ThermalInsightPanel: View {
                 Divider().opacity(0.5)
                 DisclosureGroup("Temperature history & measurement details", isExpanded: $showEvidence) {
                     VStack(alignment: .leading, spacing: 12) {
-                        ThermalSensorStrip(snapshot: snapshot, history: history, now: now)
+                        ThermalSensorStrip(snapshot: snapshot, observations: observations, now: now)
                         Text(diagnosis.explanation).font(.callout)
                         Text("Warm, Hot, and Very hot are app review bands starting at 70, 80, and 90 degrees Celsius. They are not hardware operating limits.")
                         Text("CPU capacity combines all logical processors. GPU values are reported activity; zero is not proof of no GPU work. App rankings do not measure watts, degrees, or a share of total heat.")
@@ -92,9 +91,6 @@ struct ThermalInsightPanel: View {
             .padding(20)
             .background(Color.primary.opacity(0.018), in: RoundedRectangle(cornerRadius: 22))
             .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1) }
-        }
-        .onChange(of: snapshot.sampledAt, initial: true) { _, _ in
-            observations.record(snapshot, at: Date())
         }
         .sheet(item: $selected) { contributor in
             let current = summary.visibleContributors(at: Date()).first { $0.id == contributor.id }

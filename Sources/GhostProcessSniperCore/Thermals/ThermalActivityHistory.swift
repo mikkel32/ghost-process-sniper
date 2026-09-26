@@ -82,4 +82,10 @@ public struct ThermalActivityHistory: Sendable {
         let span = readings.first.map { max(0, reading.date.timeIntervalSince($0.date)) } ?? 0
         return summary.includingHistory(ordered, sampleCount: readings.count, spanSeconds: span)
     }
+
+    /// Projects a raw sample and records it; callers without a refresh worker use this.
+    mutating func recordProjection(of processes: [ProcessMetrics], families: [ProcessFamily],
+                                   at now: Date) -> ThermalActivitySummary {
+        record(ThermalActivityAnalyzer.project(processes: processes, families: families, now: now), at: now)
+    }
 }

@@ -30,9 +30,28 @@ public struct ThermalTrajectory: Equatable, Sendable {
     }
 }
 
+public enum ThermalComponent: Sendable { case cpu, gpu }
+
+public struct ThermalTracePoint: Identifiable, Equatable, Sendable {
+    public var id: Date { date }
+    public let date: Date
+    public let celsius: Double
+}
+
+public struct ThermalTraceSegment: Identifiable, Equatable, Sendable {
+    public var id: Date { points[0].date }
+    public let points: [ThermalTracePoint]
+}
+
 /// Bounded, sample-driven evidence. UI timer ticks do not add observations.
-/// History lives only while its owning dashboard is present.
+/// The monitor records every new sensor reading, so the trend and the trace are
+/// ready the moment a thermal view opens. Missing readings and gaps longer than
+/// 15 s break both; nothing is synthesized to bridge a sensor outage.
 public struct ThermalObservationWindow: Equatable, Sendable {
+    static let retention: TimeInterval = 180
+    static let maximumGap: TimeInterval = 15
+    static let capacity = 90
+
     struct Reading: Equatable, Sendable {
         let date: Date
         let cpu: Double?
@@ -43,6 +62,8 @@ public struct ThermalObservationWindow: Equatable, Sendable {
 
     private(set) var readings: [Reading] = []
     public init() {}
+
+    public var count: Int { readings.count }
 
     public mutating func record(_ snapshot: ThermalSnapshot, at now: Date) {
         let age = now.timeIntervalSince(snapshot.sampledAt)
@@ -57,11 +78,26 @@ public struct ThermalObservationWindow: Equatable, Sendable {
                 if next != last { readings[readings.count - 1] = next }
                 return
             }
-            if next.date.timeIntervalSince(last.date) > 15 { readings.removeAll(keepingCapacity: true) }
         }
         readings.append(next)
-        readings.removeAll { next.date.timeIntervalSince($0.date) > 180 }
-        if readings.count > 90 { readings.removeFirst(readings.count - 90) }
+        readings.removeAll { next.date.timeIntervalSince($0.date) > Self.retention }
+        if readings.count > Self.capacity { readings.removeFirst(readings.count - Self.capacity) }
+    }
+
+    /// Real readings for a chart; a missing value or a long gap starts a new segment.
+    public func segments(for component: ThermalComponent, at now: Date) -> [ThermalTraceSegment] {
+        var result: [ThermalTraceSegment] = []
+        var current: [ThermalTracePoint] = []
+        func flush() {
+            if !current.isEmpty { result.append(ThermalTraceSegment(points: current)); current = [] }
+        }
+        for reading in readings where (0...Self.retention).contains(now.timeIntervalSince(reading.date)) {
+            guard let value = component == .cpu ? reading.cpu : reading.gpu else { flush(); continue }
+            if let previous = current.last, reading.date.timeIntervalSince(previous.date) > Self.maximumGap { flush() }
+            current.append(ThermalTracePoint(date: reading.date, celsius: value))
+        }
+        flush()
+        return result
     }
 
     func trajectory(snapshot: ThermalSnapshot, cpu: Bool, at now: Date) -> ThermalTrajectory {
@@ -72,7 +108,8 @@ public struct ThermalObservationWindow: Equatable, Sendable {
         var series: [(date: Date, value: Double)] = []
         let currentSeries = cpu ? snapshot.cpuSeries : snapshot.gpuSeries
         for reading in current.readings.reversed() {
-            guard (cpu ? reading.cpuSeries : reading.gpuSeries) == currentSeries, let value = cpu ? reading.cpu : reading.gpu else { break }
+            guard (cpu ? reading.cpuSeries : reading.gpuSeries) == currentSeries, let value = cpu ? reading.cpu : reading.gpu,
+                  series.last.map({ $0.date.timeIntervalSince(reading.date) <= Self.maximumGap }) ?? true else { break }
             series.append((reading.date, value))
         }
         guard let latest = series.first else { return .empty }
