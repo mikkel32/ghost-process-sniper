@@ -1,9 +1,29 @@
 import Foundation
 
 enum RadarStoreSchema {
+    /// Append new versions; never edit a version that has shipped.
+    static let migrations = [
+        // Version 1 is the schema from before versioning. Its statements are
+        // idempotent, so an unversioned file with these tables is stamped v1.
+        SQLiteMigration(
+            version: 1,
+            statements: migrationStatements,
+            addedColumns: [
+                SQLiteAddedColumn(table: "baselines", column: "measurement_version", definition: "INTEGER NOT NULL DEFAULT 0")
+            ]
+        )
+    ]
+
+    /// Tables whose rows expire `incidentRetention` after `created_at`.
+    static let createdAtRetentionTables = [
+        "actions", "kill_operations", "kill_operation_events", "kill_outcome_history",
+        "kill_strategy_history", "kill_signal_outcomes", "kill_graph_deltas",
+        "kill_reclaim_calibration", "kill_exit_events", "predictive_alerts", "recommendation_history"
+    ]
+
+    /// Connection pragmas (WAL, synchronous, busy timeout) are applied by
+    /// SQLiteDatabase.open, because WAL cannot be enabled inside a transaction.
     static let migrationStatements = [
-        "PRAGMA journal_mode = WAL",
-        "PRAGMA synchronous = NORMAL",
         """
         CREATE TABLE IF NOT EXISTS settings(
             key TEXT PRIMARY KEY NOT NULL,
