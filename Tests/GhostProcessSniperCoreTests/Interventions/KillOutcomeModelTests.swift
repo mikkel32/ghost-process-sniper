@@ -18,6 +18,14 @@ final class KillOutcomeModelTests: XCTestCase {
         XCTAssertTrue(forecast.evidenceText.hasPrefix("Stopped cleanly 20 of 20 times, usually within 0."), forecast.evidenceText)
     }
 
+    func testEvidenceCountsEveryCleanStopNotTheDecayedShare() {
+        let outcomes = Self.history(Array(repeating: Self.clean(0.3), count: 9) + [Self.forced()])
+        let forecast = KillOutcomeModel(history: outcomes)
+            .forecast(strategy: .standard, workloadKind: .general, floorSeconds: 2, forceKillDelay: 2)
+        XCTAssertLessThan(forecast.pClean, 0.9, "the latest stop weighs most")
+        XCTAssertTrue(forecast.evidenceText.hasPrefix("Stopped cleanly 9 of 10 times"), forecast.evidenceText)
+    }
+
     func testOneFastOutcomeNeverShortensGrace() {
         let evaluation = PolicyFixture.evaluate(command: "cruncher", name: "cruncher", outcomes: Self.history([Self.clean(0.3)]))
         XCTAssertEqual(evaluation.profile.verificationSchedule.graceSeconds, 2)
@@ -259,6 +267,7 @@ final class KillOutcomeStoreTests: XCTestCase {
         XCTAssertEqual(posterior.cleanWeight, 0.9, accuracy: 1e-9)
         XCTAssertEqual(posterior.totalWeight, 1.9, accuracy: 1e-9)
         XCTAssertEqual(posterior.censoredRun, 1)
+        XCTAssertEqual(posterior.cleanCount, 1)
         XCTAssertEqual(posterior.latencyBuckets.count, 8)
         XCTAssertEqual(history.kind[.standard], posterior, "the kind row saw the same stops")
         let other = try await reopened.killOutcomeHistory(signatureID: "another", devKind: "nodeServer")

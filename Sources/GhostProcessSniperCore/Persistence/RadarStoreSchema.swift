@@ -270,6 +270,7 @@ enum RadarStoreSchema {
             dev_kind TEXT,
             strategy TEXT NOT NULL,
             operation_count INTEGER NOT NULL,
+            clean_count INTEGER NOT NULL,
             clean_weight REAL NOT NULL,
             total_weight REAL NOT NULL,
             latency_buckets TEXT NOT NULL,
@@ -346,7 +347,7 @@ enum RadarStoreQueries {
     /// Outcome posteriors: one row per family and strategy (no dev kind),
     /// one per kind and strategy (no signature) as the family's prior.
     static let killOutcomePosteriorColumns = """
-        signature_id, dev_kind, strategy, operation_count, clean_weight, total_weight,
+        signature_id, dev_kind, strategy, operation_count, clean_count, clean_weight, total_weight,
         latency_buckets, respawn_weight, censored_run, updated_at
         """
 

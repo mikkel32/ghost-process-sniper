@@ -145,12 +145,12 @@ public struct KillOutcomeModel: Sendable {
         let usually = typical.map { ", usually within \(RadarFormat.seconds($0))" } ?? ""
         if signature.observationCount > 0 {
             let count = signature.observationCount
-            let clean = Int((signature.cleanFraction * Double(count)).rounded())
+            let clean = signature.cleanCount
             return "Stopped cleanly \(clean) of \(count) time\(count == 1 ? "" : "s")\(clean > 0 ? usually : "")."
         }
         if kind.observationCount > 0 {
             let count = kind.observationCount
-            let clean = Int((kind.cleanFraction * Double(count)).rounded())
+            let clean = kind.cleanCount
             let similar = [.general, .versionControl].contains(workloadKind) ? "similar processes" : "similar \(workloadKind.label.lowercased())s"
             return "No history for this one yet; \(similar) stopped cleanly \(clean) of \(count) times\(clean > 0 ? usually : "")."
         }

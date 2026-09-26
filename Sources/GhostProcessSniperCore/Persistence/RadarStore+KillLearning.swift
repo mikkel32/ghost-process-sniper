@@ -357,9 +357,10 @@ extension RadarStore {
             try execute(
                 """
                 INSERT INTO kill_calibration_aggregates(id, \(RadarStoreQueries.killOutcomePosteriorColumns))
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     operation_count = excluded.operation_count,
+                    clean_count = excluded.clean_count,
                     clean_weight = excluded.clean_weight,
                     total_weight = excluded.total_weight,
                     latency_buckets = excluded.latency_buckets,
@@ -372,6 +373,7 @@ extension RadarStore {
                 row.devKind.map { .text($0) } ?? .null,
                 .text(observation.strategy.rawValue),
                 .int64(Int64(next.observationCount)),
+                .int64(Int64(next.cleanCount)),
                 .double(next.cleanWeight),
                 .double(next.totalWeight),
                 .text(next.latencyBuckets.map { String($0) }.joined(separator: ",")),
@@ -395,12 +397,13 @@ extension RadarStore {
     private func outcomePosterior(from statement: OpaquePointer?) -> KillOutcomePosterior {
         KillOutcomePosterior(
             observationCount: Int(sqlite3_column_int64(statement, 3)),
-            cleanWeight: sqlite3_column_double(statement, 4),
-            totalWeight: sqlite3_column_double(statement, 5),
-            latencyBuckets: (columnString(statement, 6) ?? "").split(separator: ",").compactMap { Double($0) },
-            respawnRun: Int(sqlite3_column_double(statement, 7)),
-            censoredRun: Int(sqlite3_column_int64(statement, 8)),
-            updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 9))
+            cleanCount: Int(sqlite3_column_int64(statement, 4)),
+            cleanWeight: sqlite3_column_double(statement, 5),
+            totalWeight: sqlite3_column_double(statement, 6),
+            latencyBuckets: (columnString(statement, 7) ?? "").split(separator: ",").compactMap { Double($0) },
+            respawnRun: Int(sqlite3_column_double(statement, 8)),
+            censoredRun: Int(sqlite3_column_int64(statement, 9)),
+            updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 10))
         )
     }
 

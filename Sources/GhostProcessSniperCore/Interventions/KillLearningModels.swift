@@ -93,6 +93,8 @@ public struct KillOutcomePosterior: Codable, Equatable, Sendable {
     static let openBucketCeiling: TimeInterval = 32
 
     public private(set) var observationCount: Int
+    /// Clean stops, undecayed, so the evidence can state a true count.
+    public private(set) var cleanCount: Int
     public private(set) var cleanWeight: Double
     public private(set) var totalWeight: Double
     public private(set) var latencyBuckets: [Double]
@@ -103,11 +105,12 @@ public struct KillOutcomePosterior: Codable, Equatable, Sendable {
     public private(set) var updatedAt: Date?
 
     public static let empty = KillOutcomePosterior(
-        observationCount: 0, cleanWeight: 0, totalWeight: 0, latencyBuckets: [], respawnRun: 0, censoredRun: 0, updatedAt: nil
+        observationCount: 0, cleanCount: 0, cleanWeight: 0, totalWeight: 0, latencyBuckets: [], respawnRun: 0, censoredRun: 0, updatedAt: nil
     )
 
     public init(
         observationCount: Int,
+        cleanCount: Int,
         cleanWeight: Double,
         totalWeight: Double,
         latencyBuckets: [Double],
@@ -116,6 +119,7 @@ public struct KillOutcomePosterior: Codable, Equatable, Sendable {
         updatedAt: Date?
     ) {
         self.observationCount = max(0, observationCount)
+        self.cleanCount = min(self.observationCount, max(0, cleanCount))
         self.totalWeight = max(0, totalWeight)
         self.cleanWeight = min(self.totalWeight, max(0, cleanWeight))
         let count = Self.latencyEdges.count + 1
@@ -126,7 +130,6 @@ public struct KillOutcomePosterior: Codable, Equatable, Sendable {
     }
 
     public var hasEvidence: Bool { totalWeight > 0 }
-    public var cleanFraction: Double { totalWeight > 0 ? cleanWeight / totalWeight : 0 }
 
     public func updating(with observation: KillOutcomeObservation, at date: Date) -> KillOutcomePosterior {
         var next = self
@@ -138,6 +141,7 @@ public struct KillOutcomePosterior: Codable, Equatable, Sendable {
         case .clean, .dirty:
             let clean = observation.outcome == .clean
             next.observationCount += 1
+            next.cleanCount += clean ? 1 : 0
             next.cleanWeight = cleanWeight * Self.decay + (clean ? 1 : 0)
             next.totalWeight = totalWeight * Self.decay + 1
             next.latencyBuckets = latencyBuckets.map { $0 * Self.decay }
@@ -183,9 +187,9 @@ public struct KillOutcomePosterior: Codable, Equatable, Sendable {
     func addingCleanExits(of stubborn: KillOutcomePosterior) -> KillOutcomePosterior {
         guard stubborn.observationCount > 0 else { return self }
         let allCensored = stubborn.censoredRun == stubborn.observationCount
-        let cleanStops = Int((stubborn.cleanFraction * Double(stubborn.observationCount)).rounded())
         return KillOutcomePosterior(
-            observationCount: observationCount + cleanStops,
+            observationCount: observationCount + stubborn.cleanCount,
+            cleanCount: cleanCount + stubborn.cleanCount,
             cleanWeight: cleanWeight + stubborn.cleanWeight,
             totalWeight: totalWeight + stubborn.cleanWeight,
             latencyBuckets: latencyBuckets,
