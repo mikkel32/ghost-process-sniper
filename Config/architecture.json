@@ -11,7 +11,7 @@
     "GhostProcessSniper/Features/Interventions/KillPreviewSheet.swift": 635,
     "GhostProcessSniperCore/Persistence/RadarStore.swift": 1072,
     "GhostProcessSniperCore/Sampling/ProcessSampler.swift": 814,
-    "GhostProcessSniperCore/Intelligence/ProcessFamilyBuilder.swift": 824,
+    "GhostProcessSniperCore/Intelligence/ProcessFamilyBuilder.swift": 781,
     "GhostProcessSniperCore/Domain/ScannerModels.swift": 612,
     "GhostProcessSniperCore/Configuration/SettingsPerformanceModels.swift": 631,
     "GhostProcessSniperCore/Intelligence/ForecastModels.swift": 767

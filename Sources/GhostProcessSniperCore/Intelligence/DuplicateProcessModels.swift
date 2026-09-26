@@ -174,7 +174,7 @@ public struct DuplicateClusterDetector: Sendable {
                 classifications[process.pid] ?? classifier.classification(for: process)
             }
             let bestClassification = classifications.max { lhs, rhs in
-                classificationPriority(lhs) < classificationPriority(rhs)
+                lhs.groupingPriority < rhs.groupingPriority
             } ?? DevClassification(kind: .cliTool, confidence: 0.2, reason: "matching executable")
             let independentRoots = independentRootCount(for: members, children: children)
             clusters.append(
@@ -275,20 +275,6 @@ public struct DuplicateClusterDetector: Sendable {
             lower.hasPrefix("/usr/libexec/") ||
             lower.hasPrefix("/library/apple/") ||
             lower.hasPrefix("/applications/") && !lower.contains("visual studio code") && !lower.contains("cursor") && !lower.contains("codex")
-    }
-
-    private func classificationPriority(_ classification: DevClassification) -> Double {
-        let kindBoost: Double = switch classification.kind {
-        case .unknownHeavy:
-            0
-        case .cliTool:
-            0.03
-        case .electronApp, .localModelRunner, .dockerHelper:
-            0.2
-        default:
-            0.12
-        }
-        return classification.confidence + kindBoost
     }
 
     private static func sortClusters(_ lhs: DuplicateProcessCluster, _ rhs: DuplicateProcessCluster) -> Bool {

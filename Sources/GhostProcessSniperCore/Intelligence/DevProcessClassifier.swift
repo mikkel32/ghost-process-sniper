@@ -53,6 +53,22 @@ public struct DevClassification: Equatable, Sendable {
         self.confidence = confidence
         self.reason = reason
     }
+
+    /// Picks the representative classification of a group: kinds that own
+    /// whole process trees outrank generic CLI hits of equal confidence.
+    var groupingPriority: Double {
+        let kindBoost: Double = switch kind {
+        case .unknownHeavy:
+            0
+        case .cliTool:
+            0.03
+        case .electronApp, .localModelRunner, .dockerHelper:
+            0.2
+        default:
+            0.12
+        }
+        return confidence + kindBoost
+    }
 }
 
 public struct DevProcessClassifier: Sendable {

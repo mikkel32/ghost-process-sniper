@@ -443,42 +443,10 @@ public struct RadarPipeline: Sendable {
             scoringCache.store(scored, context: context)
             return scored
         }
-        .sorted(by: sortScoredFamilies)
+        .sorted(by: FamilyPriorityOrder.areInIncreasingOrder)
         let versioned = enriched.map { versionedFamily($0, diff: diff, now: now) }
         let stable = hysteresis.apply(to: versioned, now: now)
         return (stable, Date().timeIntervalSince(scoreStart) * 1_000)
-    }
-
-    private func sortScoredFamilies(_ lhs: ProcessFamily, _ rhs: ProcessFamily) -> Bool {
-        if lhs.forecast.state != rhs.forecast.state {
-            return lhs.forecast.state > rhs.forecast.state
-        }
-        if lhs.score.level != rhs.score.level {
-            return lhs.score.level > rhs.score.level
-        }
-        if lhs.alertState.kind != rhs.alertState.kind {
-            return alertPriority(lhs.alertState.kind) > alertPriority(rhs.alertState.kind)
-        }
-        if lhs.score.heat.value != rhs.score.heat.value {
-            return lhs.score.heat.value > rhs.score.heat.value
-        }
-        if lhs.score.value != rhs.score.value {
-            return lhs.score.value > rhs.score.value
-        }
-        if lhs.totalPhysicalFootprintBytes != rhs.totalPhysicalFootprintBytes {
-            return lhs.totalPhysicalFootprintBytes > rhs.totalPhysicalFootprintBytes
-        }
-        return lhs.totalCPUPercent > rhs.totalCPUPercent
-    }
-
-    private func alertPriority(_ kind: AlertStateKind) -> Int {
-        switch kind {
-        case .new: 4
-        case .recurring: 3
-        case .normal: 2
-        case .snoozed: 1
-        case .ignored: 0
-        }
     }
 
     private mutating func versionedFamily(_ family: ProcessFamily, diff: RadarSnapshotDiff, now: Date) -> ProcessFamily {

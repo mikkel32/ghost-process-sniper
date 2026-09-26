@@ -159,7 +159,7 @@ public struct ProcessFamilyBuilder: Sendable {
                     now: now
                 )
             }
-            .sorted(by: sortFamilies)
+            .sorted(by: FamilyPriorityOrder.areInIncreasingOrder)
         let resolvedClusters = DuplicateFamilyResolver.resolve(duplicateSet.clusters, families: builtFamilies)
         var resolvedClusterByIdentity: [ProcessIdentity: DuplicateProcessCluster] = [:]
         for cluster in resolvedClusters {
@@ -209,7 +209,7 @@ public struct ProcessFamilyBuilder: Sendable {
         } else if let top, top.score.level == .watch {
             statusText = "Watching"
         } else if let top, top.totalPhysicalFootprintBytes > 0 {
-            statusText = formatCompactBytes(top.totalPhysicalFootprintBytes)
+            statusText = RadarFormat.bytes(top.totalPhysicalFootprintBytes)
         } else {
             statusText = "Quiet"
         }
@@ -322,7 +322,7 @@ public struct ProcessFamilyBuilder: Sendable {
         let familyConfidence = members.map { confidence[$0.pid, default: 0] }.max() ?? 0
         let familyClassification = members
             .compactMap { classifications[$0.pid] }
-            .max { classificationPriority($0) < classificationPriority($1) }
+            .max { $0.groupingPriority < $1.groupingPriority }
         let duplicateCluster = bestDuplicateCluster(for: members, clustersByIdentity: duplicateClusterByIdentity)
         let signature = ProcessSignature.from(root: root)
         // Baselines intentionally learn by logical signature, but live trend
@@ -718,42 +718,6 @@ public struct ProcessFamilyBuilder: Sendable {
         return value
     }
 
-    private func sortFamilies(_ lhs: ProcessFamily, _ rhs: ProcessFamily) -> Bool {
-        if lhs.forecast.state != rhs.forecast.state {
-            return lhs.forecast.state > rhs.forecast.state
-        }
-        if lhs.score.level != rhs.score.level {
-            return lhs.score.level > rhs.score.level
-        }
-        if lhs.score.heat.value != rhs.score.heat.value {
-            return lhs.score.heat.value > rhs.score.heat.value
-        }
-        if lhs.score.value != rhs.score.value {
-            return lhs.score.value > rhs.score.value
-        }
-        if lhs.totalPhysicalFootprintBytes != rhs.totalPhysicalFootprintBytes {
-            return lhs.totalPhysicalFootprintBytes > rhs.totalPhysicalFootprintBytes
-        }
-        if lhs.totalCPUPercent != rhs.totalCPUPercent {
-            return lhs.totalCPUPercent > rhs.totalCPUPercent
-        }
-        return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-    }
-
-    private func classificationPriority(_ classification: DevClassification) -> Double {
-        let kindBoost: Double = switch classification.kind {
-        case .unknownHeavy:
-            0
-        case .cliTool:
-            0.03
-        case .electronApp, .localModelRunner, .dockerHelper:
-            0.2
-        default:
-            0.12
-        }
-        return classification.confidence + kindBoost
-    }
-
     private func sameAppBundle(_ lhs: String, _ rhs: String) -> Bool {
         guard let left = appBundlePrefix(lhs), let right = appBundlePrefix(rhs) else {
             return false
@@ -772,13 +736,6 @@ public struct ProcessFamilyBuilder: Sendable {
             return nil
         }
         return String(path[..<range.upperBound]).lowercased()
-    }
-
-    private func formatCompactBytes(_ bytes: UInt64) -> String {
-        if bytes >= 1_073_741_824 {
-            return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
-        }
-        return "\(max(1, Int(Double(bytes) / 1_048_576))) MB"
     }
 }
 
