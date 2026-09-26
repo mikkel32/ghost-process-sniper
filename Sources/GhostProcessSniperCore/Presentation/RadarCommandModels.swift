@@ -142,8 +142,10 @@ public struct IncidentQuery: Equatable, Sendable {
         let filtered = incidents.filter { matches($0, query: query) }
         let sorted: [RadarIncident]
         if sort == .recurrence {
-            let recurrenceCounts = Dictionary(grouping: filtered, by: { $0.signature.id })
-                .mapValues(\.count)
+            // A reopened episode is one row with several hits.
+            let recurrenceCounts = filtered.reduce(into: [String: Int]()) { counts, incident in
+                counts[incident.signature.id, default: 0] += max(1, incident.occurrenceCount)
+            }
             sorted = filtered.sorted { lhs, rhs in
                 let lhsCount = recurrenceCounts[lhs.signature.id, default: 0]
                 let rhsCount = recurrenceCounts[rhs.signature.id, default: 0]

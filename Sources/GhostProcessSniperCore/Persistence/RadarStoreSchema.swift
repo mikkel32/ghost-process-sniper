@@ -311,6 +311,47 @@ enum RadarStoreQueries {
         LIMIT ?
         """
 
+    static let loadEpisodes = """
+        SELECT id, signature_id, level, max_score, memory_bytes, last_seen_at, resolved_at
+        FROM incidents
+        WHERE resolved_at IS NULL OR resolved_at >= ?
+        """
+
+    static let insertIncident = """
+        INSERT INTO incidents(id, signature_id, display_name, canonical_path, command_fingerprint, family_name,
+                              level, max_score, memory_bytes, cpu_percent, leak_velocity, reasons_json,
+                              started_at, last_seen_at, resolved_at, occurrence_count)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)
+        """
+
+    static let refreshIncident = """
+        UPDATE incidents
+        SET level = ?, max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
+            cpu_percent = ?, leak_velocity = ?, last_seen_at = ?
+        WHERE id = ?
+        """
+
+    static let escalateIncident = """
+        UPDATE incidents
+        SET level = ?, max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
+            cpu_percent = ?, leak_velocity = ?, last_seen_at = ?, reasons_json = ?
+        WHERE id = ?
+        """
+
+    static let reopenIncident = """
+        UPDATE incidents
+        SET resolved_at = NULL, occurrence_count = occurrence_count + 1, last_seen_at = ?, level = ?,
+            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?), cpu_percent = ?, leak_velocity = ?
+        WHERE id = ?
+        """
+
+    static let closeIncident = """
+        UPDATE incidents
+        SET resolved_at = ?, last_seen_at = MAX(last_seen_at, ?),
+            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?)
+        WHERE id = ?
+        """
+
     static let recentForecasts = """
         SELECT signature_id, state, confidence, eta_seconds, why_now, generated_at
         FROM forecasts

@@ -153,7 +153,7 @@ public actor RadarStore {
                 var forecastCandidates = 0
                 for model in models {
                     try baselineBook.learn(from: model.families, at: model.generatedAt)
-                    try incidentLedger.record(model.families, at: model.generatedAt)
+                    try incidentLedger.stage(model.families, at: model.generatedAt)
                     for family in model.families.prefix(64) {
                         forecastCandidates += 1
                         latestForecastFamilies[family.signature.id] = family
@@ -166,17 +166,20 @@ public actor RadarStore {
                         forecastCandidates: forecastCandidates
                     )
                 }
+                try incidentLedger.writeStaged()
                 for action in actions {
                     try writeAction(action)
                 }
             }
             baselineBook.commitStaged()
+            incidentLedger.commitStaged()
             forecastLedger.commitStaged()
             lastFlushDate = now
             lastFlushMilliseconds = Date().timeIntervalSince(flushStart) * 1_000
             lastErrorMessage = nil
         } catch {
             baselineBook.discardStaged()
+            incidentLedger.discardStaged()
             forecastLedger.discardStaged()
             let retry = models + pendingModels
             pendingModels = Array(retry.suffix(Self.maximumBacklog))

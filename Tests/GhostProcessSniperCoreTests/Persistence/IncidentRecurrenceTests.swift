@@ -24,11 +24,13 @@ final class IncidentRecurrenceTests: XCTestCase {
         XCTAssertEqual(during.recentIncidentCounts[hot.signature.id, default: 0], 0,
                        "the first episode must not count itself as a recurrence")
 
-        try await persist(family(level: .quiet, at: start.addingTimeInterval(10)), store: store, at: start.addingTimeInterval(10))
-        let again = family(level: .hot, at: start.addingTimeInterval(20))
-        try await persist(again, store: store, at: start.addingTimeInterval(20))
+        // Episodes close after 90 s of calm and reopen within 10 minutes, so
+        // a separate episode needs a longer gap.
+        try await persist(family(level: .quiet, at: start.addingTimeInterval(100)), store: store, at: start.addingTimeInterval(100))
+        let again = family(level: .hot, at: start.addingTimeInterval(1_200))
+        try await persist(again, store: store, at: start.addingTimeInterval(1_200))
 
-        let second = try await store.context(for: [again], settings: .smart, now: start.addingTimeInterval(23))
+        let second = try await store.context(for: [again], settings: .smart, now: start.addingTimeInterval(1_203))
         XCTAssertEqual(second.recentIncidentCounts[again.signature.id], 1)
     }
 
