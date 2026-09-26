@@ -49,7 +49,7 @@ final class NativeListeningPortTests: XCTestCase {
         address.sin_port = 0
         let length = socklen_t(MemoryLayout<sockaddr_in>.size)
         let bound = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, length) }
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(listener, $0, length) }
         }
         guard bound == 0, listen(listener, 4) == 0 else { throw SocketFailure(call: "listen") }
         let listenerPort = try boundPort(listener)
@@ -59,7 +59,7 @@ final class NativeListeningPortTests: XCTestCase {
         defer { close(client) }
         address.sin_port = in_port_t(UInt16(listenerPort).bigEndian)
         let connected = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, length) }
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(client, $0, length) }
         }
         guard connected == 0 else { throw SocketFailure(call: "connect") }
         let accepted = accept(listener, nil, nil)
