@@ -3,9 +3,8 @@ import Darwin
 
 public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public var id: ProcessIdentity { root.identity }
-    public var familyKey: String {
-        "\(signature.id)|pid:\(root.identity.pid)|start:\(root.identity.startTimeSeconds).\(root.identity.startTimeMicroseconds)"
-    }
+    /// Built once: every cache, hysteresis and version map looks it up.
+    public let familyKey: String
 
     public let root: ProcessMetrics
     public let members: [ProcessMetrics]
@@ -16,23 +15,23 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public let devConfidence: Double
     public let commandHints: [String]
     public let trend: TrendMetrics
-    public let score: GhostScore
+    public private(set) var score: GhostScore
     public let ownedIdentities: [ProcessIdentity]
     public let protectedPIDs: [Int32]
     public let signature: ProcessSignature
-    public let baseline: FamilyBaseline?
+    public private(set) var baseline: FamilyBaseline?
     public let forensics: ProcessForensics
-    public let suggestions: [RadarActionSuggestion]
-    public let alertState: AlertState
-    public let recentIncidentCount: Int
-    public let forecast: RiskForecast
-    public let signatureVersion: UInt64
-    public let metricsVersion: UInt64
-    public let forensicsFreshness: Date?
-    public let lastScoredAt: Date?
-    public let classification: DevClassification?
-    public let duplicateCluster: DuplicateProcessCluster?
-    public let hardwareSignals: [HardwareOffenderSignal]
+    public private(set) var suggestions: [RadarActionSuggestion]
+    public private(set) var alertState: AlertState
+    public private(set) var recentIncidentCount: Int
+    public private(set) var forecast: RiskForecast
+    public private(set) var signatureVersion: UInt64
+    public private(set) var metricsVersion: UInt64
+    public private(set) var forensicsFreshness: Date?
+    public private(set) var lastScoredAt: Date?
+    public private(set) var classification: DevClassification?
+    public private(set) var duplicateCluster: DuplicateProcessCluster?
+    public private(set) var hardwareSignals: [HardwareOffenderSignal]
     /// Measurement coverage at build time.
     public let coverage: FamilyMeasurementCoverage
 
@@ -81,7 +80,9 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.score = score
         self.ownedIdentities = ownedIdentities
         self.protectedPIDs = protectedPIDs
-        self.signature = signature ?? ProcessSignature.from(root: root)
+        let signature = signature ?? ProcessSignature.from(root: root)
+        self.signature = signature
+        self.familyKey = "\(signature.id)|pid:\(root.identity.pid)|start:\(root.identity.startTimeSeconds).\(root.identity.startTimeMicroseconds)"
         self.baseline = baseline
         self.forensics = forensics ?? ProcessFamily.aggregateForensics(from: members)
         self.suggestions = suggestions
@@ -130,35 +131,22 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         duplicateCluster: DuplicateProcessCluster? = nil,
         hardwareSignals: [HardwareOffenderSignal]? = nil
     ) -> ProcessFamily {
-        ProcessFamily(
-            root: root,
-            members: members,
-            totalResidentMemoryBytes: totalResidentMemoryBytes,
-            totalPhysicalFootprintBytes: totalPhysicalFootprintBytes,
-            totalCPUPercent: totalCPUPercent,
-            totalGPUPercent: totalGPUPercent,
-            devConfidence: devConfidence,
-            commandHints: commandHints,
-            trend: trend,
-            score: score ?? self.score,
-            ownedIdentities: ownedIdentities,
-            protectedPIDs: protectedPIDs,
-            signature: signature,
-            baseline: baseline ?? self.baseline,
-            forensics: forensics,
-            suggestions: suggestions ?? self.suggestions,
-            alertState: alertState ?? self.alertState,
-            recentIncidentCount: recentIncidentCount ?? self.recentIncidentCount,
-            forecast: forecast ?? self.forecast,
-            signatureVersion: signatureVersion ?? self.signatureVersion,
-            metricsVersion: metricsVersion ?? self.metricsVersion,
-            forensicsFreshness: forensicsFreshness ?? self.forensicsFreshness,
-            lastScoredAt: lastScoredAt ?? self.lastScoredAt,
-            classification: classification ?? self.classification,
-            duplicateCluster: duplicateCluster ?? self.duplicateCluster,
-            hardwareSignals: hardwareSignals ?? self.hardwareSignals,
-            coverage: coverage
-        )
+        // A copy keeps the measured totals, forensics, coverage and key.
+        var copy = self
+        if let score { copy.score = score }
+        if let baseline { copy.baseline = baseline }
+        if let suggestions { copy.suggestions = suggestions }
+        if let alertState { copy.alertState = alertState }
+        if let recentIncidentCount { copy.recentIncidentCount = recentIncidentCount }
+        if let forecast { copy.forecast = forecast }
+        if let signatureVersion { copy.signatureVersion = signatureVersion }
+        if let metricsVersion { copy.metricsVersion = metricsVersion }
+        if let forensicsFreshness { copy.forensicsFreshness = forensicsFreshness }
+        if let lastScoredAt { copy.lastScoredAt = lastScoredAt }
+        if let classification { copy.classification = classification }
+        if let duplicateCluster { copy.duplicateCluster = duplicateCluster }
+        if let hardwareSignals { copy.hardwareSignals = hardwareSignals }
+        return copy
     }
 
     private static func aggregateForensics(from members: [ProcessMetrics]) -> ProcessForensics {

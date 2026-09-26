@@ -45,11 +45,11 @@ extension MemoryPatternAnalysis {
         // robust trend moves less than the band itself; a clean climb on a
         // large process is still a climb.
         if range < 16 || (range < mean * 0.03 && abs(netMegabytes) < max(16, 2 * noise)) {
-            return result(.flat, 0.9, String(format: "Memory holds within %.0f MB of %.0f MB", range, mean))
+            return result(.flat, 0.9, "Memory holds within \(RadarFormat.fixed0(range)) MB of \(RadarFormat.fixed0(mean)) MB")
         }
 
         if netMegabytes < -max(16, mean * 0.03), trend.upper < 0 {
-            return result(.declining, 0.8, String(format: "Released %.0f MB across the window", -netMegabytes))
+            return result(.declining, 0.8, "Released \(RadarFormat.fixed0(-netMegabytes)) MB across the window")
         }
 
         // One jump that dominates the growth beyond noise is an allocation
@@ -60,7 +60,7 @@ extension MemoryPatternAnalysis {
         let largestStep = significantRises.max() ?? 0
         if totalRise > 0, largestStep >= totalRise * 0.7, largestStep >= 32 {
             return result(.stepJump, min(1, largestStep / totalRise),
-                          String(format: "One %.0f MB step accounts for the growth", largestStep))
+                          "One \(RadarFormat.fixed0(largestStep)) MB step accounts for the growth")
         }
 
         let dips = RobustTrend.dips(points, threshold: dipThreshold(noise: noise, range: range))
@@ -73,7 +73,7 @@ extension MemoryPatternAnalysis {
                 return result(
                     .risingFloor,
                     min(1, floorSlope * floorSpan / max(1, medianAmplitude)),
-                    String(format: "Reclaims in cycles, but its floor rises %.0f MB/min", floorSlope),
+                    "Reclaims in cycles, but its floor rises \(RadarFormat.fixed0(floorSlope)) MB/min",
                     floorSlope: floorSlope
                 )
             }
@@ -86,10 +86,10 @@ extension MemoryPatternAnalysis {
 
         if trend.slope > 0, fitQuality >= 0.7 || (fitQuality >= 0.5 && trend.lower > 0) {
             return result(.steadyClimb, fitQuality,
-                          String(format: "Monotonic growth of %.0f MB with little reclaim", max(0, netMegabytes)))
+                          "Monotonic growth of \(RadarFormat.fixed0(max(0, netMegabytes))) MB with little reclaim")
         }
 
-        return result(.volatile, 0.5, String(format: "Irregular swings across a %.0f MB range", range))
+        return result(.volatile, 0.5, "Irregular swings across a \(RadarFormat.fixed0(range)) MB range")
     }
 
     // A reclaim must be larger than jitter could explain. When the swings

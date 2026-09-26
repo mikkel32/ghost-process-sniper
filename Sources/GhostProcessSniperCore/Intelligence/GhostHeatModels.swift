@@ -217,7 +217,7 @@ public enum GhostHeatModel {
             let memoryMultiple = baseline.memoryMultiple(for: family.totalPhysicalFootprintBytes)
             if baseline.memoryZScore(for: family.totalPhysicalFootprintBytes) >= 3, memoryMultiple >= 1.3 {
                 heat += min(14, (memoryMultiple - 1) * 7)
-                evidence.append(String(format: "Memory is %.1fx this family's learned normal", memoryMultiple))
+                evidence.append("Memory is \(RadarFormat.fixed1(memoryMultiple))x this family's learned normal")
                 confidence += 0.08
                 if memoryMultiple >= 2.2 { contextVotes += 1 }
                 if memoryMultiple >= 3 {
@@ -319,12 +319,12 @@ struct BaselineCPUAnomaly {
         self.multiple = multiple
         // "200x usual CPU" says less than the two numbers it divides.
         if baseline.meanCPUPercent < 5 {
-            let comparison = String(format: "%.0f%% CPU vs about %.1f%% normally", cpuPercent, baseline.meanCPUPercent)
+            let comparison = "\(RadarFormat.fixed0(cpuPercent))% CPU vs about \(RadarFormat.fixed1(baseline.meanCPUPercent))% normally"
             reason = comparison
             evidence = "CPU is at " + comparison
         } else {
-            reason = String(format: "%.1fx usual CPU", multiple)
-            evidence = String(format: "CPU is %.1fx this family's learned normal", multiple)
+            reason = "\(RadarFormat.fixed1(multiple))x usual CPU"
+            evidence = "CPU is \(RadarFormat.fixed1(multiple))x this family's learned normal"
         }
     }
 }

@@ -1,31 +1,67 @@
 import Foundation
 
-/// The one ranking shared by the family builder and the scoring pipeline:
+/// The one ranking the scoring pipeline presents families in:
 /// most urgent first, then by name so equal families never reshuffle.
 enum FamilyPriorityOrder {
     static func areInIncreasingOrder(_ lhs: ProcessFamily, _ rhs: ProcessFamily) -> Bool {
-        if lhs.forecast.state != rhs.forecast.state {
-            return lhs.forecast.state > rhs.forecast.state
+        let left = RankKey(lhs)
+        let right = RankKey(rhs)
+        if left != right {
+            return left.ranksBefore(right)
         }
-        if lhs.score.level != rhs.score.level {
-            return lhs.score.level > rhs.score.level
+        return namesInIncreasingOrder(lhs, rhs)
+    }
+
+    /// Sorts through small numeric keys and indices: moving whole families
+    /// around inside the sort cost more than scoring them.
+    static func sorted(_ families: [ProcessFamily]) -> [ProcessFamily] {
+        let keys = families.map(RankKey.init)
+        let order = families.indices.sorted { lhs, rhs in
+            if keys[lhs] != keys[rhs] {
+                return keys[lhs].ranksBefore(keys[rhs])
+            }
+            return namesInIncreasingOrder(families[lhs], families[rhs])
         }
-        if lhs.alertState.kind != rhs.alertState.kind {
-            return alertPriority(lhs.alertState.kind) > alertPriority(rhs.alertState.kind)
+        return order.map { families[$0] }
+    }
+
+    private struct RankKey: Equatable {
+        let forecast: Int
+        let level: Int
+        let alert: Int
+        let heat: Double
+        let score: Double
+        let footprint: UInt64
+        let cpu: Double
+
+        init(_ family: ProcessFamily) {
+            forecast = family.forecast.state.severityRank
+            level = family.score.level.rawValue
+            alert = FamilyPriorityOrder.alertPriority(family.alertState.kind)
+            heat = family.score.heat.value
+            score = family.score.value
+            footprint = family.totalPhysicalFootprintBytes
+            cpu = family.totalCPUPercent
         }
-        if lhs.score.heat.value != rhs.score.heat.value {
-            return lhs.score.heat.value > rhs.score.heat.value
+
+        func ranksBefore(_ other: RankKey) -> Bool {
+            if forecast != other.forecast { return forecast > other.forecast }
+            if level != other.level { return level > other.level }
+            if alert != other.alert { return alert > other.alert }
+            if heat != other.heat { return heat > other.heat }
+            if score != other.score { return score > other.score }
+            if footprint != other.footprint { return footprint > other.footprint }
+            return cpu > other.cpu
         }
-        if lhs.score.value != rhs.score.value {
-            return lhs.score.value > rhs.score.value
+    }
+
+    private static func namesInIncreasingOrder(_ lhs: ProcessFamily, _ rhs: ProcessFamily) -> Bool {
+        switch lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) {
+        case .orderedAscending: return true
+        case .orderedDescending: return false
+        // The builder emits families in no particular order.
+        case .orderedSame: return lhs.familyKey < rhs.familyKey
         }
-        if lhs.totalPhysicalFootprintBytes != rhs.totalPhysicalFootprintBytes {
-            return lhs.totalPhysicalFootprintBytes > rhs.totalPhysicalFootprintBytes
-        }
-        if lhs.totalCPUPercent != rhs.totalCPUPercent {
-            return lhs.totalCPUPercent > rhs.totalCPUPercent
-        }
-        return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
     }
 
     private static func alertPriority(_ kind: AlertStateKind) -> Int {

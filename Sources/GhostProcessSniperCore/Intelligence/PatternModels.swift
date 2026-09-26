@@ -237,7 +237,7 @@ public struct FamilyVerdict: Equatable, Sendable {
             if baselineMultiple >= 2 {
                 return FamilyVerdict(
                     headline: "Above its normal",
-                    detail: String(format: "Using %.1fx its usual memory. %@", baselineMultiple, sentence(forecast.whyNow)),
+                    detail: "Using \(RadarFormat.fixed1(baselineMultiple))x its usual memory. \(sentence(forecast.whyNow))",
                     level: .watch,
                     systemImage: "arrow.up.right.circle"
                 )
@@ -260,7 +260,7 @@ public struct FamilyVerdict: Equatable, Sendable {
             if baselineMultiple >= 2 {
                 return FamilyVerdict(
                     headline: "Above its normal",
-                    detail: String(format: "Using %.1fx its usual memory but otherwise calm.", baselineMultiple),
+                    detail: "Using \(RadarFormat.fixed1(baselineMultiple))x its usual memory but otherwise calm.",
                     level: .watch,
                     systemImage: "arrow.up.right.circle"
                 )

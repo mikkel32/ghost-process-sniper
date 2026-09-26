@@ -150,15 +150,14 @@ public struct RadarPipeline: Sendable {
         if metricsVersions.count > familyKeys.count + 64 {
             metricsVersions = metricsVersions.filter { familyKeys.contains($0.key) }
         }
-        let enriched = families.map { family in
+        let enriched = FamilyPriorityOrder.sorted(families.map { family in
             if let cached = scoringCache.cachedFamily(for: family, context: context, now: now) {
                 return cached
             }
             let scored = intelligence.enrich(family: family, context: context, settings: settings, now: now)
             scoringCache.store(scored, from: family, context: context, now: now)
             return scored
-        }
-        .sorted(by: FamilyPriorityOrder.areInIncreasingOrder)
+        })
         let versioned = enriched.map { versionedFamily($0, diff: diff, now: now) }
         let stable = continuity.apply(to: hysteresis.apply(to: versioned, now: now))
         return (stable, Date().timeIntervalSince(scoreStart) * 1_000)

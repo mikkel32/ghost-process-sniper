@@ -150,18 +150,21 @@ public struct DuplicateClusterDetector: Sendable {
         processes: [ProcessMetrics],
         classifications: [Int32: DevClassification],
         children: [Int32: [ProcessMetrics]] = [:],
-        now: Date = Date()
+        now: Date = Date(),
+        candidateKey: ((ProcessMetrics) -> DuplicateClusterKey?)? = nil
     ) -> DuplicateClusterSet {
         let started = Date()
         var buckets: [DuplicateClusterKey: [ProcessMetrics]] = [:]
         buckets.reserveCapacity(processes.count / 2)
 
         for process in processes {
-            let classification = classifications[process.pid] ?? classifier.classification(for: process)
-            guard shouldConsider(process, classification: classification) else {
-                continue
+            let key: DuplicateClusterKey?
+            if let candidateKey {
+                key = candidateKey(process)
+            } else {
+                key = self.candidateKey(for: process, classification: classifications[process.pid] ?? classifier.classification(for: process))
             }
-            guard let key = key(for: process) else {
+            guard let key else {
                 continue
             }
             buckets[key, default: []].append(process)
@@ -197,6 +200,12 @@ public struct DuplicateClusterDetector: Sendable {
         )
     }
 
+    /// The cluster key, or nil when the process is not a duplicate candidate.
+    /// It depends only on static process facts, so callers may cache it.
+    func candidateKey(for process: ProcessMetrics, classification: DevClassification) -> DuplicateClusterKey? {
+        shouldConsider(process, classification: classification) ? key(for: process) : nil
+    }
+
     private func shouldConsider(_ process: ProcessMetrics, classification: DevClassification) -> Bool {
         guard process.userID == currentUserID else {
             return false
@@ -224,7 +233,7 @@ public struct DuplicateClusterDetector: Sendable {
             return DuplicateClusterKey(
                 kind: .executablePath,
                 value: path,
-                displayName: URL(fileURLWithPath: path).lastPathComponent.ifNotEmpty ?? process.name
+                displayName: path.split(separator: "/").last.map(String.init)?.ifNotEmpty ?? process.name
             )
         }
         let name = normalizedToken(process.name)

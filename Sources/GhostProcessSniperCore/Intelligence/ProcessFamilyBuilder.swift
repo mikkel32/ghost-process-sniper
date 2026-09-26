@@ -38,7 +38,7 @@ public struct ProcessFamilyBuildResult: Sendable {
 public struct ProcessFamilyBuilder: Sendable {
     private let classifier: DevProcessClassifier
     private let currentUserID: UInt32
-    private let classificationCache = LockedDevClassificationCache()
+    private let staticFacts = ProcessStaticFactsCache()
     private let duplicateDetector: DuplicateClusterDetector
     private let hardwareDetector: HardwareOffenderDetector
     private let evidenceScorer = FamilyEvidenceScorer()
@@ -75,31 +75,39 @@ public struct ProcessFamilyBuilder: Sendable {
     ) -> ProcessFamilyBuildResult {
         var byPID: [Int32: ProcessMetrics] = [:]
         var children: [Int32: [ProcessMetrics]] = [:]
+        var facts: [Int32: ProcessStaticFacts] = [:]
         var classifications: [Int32: DevClassification] = [:]
         var confidence: [Int32: Double] = [:]
         var candidates: [ProcessMetrics] = []
         byPID.reserveCapacity(processes.count)
         children.reserveCapacity(processes.count / 2)
+        facts.reserveCapacity(processes.count)
         classifications.reserveCapacity(processes.count)
         confidence.reserveCapacity(processes.count)
         candidates.reserveCapacity(min(processes.count, 128))
 
-        for process in processes {
+        let staticFacts = staticFacts.facts(for: processes, make: makeStaticFacts)
+        for (process, processFacts) in zip(processes, staticFacts) {
             byPID[process.pid] = process
             children[process.parentPID, default: []].append(process)
-            let classification = classification(for: process)
-            classifications[process.pid] = classification
-            confidence[process.pid] = classification.confidence
+            facts[process.pid] = processFacts
+            classifications[process.pid] = processFacts.classification
+            confidence[process.pid] = processFacts.classification.confidence
         }
 
         let duplicateSet = duplicateDetector.detect(
             processes: processes,
             classifications: classifications,
             children: children,
-            now: now
+            now: now,
+            candidateKey: { facts[$0.pid]?.duplicateKey }
         )
         let hardwareStart = Date()
-        let hardwareProfiles = hardwareDetector.detect(processes: processes, settings: settings)
+        let hardwareProfiles = hardwareDetector.detect(
+            processes: processes,
+            settings: settings,
+            isEligible: { facts[$0.pid]?.isHardwareEligible ?? false }
+        )
         let hardwareDetectorMilliseconds = Date().timeIntervalSince(hardwareStart) * 1_000
         let duplicatePromotedIdentities = duplicateSet.promotedIdentities
         var duplicateClusterByIdentity: [ProcessIdentity: DuplicateProcessCluster] = [:]
@@ -126,7 +134,7 @@ public struct ProcessFamilyBuilder: Sendable {
             var rootBuckets: [ProcessIdentity: (root: ProcessMetrics, score: Double)] = [:]
             rootBuckets.reserveCapacity(candidates.count)
             for candidate in candidates {
-                let candidateRoot = root(for: candidate, byPID: byPID, confidence: confidence)
+                let candidateRoot = root(for: candidate, byPID: byPID, facts: facts, confidence: confidence)
                 let score = confidence[candidateRoot.pid, default: 0]
                 if let existing = rootBuckets[candidateRoot.identity] {
                     if score > existing.score ||
@@ -150,6 +158,7 @@ public struct ProcessFamilyBuilder: Sendable {
                     root: $0,
                     byPID: byPID,
                     children: children,
+                    facts: facts,
                     classifications: classifications,
                     confidence: confidence,
                     rootIdentities: rootIdentities,
@@ -160,7 +169,7 @@ public struct ProcessFamilyBuilder: Sendable {
                     now: now
                 )
             }
-            .sorted(by: FamilyPriorityOrder.areInIncreasingOrder)
+        // Unordered: RadarPipeline ranks families after scoring.
         let resolvedClusters = DuplicateFamilyResolver.resolve(duplicateSet.clusters, families: builtFamilies)
         var resolvedClusterByIdentity: [ProcessIdentity: DuplicateProcessCluster] = [:]
         for cluster in resolvedClusters {
@@ -173,7 +182,6 @@ public struct ProcessFamilyBuilder: Sendable {
                 let cluster = bestDuplicateCluster(for: family.members, clustersByIdentity: resolvedClusterByIdentity)
                 return family.enriched(duplicateCluster: cluster)
             }
-        // Resolving cluster ownership changes none of the family sort keys.
         return ProcessFamilyBuildResult(
             families: families,
             duplicateClusters: resolvedClusters,
@@ -205,8 +213,18 @@ public struct ProcessFamilyBuilder: Sendable {
         }
     }
 
-    private func classification(for process: ProcessMetrics) -> DevClassification {
-        classificationCache.classification(for: process, classifier: classifier)
+    private func makeStaticFacts(for process: ProcessMetrics) -> ProcessStaticFacts {
+        let classification = classifier.classification(for: process)
+        return ProcessStaticFacts(
+            classification: classification,
+            signature: ProcessSignature.from(root: process),
+            commandHint: commandHint(from: process.commandLine),
+            appBundlePrefix: ProcessStaticFacts.appBundlePrefix(of: process.executablePath),
+            parentDirectory: ProcessStaticFacts.parentDirectory(of: process.executablePath),
+            isHelperNamed: process.name.lowercased().contains("helper"),
+            isHardwareEligible: hardwareDetector.isEligibleForGenericHardwareDetection(process),
+            duplicateKey: duplicateDetector.candidateKey(for: process, classification: classification)
+        )
     }
 
     private func isAboveHardThreshold(_ process: ProcessMetrics, settings: ThresholdSettings) -> Bool {
@@ -216,6 +234,7 @@ public struct ProcessFamilyBuilder: Sendable {
     private func root(
         for process: ProcessMetrics,
         byPID: [Int32: ProcessMetrics],
+        facts: [Int32: ProcessStaticFacts],
         confidence: [Int32: Double]
     ) -> ProcessMetrics {
         var current = process
@@ -226,7 +245,7 @@ public struct ProcessFamilyBuilder: Sendable {
             guard parent.userID == current.userID else {
                 break
             }
-            guard shouldClimb(from: current, to: parent, confidence: confidence) else {
+            guard shouldClimb(from: current, to: parent, facts: facts, confidence: confidence) else {
                 break
             }
             current = parent
@@ -238,15 +257,18 @@ public struct ProcessFamilyBuilder: Sendable {
     private func shouldClimb(
         from child: ProcessMetrics,
         to parent: ProcessMetrics,
+        facts: [Int32: ProcessStaticFacts],
         confidence: [Int32: Double]
     ) -> Bool {
         if confidence[parent.pid, default: 0] >= 0.35 {
             return true
         }
-        if sameAppBundle(child.executablePath, parent.executablePath) {
+        let childFacts = facts[child.pid]
+        let parentFacts = facts[parent.pid]
+        if sameAppBundle(childFacts, parentFacts) {
             return true
         }
-        if parent.name.lowercased().contains("helper") && samePathNeighborhood(child.executablePath, parent.executablePath) {
+        if parentFacts?.isHelperNamed == true && samePathNeighborhood(childFacts, parentFacts) {
             return true
         }
         return false
@@ -256,6 +278,7 @@ public struct ProcessFamilyBuilder: Sendable {
         root: ProcessMetrics,
         byPID: [Int32: ProcessMetrics],
         children: [Int32: [ProcessMetrics]],
+        facts: [Int32: ProcessStaticFacts],
         classifications: [Int32: DevClassification],
         confidence: [Int32: Double],
         rootIdentities: Set<ProcessIdentity>,
@@ -268,6 +291,7 @@ public struct ProcessFamilyBuilder: Sendable {
         let members = familyMembers(
             of: root,
             children: children,
+            facts: facts,
             confidence: confidence,
             rootIdentities: rootIdentities
         )
@@ -290,7 +314,7 @@ public struct ProcessFamilyBuilder: Sendable {
             .compactMap { classifications[$0.pid] }
             .max { $0.groupingPriority < $1.groupingPriority }
         let duplicateCluster = bestDuplicateCluster(for: members, clustersByIdentity: duplicateClusterByIdentity)
-        let signature = ProcessSignature.from(root: root)
+        let signature = facts[root.pid]?.signature ?? ProcessSignature.from(root: root)
         // Baselines intentionally learn by logical signature, but live trend
         // state must be isolated per concrete process-family instance. Two
         // identical servers running at once must never alternate samples into
@@ -333,7 +357,7 @@ public struct ProcessFamilyBuilder: Sendable {
             totalCPUPercent: cpu,
             totalGPUPercent: gpu,
             devConfidence: familyConfidence,
-            commandHints: commandHints(from: members),
+            commandHints: commandHints(from: members, facts: facts),
             trend: trend,
             score: score,
             ownedIdentities: owned,
@@ -365,6 +389,7 @@ public struct ProcessFamilyBuilder: Sendable {
     private func familyMembers(
         of root: ProcessMetrics,
         children: [Int32: [ProcessMetrics]],
+        facts: [Int32: ProcessStaticFacts],
         confidence: [Int32: Double],
         rootIdentities: Set<ProcessIdentity>
     ) -> [ProcessMetrics] {
@@ -372,6 +397,7 @@ public struct ProcessFamilyBuilder: Sendable {
         var stack = [root]
         var seen = Set<Int32>()
         let rootIsDevFamily = confidence[root.pid, default: 0] >= 0.35
+        let rootFacts = facts[root.pid]
 
         while let process = stack.popLast() {
             guard seen.insert(process.pid).inserted else {
@@ -389,10 +415,11 @@ public struct ProcessFamilyBuilder: Sendable {
                 guard child.identity == root.identity || !rootIdentities.contains(child.identity) else {
                     continue
                 }
+                let childFacts = facts[child.pid]
                 let related = rootIsDevFamily ||
                     confidence[child.pid, default: 0] >= 0.2 ||
-                    sameAppBundle(child.executablePath, root.executablePath) ||
-                    samePathNeighborhood(child.executablePath, root.executablePath)
+                    sameAppBundle(childFacts, rootFacts) ||
+                    samePathNeighborhood(childFacts, rootFacts)
                 guard related else {
                     continue
                 }
@@ -433,17 +460,18 @@ public struct ProcessFamilyBuilder: Sendable {
         }
     }
 
-    private func commandHints(from members: [ProcessMetrics]) -> [String] {
+    private func commandHints(from members: [ProcessMetrics], facts: [Int32: ProcessStaticFacts]) -> [String] {
         var hints: [String] = []
-
         for process in members {
-            if let hint = commandHint(from: process.commandLine) {
-                hints.append(hint)
+            guard let hint = facts[process.pid]?.commandHint ?? nil, !hints.contains(hint) else {
+                continue
+            }
+            hints.append(hint)
+            if hints.count == 4 {
+                break
             }
         }
-
-        var seen = Set<String>()
-        return hints.filter { seen.insert($0).inserted }.prefix(4).map { $0 }
+        return hints
     }
 
     private func commandHint(from command: String) -> String? {
@@ -475,23 +503,15 @@ public struct ProcessFamilyBuilder: Sendable {
         return value
     }
 
-    private func sameAppBundle(_ lhs: String, _ rhs: String) -> Bool {
-        guard let left = appBundlePrefix(lhs), let right = appBundlePrefix(rhs) else {
+    private func sameAppBundle(_ lhs: ProcessStaticFacts?, _ rhs: ProcessStaticFacts?) -> Bool {
+        guard let left = lhs?.appBundlePrefix, let right = rhs?.appBundlePrefix else {
             return false
         }
         return left == right
     }
 
-    private func samePathNeighborhood(_ lhs: String, _ rhs: String) -> Bool {
-        let left = URL(fileURLWithPath: lhs).deletingLastPathComponent().path
-        let right = URL(fileURLWithPath: rhs).deletingLastPathComponent().path
-        return !left.isEmpty && left == right
-    }
-
-    private func appBundlePrefix(_ path: String) -> String? {
-        guard let range = path.range(of: ".app/", options: [.caseInsensitive]) else {
-            return nil
-        }
-        return String(path[..<range.upperBound]).lowercased()
+    private func samePathNeighborhood(_ lhs: ProcessStaticFacts?, _ rhs: ProcessStaticFacts?) -> Bool {
+        guard let left = lhs?.parentDirectory, !left.isEmpty else { return false }
+        return left == rhs?.parentDirectory
     }
 }

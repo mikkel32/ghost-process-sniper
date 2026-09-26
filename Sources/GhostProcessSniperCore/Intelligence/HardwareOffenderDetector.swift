@@ -18,9 +18,10 @@ public struct HardwareOffenderDetector: Sendable {
 
     public func detect(
         processes: [ProcessMetrics],
-        settings: ThresholdSettings
+        settings: ThresholdSettings,
+        isEligible: ((ProcessMetrics) -> Bool)? = nil
     ) -> [ProcessIdentity: HardwareOffenderProfile] {
-        let eligible = processes.filter(isEligibleForGenericHardwareDetection)
+        let eligible = processes.filter(isEligible ?? isEligibleForGenericHardwareDetection)
         guard !eligible.isEmpty else {
             return [:]
         }
@@ -82,7 +83,8 @@ public struct HardwareOffenderDetector: Sendable {
         return profiles
     }
 
-    private func isEligibleForGenericHardwareDetection(_ process: ProcessMetrics) -> Bool {
+    /// Depends only on static process facts, so callers may cache it.
+    func isEligibleForGenericHardwareDetection(_ process: ProcessMetrics) -> Bool {
         if process.userID == currentUserID {
             return !process.isSystemProcess && !isSystemBundle(process.executablePath)
         }

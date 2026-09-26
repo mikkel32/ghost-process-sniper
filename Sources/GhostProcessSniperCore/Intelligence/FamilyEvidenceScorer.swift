@@ -49,12 +49,7 @@ struct FamilyEvidenceScorer: Sendable {
                 slot: "memory",
                 kind: .memory,
                 title: memoryRatio >= 1 ? "memory above threshold" : "Memory footprint",
-                detail: String(
-                    format: "%@ is %.1fx the %@ limit",
-                    RadarFormat.bytes(footprint),
-                    memoryRatio,
-                    RadarFormat.bytes(settings.memoryBytes)
-                ),
+                detail: "\(RadarFormat.bytes(footprint)) is \(RadarFormat.fixed1(memoryRatio))x the \(RadarFormat.bytes(settings.memoryBytes)) limit",
                 impact: memoryImpact,
                 level: componentLevel(memoryRatio)
             ),
@@ -62,7 +57,7 @@ struct FamilyEvidenceScorer: Sendable {
                 slot: "cpu",
                 kind: .cpu,
                 title: cpuRatio >= 1 ? "CPU above threshold" : "CPU activity",
-                detail: String(format: "%.0f%% is %.1fx the %.0f%% limit", cpu, cpuRatio, settings.cpuPercent),
+                detail: "\(RadarFormat.fixed0(cpu))% is \(RadarFormat.fixed1(cpuRatio))x the \(RadarFormat.fixed0(settings.cpuPercent))% limit",
                 impact: cpuImpact,
                 level: componentLevel(cpuRatio, critical: 1.15)
             ),
@@ -70,7 +65,7 @@ struct FamilyEvidenceScorer: Sendable {
                 slot: "gpu",
                 kind: .gpu,
                 title: gpuRatio >= 1 ? "GPU above threshold" : "GPU activity",
-                detail: String(format: "%.0f%% GPU utilization", gpu),
+                detail: "\(RadarFormat.fixed0(gpu))% GPU utilization",
                 impact: gpuImpact,
                 level: componentLevel(gpuRatio, hot: 0.55, critical: 1)
             ),
@@ -78,12 +73,8 @@ struct FamilyEvidenceScorer: Sendable {
                 slot: "leak",
                 kind: .leak,
                 title: leakRatio >= 1 ? "memory climbing \(Int(leakVelocity.rounded())) MB/min" : "Memory growth",
-                detail: String(
-                    format: "%.0f MB/min is %.1fx the %.0f MB/min limit",
-                    leakVelocity,
-                    leakRatio,
-                    settings.leakVelocityMegabytesPerMinute
-                ),
+                detail: "\(RadarFormat.fixed0(leakVelocity)) MB/min is \(RadarFormat.fixed1(leakRatio))x the " +
+                    "\(RadarFormat.fixed0(settings.leakVelocityMegabytesPerMinute)) MB/min limit",
                 impact: leakImpact,
                 level: componentLevel(leakRatio, critical: 1.6)
             ),

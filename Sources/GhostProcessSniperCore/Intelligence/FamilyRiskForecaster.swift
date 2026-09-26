@@ -362,7 +362,7 @@ public struct FamilyRiskForecaster: Sendable {
         if eta < 60 * 60 {
             return "\(Int((eta / 60).rounded())) min"
         }
-        return String(format: "%.1f hr", eta / 3600)
+        return "\(RadarFormat.fixed1(eta / 3600)) hr"
     }
 
     private func whyNow(
@@ -413,7 +413,7 @@ public struct FamilyRiskForecaster: Sendable {
             parts.append("memory limit in \(etaText)")
         }
         if baseline.memoryMultiple >= 1.5 {
-            parts.append(String(format: "%.1fx normal memory", baseline.memoryMultiple))
+            parts.append("\(RadarFormat.fixed1(baseline.memoryMultiple))x normal memory")
         }
         if staleLikelihood >= 0.65 {
             parts.append("background process looks stale")

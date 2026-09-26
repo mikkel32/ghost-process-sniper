@@ -343,7 +343,7 @@ public struct RadarIntelligence: Sendable {
 
         if memoryIsUnusual, memoryMultiple >= 2, family.totalPhysicalFootprintBytes > 256 * 1_048_576 {
             let impact = min(18, memoryMultiple * 6)
-            let reason = String(format: "%.1fx usual memory", memoryMultiple)
+            let reason = "\(RadarFormat.fixed1(memoryMultiple))x usual memory"
             value += impact
             reasons.insert(reason, at: 0)
             components.append(GhostScoreComponent(
@@ -356,7 +356,7 @@ public struct RadarIntelligence: Sendable {
             ))
         } else if memoryIsUnusual, family.totalPhysicalFootprintBytes > 512 * 1_048_576 {
             let impact = min(10, memoryMultiple * 4)
-            let reason = String(format: "%.1fx baseline memory", memoryMultiple)
+            let reason = "\(RadarFormat.fixed1(memoryMultiple))x baseline memory"
             value += impact
             reasons.insert(reason, at: 0)
             components.append(GhostScoreComponent(
