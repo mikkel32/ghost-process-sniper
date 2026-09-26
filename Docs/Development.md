@@ -57,6 +57,24 @@ Packaging stages, validates the plist, signs, and verifies the new bundle before
 
 The regression tests under `Tests/InfrastructureTests` use temporary fixture bundles. They exercise failure before packaging, failure during replacement, a successful signed replacement, lock contention and release, and invalid command handling. Swift tests under `Monitoring` and `Thermals` cover settings cancellation and the app-activity projection. Existing tests and the core check executable remain part of verification.
 
+## Packaging and releases
+
+`Scripts/lib/project.sh` also reads optional packaging variables. Without them, `bundle-app.sh` produces the same local, ad-hoc-signed bundle as before.
+
+| Variable | Effect |
+| --- | --- |
+| `RADAR_DIST_DIR` | Where the `.app` is written (default `dist`) |
+| `RADAR_ARCHS` | Architectures, e.g. `"arm64 x86_64"` for a universal binary |
+| `RADAR_SCRATCH_PATH` | Separate SwiftPM build directory |
+| `RADAR_SIGN_IDENTITY` | `-` (ad hoc) or a Developer ID identity; the latter enables the hardened runtime |
+| `RADAR_VERSION`, `RADAR_BUILD_NUMBER` | Override the bundle version for a one-off build |
+
+`Scripts/release.sh` combines these into a universal disk image in `dist/release`. `Packaging/render-artwork.swift` renders the app icon, the installer background, and the README icon from code; its outputs are committed so ordinary builds need no extra step. See [Releasing](Releasing.md).
+
+Bundles are staged and signed in `$TMPDIR`, then moved into place. iCloud Drive (including a synced Desktop or Documents folder) re-tags `.app` directories with Finder information that `codesign` rejects, so signing inside such a checkout always fails. For the same reason, `codesign --verify --strict` reports "detritus" for a bundle that already sits in a synced `dist` folder; the bundle is verified before it is moved there, and it runs normally.
+
+If a build fails with `module … is defined in both …` after the repository folder was moved or renamed, SwiftPM's module cache still points at the old path. Remove `.build` (it only contains build products) and build again.
+
 ## Refresh projections
 
 The refresh path has independently testable, sample-local projections:

@@ -5,8 +5,11 @@ import XCTest
 @MainActor
 final class CleanupTests: XCTestCase {
     private func fixture() throws -> URL {
-        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent(".build/cleanup-tests/\(UUID().uuidString)").resolvingSymlinksInPath()
+        // The scanner refuses /private (system temp) and iCloud-managed folders, so a checkout on an
+        // iCloud-synced Desktop cannot host fixtures. ~/Library/Caches is local and never synced.
+        let caches = try XCTUnwrap(FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first)
+        let root = caches.appendingPathComponent("GhostProcessSniperTests/cleanup/\(UUID().uuidString)")
+            .resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Downloads"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Trash"), withIntermediateDirectories: true)
         return root
@@ -73,7 +76,7 @@ final class CleanupTests: XCTestCase {
         let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
         let one = try file("one", root: root); _ = try file("two", root: root)
         let result = try await scan(root)
-        XCTAssertThrowsError(try CleanupPlan(items: result.duplicates[0].files, duplicates: result.duplicates))
+        XCTAssertThrowsError(try CleanupPlan(items: try XCTUnwrap(result.duplicates.first).files, duplicates: result.duplicates))
         XCTAssertThrowsError(try CleanupPlan(items: [one, one]))
     }
 
@@ -103,7 +106,7 @@ final class CleanupTests: XCTestCase {
         let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
         _ = try file("one", root: root); _ = try file("two", root: root)
         let result = try await scan(root)
-        let group = result.duplicates[0]
+        let group = try XCTUnwrap(result.duplicates.first)
         let plan = try CleanupPlan(items: [group.files[1]], duplicates: [group])
         try Data("changed retained copy".utf8).write(to: group.files[0].url)
         do { _ = try await transaction(root).execute(plan, runningApps: { [] }); XCTFail("Removed without a valid keeper") }

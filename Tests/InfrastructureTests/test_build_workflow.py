@@ -51,9 +51,11 @@ class BundleWorkflowTests(unittest.TestCase):
         # Copy executable bytes, not macOS system-file flags, into the fixture.
         shutil.copyfile("/usr/bin/true", self.product / "GhostProcessSniper")
         (self.product / "GhostProcessSniper").chmod(0o755)
+        self.staging = self.root / "staging tmp"
+        self.staging.mkdir()
         self.env = dict(os.environ, CONFIGURATION="release",
                         PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
-                        RADAR_TEST_PRODUCT_DIR=str(self.product))
+                        RADAR_TEST_PRODUCT_DIR=str(self.product), TMPDIR=str(self.staging))
         self.tool("swift", '''#!/bin/sh
 if [ "${RADAR_TEST_BUILD_FAIL:-0}" = 1 ]; then exit 17; fi
 case " $* " in
@@ -71,7 +73,8 @@ esac
                               env=self.env, text=True, capture_output=True, timeout=30)
 
     def assert_no_staging_left(self):
-        self.assertEqual(list((self.root / "dist").glob(".radar-stage.*")), [])
+        for directory in [self.root / "dist", self.staging]:
+            self.assertEqual(list(directory.glob(".radar-stage.*")), [])
 
     def test_failed_build_preserves_previous_bundle(self):
         self.env["RADAR_TEST_BUILD_FAIL"] = "1"

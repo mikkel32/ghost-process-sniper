@@ -1,0 +1,32 @@
+name: Bug report
+description: Something is wrong or confusing.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead? Steps to reproduce help a lot.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: With the console open, choose Ghost Process Sniper → About Ghost Process Sniper.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: macOS version and Mac model
+      placeholder: "macOS 26.4, MacBook Pro M1 Pro"
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Engine → Copy Diagnostics, then paste here. Redact any process names or paths you consider private.
+      render: text
