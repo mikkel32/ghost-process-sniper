@@ -47,6 +47,8 @@ final class LaunchdAwareKillTests: XCTestCase {
         XCTAssertFalse(table.isListed(812))
         XCTAssertEqual(launchctl.invocations, [["list"], ["bootout", "gui/501/homebrew.mxcl.postgresql@16"]])
         XCTAssertEqual(report.launchdBootout?.accepted, true)
+        let bootedOut = report.eventHistory.first { $0.kind == .signaled && $0.pid == 812 }
+        XCTAssertEqual(bootedOut?.targetState, .stopping, "the row turns green only once postgres is gone")
         XCTAssertEqual(report.gracefulPIDs, [812])
         XCTAssertTrue(report.succeeded, report.summary)
         XCTAssertTrue(report.respawnedPIDs.isEmpty)

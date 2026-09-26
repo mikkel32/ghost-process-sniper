@@ -45,8 +45,8 @@ extension ProcessKiller {
         report.attempts.append(attempt)
         if !report.gracefulPIDs.contains(root.pid) { report.gracefulPIDs.append(root.pid) }
         let until = bootout.disabled ? "and kept it off" : "until the next login"
-        appendEvent(.signaled, operationID: operationID, pid: root.pid, signalName: attempt.signalName, targetState: .terminated,
-                    message: "Stopped the launchd service \(job.label) \(until).", report: &report, eventSink: eventSink)
+        appendEvent(.signaled, operationID: operationID, pid: root.pid, signalName: attempt.signalName, targetState: .stopping,
+                    message: "Booted out the launchd service \(job.label) \(until); launchd is stopping \(root.name).", report: &report, eventSink: eventSink)
         return root.pid
     }
 }
