@@ -74,6 +74,47 @@ final class PressureAttributionTests: XCTestCase {
         XCTAssertTrue(forecast.whyNow.contains("memory pressure turns critical"), forecast.whyNow)
     }
 
+    func testNoHeadroomLeftIsNotAFamilyLimitBreach() throws {
+        // 800 MB free is below the 1.28 GB critical reserve of a 16 GB Mac.
+        let grower = family(pid: 716, rate: 30)
+        let exhausted = pressure(.critical, total: 16 << 30, available: 800 << 20)
+        let belowReserve = pressure(.warning, total: 16 << 30, available: 800 << 20)
+        XCTAssertNil(PressureAttribution.outlook(families: [grower], pressure: exhausted))
+        XCTAssertNil(PressureAttribution.outlook(families: [grower], pressure: belowReserve))
+        XCTAssertNil(PressureAttribution.familyETASeconds(velocity: 30, pressure: exhausted))
+        XCTAssertNil(PressureAttribution.familyETASeconds(velocity: 30, pressure: belowReserve))
+
+        var settings = ThresholdSettings.smart
+        settings.memoryBytes = 64 << 30
+        let context = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: exhausted)
+            .attributingPressure(to: [grower])
+        let scored = RadarIntelligence().enrich(family: grower, context: context, settings: settings, now: Fixture.now)
+        XCTAssertNotEqual(scored.forecast.horizon, .breached)
+        XCTAssertNotEqual(scored.forecast.etaKind, .hostMemory)
+        XCTAssertFalse(scored.forecast.whyNow.contains("memory limit"), scored.forecast.whyNow)
+        let verdict = FamilyVerdict.synthesize(family: scored, pattern: scored.trend.resolvedPattern)
+        XCTAssertFalse(verdict.detail.contains("above its memory limit"), verdict.detail)
+
+        let summary = RadarSummaryBuilder.summary(for: [scored], hostOutlook: context.hostOutlook)
+        XCTAssertFalse(summary.statusText.hasPrefix("Memory critical in"), summary.statusText)
+    }
+
+    func testHostCountdownReadsAsPressureNotAMemoryLimit() throws {
+        let fast = family(pid: 717, rate: 150)
+        let tight = pressure(.warning, total: 16 << 30, available: 3 << 30)
+        var settings = ThresholdSettings.smart
+        settings.memoryBytes = 64 << 30
+        let context = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: tight)
+            .attributingPressure(to: [fast])
+        let scored = RadarIntelligence().enrich(family: fast, context: context, settings: settings, now: Fixture.now)
+        XCTAssertEqual(scored.forecast.etaKind, .hostMemory)
+        XCTAssertFalse(scored.forecast.whyNow.contains("memory limit"), scored.forecast.whyNow)
+        let verdict = FamilyVerdict.synthesize(family: scored, pattern: scored.trend.resolvedPattern)
+        XCTAssertFalse(verdict.detail.contains("memory limit"), verdict.detail)
+        XCTAssertTrue(verdict.detail.contains("Memory pressure turns critical in"), verdict.detail)
+        XCTAssertFalse(scored.forecast.recommendedAction.detail.contains("memory limit"), scored.forecast.recommendedAction.detail)
+    }
+
     func testNominalPressureChangesNothing() {
         let grower = family(pid: 720, rate: 150)
         let nominal = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: pressure(.nominal))

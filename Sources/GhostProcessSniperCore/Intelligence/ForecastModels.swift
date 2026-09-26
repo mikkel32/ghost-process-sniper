@@ -83,7 +83,8 @@ public enum ForecastHorizon: String, Codable, CaseIterable, Sendable {
 public enum ForecastETAKind: String, Codable, CaseIterable, Sendable {
     case none
     case memoryLimit
-    /// Reserved for time-to-host-memory-pressure.
+    /// Time until this family's growth alone turns host memory pressure
+    /// critical. Never breached: a spent reserve has no countdown.
     case hostMemory
 }
 

@@ -51,7 +51,10 @@ public struct FamilyRiskForecaster: Sendable {
             eta = memoryETA
             etaKind = memoryETA == nil ? .none : .memoryLimit
         }
-        let horizon = trustedHorizon(ForecastHorizon.from(etaSeconds: eta), trend: family.trend)
+        // Breached means above the family's own limit; running out of host
+        // headroom is at most imminent.
+        let rawHorizon = ForecastHorizon.from(etaSeconds: eta)
+        let horizon = trustedHorizon(etaKind == .hostMemory && rawHorizon == .breached ? .imminent : rawHorizon, trend: family.trend)
         let recurrenceRisk = min(1, Double(baseline.recurrenceCount) / 5)
         let staleLikelihood = family.forgottenAssessment.likelihood
         let projectedMemory = projectedMemoryBytes(family: family, velocity: memoryVelocity, horizonMinutes: 10)
@@ -109,6 +112,7 @@ public struct FamilyRiskForecaster: Sendable {
                 family: family,
                 state: state,
                 horizon: horizon,
+                etaKind: etaKind,
                 confidence: confidence,
                 cpu: cpuEvidence.behavior
             ),
@@ -427,7 +431,7 @@ public struct FamilyRiskForecaster: Sendable {
         } else if cpuEvidence.isBreached {
             parts.append("CPU above its \(Int(settings.cpuPercent.rounded()))% limit now")
         }
-        if horizon == .breached {
+        if horizon == .breached, etaKind == .memoryLimit {
             parts.append("above its memory limit")
         }
         if slowLeak {
@@ -481,6 +485,7 @@ public struct FamilyRiskForecaster: Sendable {
         family: ProcessFamily,
         state: ForecastState,
         horizon: ForecastHorizon,
+        etaKind: ForecastETAKind,
         confidence: Double,
         cpu: CPUBehavior
     ) -> TriageRecommendation {
@@ -503,7 +508,8 @@ public struct FamilyRiskForecaster: Sendable {
         case .leaking:
             return TriageRecommendation(
                 title: "Inspect leak",
-                detail: horizon == .imminent ? "Likely to cross its memory limit soon." : "Memory trend is rising faster than normal.",
+                detail: horizon != .imminent ? "Memory trend is rising faster than normal."
+                    : etaKind == .hostMemory ? "Likely to push memory pressure to critical soon." : "Likely to cross its memory limit soon.",
                 action: .inspect,
                 confidence: confidence
             )

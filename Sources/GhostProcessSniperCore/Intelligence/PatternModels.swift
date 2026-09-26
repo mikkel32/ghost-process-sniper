@@ -320,8 +320,9 @@ public struct FamilyVerdict: Equatable, Sendable {
     private static func leakETASentence(_ forecast: RiskForecast) -> String {
         switch (forecast.etaKind, forecast.horizon) {
         case (.none, _): "No memory limit in sight yet."
-        case (_, .breached): "Already above its memory limit."
-        default: "Memory limit in \(forecast.etaText)."
+        case (.hostMemory, _): "Memory pressure turns critical in \(forecast.etaText)."
+        case (.memoryLimit, .breached): "Already above its memory limit."
+        case (.memoryLimit, _): "Memory limit in \(forecast.etaText)."
         }
     }
 

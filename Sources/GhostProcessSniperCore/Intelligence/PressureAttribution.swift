@@ -89,16 +89,15 @@ public enum PressureAttribution {
     /// elevated; macOS compresses and swaps long before it runs out, so the
     /// target is critical pressure, not zero free memory.
     public static func outlook(families: [ProcessFamily], pressure: SystemMemoryPressure) -> HostMemoryOutlook? {
-        guard pressure.isKnown, pressure.level >= .elevated else { return nil }
+        guard let headroom = headroomMegabytes(pressure), pressure.level >= .elevated else { return nil }
         let growing = families
             .map { ($0, credibleGrowth(of: $0, physicalMemoryBytes: pressure.totalBytes)) }
             .filter { $0.1 > 0 }
             .sorted { $0.1 > $1.1 }
         let total = growing.reduce(0) { $0 + $1.1 }
         guard total >= 20 else { return nil }
-        let headroom = Double(pressure.availableBytes) - Double(criticalReserve(totalBytes: pressure.totalBytes))
         return HostMemoryOutlook(
-            etaSeconds: max(0, headroom / 1_048_576 / total * 60),
+            etaSeconds: headroom / total * 60,
             growthMegabytesPerMinute: total,
             topContributors: growing.map(\.0.familyKey),
             topContributorName: growing.first?.0.displayName
@@ -107,9 +106,18 @@ public enum PressureAttribution {
 
     /// The seconds until this family alone brings pressure to critical.
     public static func familyETASeconds(velocity: Double, pressure: SystemMemoryPressure) -> TimeInterval? {
-        guard pressure.isKnown, velocity > 0 else { return nil }
+        guard let headroom = headroomMegabytes(pressure), velocity > 0 else { return nil }
+        return headroom / velocity * 60
+    }
+
+    /// Free memory left above the critical reserve. Nil once pressure is
+    /// critical or the reserve is already spent: there is nothing left to
+    /// count down to, and a zero ETA would read as a breach of the family's
+    /// own limit.
+    private static func headroomMegabytes(_ pressure: SystemMemoryPressure) -> Double? {
+        guard pressure.isKnown, pressure.level < .critical else { return nil }
         let headroom = Double(pressure.availableBytes) - Double(criticalReserve(totalBytes: pressure.totalBytes))
-        return max(0, headroom / 1_048_576 / velocity * 60)
+        return headroom > 0 ? headroom / 1_048_576 : nil
     }
 
     /// "~9 min", "~2 hr".
