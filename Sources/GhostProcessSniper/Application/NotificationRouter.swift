@@ -46,6 +46,8 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, Send
         let userInfo = response.notification.request.content.userInfo
         let familyKey = userInfo["familyKey"] as? String
         let signatureID = userInfo["signatureID"] as? String
-        await coordinator.handleNotification(action: action, familyKey: familyKey, signatureID: signatureID)
+        let familyName = userInfo["familyName"] as? String
+        await coordinator.handleNotification(action: action, familyKey: familyKey, signatureID: signatureID,
+                                             familyName: familyName)
     }
 }

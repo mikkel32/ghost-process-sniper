@@ -100,7 +100,7 @@ actor UserNotificationRadarNotifier: RadarNotifying {
             .joined(separator: ", ")
         content.sound = .default
         content.categoryIdentifier = NotificationRouter.familyCategory
-        content.userInfo = ["familyKey": family.familyKey, "signatureID": id]
+        content.userInfo = ["familyKey": family.familyKey, "signatureID": id, "familyName": family.displayName]
         content.threadIdentifier = id
 
         // A stable identifier replaces the family's previous alert instead of
