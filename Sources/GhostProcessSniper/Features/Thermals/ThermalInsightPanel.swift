@@ -6,7 +6,10 @@ struct ThermalInsightPanel: View {
     let summary: ThermalActivitySummary
     let snapshot: ThermalSnapshot
     let observations: ThermalObservationWindow
+    /// Resolves the family a stop would target; nil when stopping is not offered.
+    let stopTarget: (ThermalContributor) -> ThermalStopTarget?
     let onInspect: (String) -> Void
+    let onStop: (String) -> Void
     let onBrowse: () -> Void
     let onRefresh: () async -> Void
     @State private var sort: ThermalActivitySort = .activity
@@ -28,7 +31,9 @@ struct ThermalInsightPanel: View {
                 AdaptivePairLayout(breakpoint: 760, spacing: 14) {
                     ThermalTemperatureHero(diagnosis: diagnosis, snapshot: snapshot, observations: observations, now: now)
                     ThermalAttributionCard(summary: summary, diagnosis: diagnosis, insight: insight, now: now,
+                        stopTarget: insight.stopCandidate(diagnosis: diagnosis).flatMap(stopTarget),
                         onInspect: { selected = $0 },
+                        onStop: onStop,
                         onCompare: { coolingCheck = ThermalCoolingCheck(contributor: $0, snapshot: snapshot, at: now) },
                         onBrowse: onBrowse,
                         onRefresh: { Task { await refresh() } })
@@ -75,15 +80,12 @@ struct ThermalInsightPanel: View {
                     VStack(alignment: .leading, spacing: 12) {
                         ThermalSensorStrip(snapshot: snapshot, observations: observations, now: now)
                         Text(diagnosis.explanation).font(.callout)
-                        Text("Warm, Hot, and Very hot are app review bands starting at 70, 80, and 90 degrees Celsius. They are not hardware operating limits.")
-                        Text("CPU capacity combines all logical processors. GPU values are reported activity; zero is not proof of no GPU work. App rankings do not measure watts, degrees, or a share of total heat.")
                         Text(diagnosis.coverageText)
                     }
                     .font(.caption).foregroundStyle(.secondary).padding(.top, 12)
                 }
                 .font(.caption.weight(.medium))
-                HStack(alignment: .firstTextBaseline) {
-                    Text(diagnosis.coverageText).font(.caption2).foregroundStyle(.secondary)
+                HStack {
                     Spacer(minLength: 8)
                     Button("All processes", action: onBrowse).font(.caption).buttonStyle(.plain)
                 }
@@ -96,7 +98,8 @@ struct ThermalInsightPanel: View {
             let current = summary.visibleContributors(at: Date()).first { $0.id == contributor.id }
             ThermalContributorDetailView(contributor: current ?? contributor,
                 isInLatestSample: current != nil,
-                onInspect: onInspect)
+                stopTarget: current.flatMap(stopTarget),
+                onInspect: onInspect, onStop: onStop)
         }
     }
 
@@ -120,8 +123,16 @@ struct ThermalInsightPanel: View {
     }
 
     private var headerTitle: some View {
-        Label("Heat & CPU activity", systemImage: "thermometer.medium")
-            .font(.title3.weight(.semibold))
+        HStack(spacing: 6) {
+            Label("Heat & CPU activity", systemImage: "thermometer.medium")
+                .font(.title3.weight(.semibold))
+            InfoTip(tip: readingTip)
+        }
+    }
+
+    /// The fixed caveats live in one place instead of under every card.
+    private var readingTip: RadarTip {
+        RadarTip(title: "How to read these numbers", message: "Warm, Hot and Very hot are review bands starting at 70, 80 and 90 °C, not hardware limits. CPU 100% is one fully used logical core; CPU capacity combines all of them. GPU values are reported activity, and zero is not proof of no GPU work. App activity is a clue to the workload, not a measured share of heat or watts, and other work may be missing from a scan.")
     }
 
     private func scanStatus(diagnosis: ThermalDiagnosis) -> some View {
@@ -139,20 +150,16 @@ struct ThermalInsightPanel: View {
     }
 
     private var activityHeader: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    Text("Measured app activity").font(.headline)
-                    Spacer(minLength: 12)
-                    sortPicker
-                }
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Measured app activity").font(.headline)
-                    sortPicker
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                Text("Measured app activity").font(.headline)
+                Spacer(minLength: 12)
+                sortPicker
             }
-            Text("CPU 100% means one fully used logical core. Combined ranks by the strongest resource signal in the scan, not by measured heat.")
-                .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Measured app activity").font(.headline)
+                sortPicker
+            }
         }
     }
 
@@ -162,6 +169,7 @@ struct ThermalInsightPanel: View {
         }
         .pickerStyle(.segmented).labelsHidden().frame(width: 230)
         .accessibilityLabel("Rank app activity by")
+        .help("Combined ranks by the strongest resource signal in the scan, not by measured heat.")
     }
 
     private func comparisonCard(_ result: ThermalCoolingCheck.Result) -> some View {

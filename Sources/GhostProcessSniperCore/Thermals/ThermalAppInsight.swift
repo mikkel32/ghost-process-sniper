@@ -21,8 +21,7 @@ public struct ThermalAppInsight: Equatable, Sendable {
                 action: "Scan now to see which apps are using resources.", badge: "Awaiting a sample", contributor: nil)
         }
         let rows = activity.visibleContributors(at: now)
-        let heatNeedsReview = diagnosis.temperature.band.rawValue >= ThermalTemperatureBand.warm.rawValue ||
-            diagnosis.state == .warm || diagnosis.state == .serious || diagnosis.state == .critical
+        let heatNeedsReview = Self.heatNeedsReview(diagnosis)
         let history = activity.recentContributors
         func load(_ id: String) -> Double { history.first { $0.id == id }?.sustainedLoad(at: now) ?? 0 }
         // A modest GPU leader must not conceal a saturated CPU core lower in the list.
@@ -74,6 +73,11 @@ public struct ThermalAppInsight: Equatable, Sendable {
 
     /// Matches the 10% of total CPU capacity that makes current activity substantial.
     private static let substantialLoad = 10.0
+
+    static func heatNeedsReview(_ diagnosis: ThermalDiagnosis) -> Bool {
+        diagnosis.temperature.band.rawValue >= ThermalTemperatureBand.warm.rawValue ||
+            diagnosis.state == .warm || diagnosis.state == .serious || diagnosis.state == .critical
+    }
 
     private static func recent(_ entry: ThermalRecentContributor, rows: [ThermalContributor], at now: Date) -> Self {
         let current = rows.first { $0.id == entry.id }

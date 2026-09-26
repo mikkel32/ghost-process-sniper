@@ -7,7 +7,10 @@ struct ThermalAttributionCard: View {
     let diagnosis: ThermalDiagnosis
     let insight: ThermalAppInsight
     let now: Date
+    /// Offered only for a repeated, user-owned heat suspect; it opens the stop preview.
+    let stopTarget: ThermalStopTarget?
     let onInspect: (ThermalContributor) -> Void
+    let onStop: (String) -> Void
     let onCompare: (ThermalContributor) -> Void
     let onBrowse: () -> Void
     let onRefresh: () -> Void
@@ -95,9 +98,6 @@ struct ThermalAttributionCard: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            Text("Activity is a clue to the workload, not a measured percentage of heat. Other work may be missing from the scan.")
-                .font(.caption2).foregroundStyle(.secondary)
 
             Divider().opacity(0.5)
             Text(insight.action)
@@ -194,6 +194,9 @@ struct ThermalAttributionCard: View {
             onInspect(contributor)
         }
         .buttonStyle(.borderedProminent).tint(RadarTheme.brand)
+        if let stopTarget {
+            ThermalStopButton(target: stopTarget, onStop: onStop)
+        }
         Button("Compare after a change", systemImage: "arrow.left.arrow.right") {
             onCompare(contributor)
         }

@@ -64,7 +64,7 @@ struct ThermalContributorRow: View {
                 HStack(spacing: 6) {
                     Text(contributor.displayName).font(.callout.weight(.semibold)).lineLimit(1)
                     if isLeading {
-                        Text("TOP").font(.system(size: 9, weight: .bold))
+                        Text("TOP").font(.caption2.weight(.bold))
                             .foregroundStyle(RadarTheme.brand)
                             .padding(.horizontal, 5).padding(.vertical, 2)
                             .background(RadarTheme.brand.opacity(0.12), in: Capsule())

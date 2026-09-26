@@ -4,7 +4,9 @@ import SwiftUI
 struct ThermalContributorDetailView: View {
     let contributor: ThermalContributor
     let isInLatestSample: Bool
+    let stopTarget: ThermalStopTarget?
     let onInspect: (String) -> Void
+    let onStop: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var processSort: ThermalActivitySort = .cpu
     @State private var orderedProcesses: [ThermalProcessEvidence] = []
@@ -128,15 +130,22 @@ struct ThermalContributorDetailView: View {
         }
     }
 
-    @ViewBuilder
     private func actions(fresh: Bool) -> some View {
-        Button("Open process inspector", systemImage: "sidebar.right") {
-            dismiss()
-            onInspect(contributor.familyKey)
+        HStack(spacing: 8) {
+            Button("Open process inspector", systemImage: "sidebar.right") {
+                dismiss()
+                onInspect(contributor.familyKey)
+            }
+            .buttonStyle(.borderedProminent)
+            .help("Open the observed process family. Nothing is stopped.")
+            if let stopTarget {
+                ThermalStopButton(target: stopTarget) { familyKey in
+                    dismiss()
+                    onStop(familyKey)
+                }
+            }
         }
-        .buttonStyle(.borderedProminent)
         .disabled(!fresh)
-        .help("Open the observed process family. Nothing is stopped.")
     }
 
     private func processRow(_ process: ThermalProcessEvidence, at now: Date) -> some View {
