@@ -38,6 +38,27 @@ final class BSDPassTests: XCTestCase {
         XCTAssertEqual(source.recordedCalls.path, 0, "telemetry survived the deadline tick")
     }
 
+    func testSessionAndTerminalReachTheMetricsAndGetsidRunsOncePerIdentity() async throws {
+        let source = FakeProbeSource([
+            .init(pid: 1_000, name: "zsh", sessionID: 900, terminal: 0x1000002, terminalForegroundGroup: 1_000),
+            .init(pid: 1_001, name: "node", sessionID: 1_001)
+        ])
+        let sampler = NativeProcessSampler(source: source)
+        _ = try await sampler.sample(plan: .fixture(at: 0))
+        source.advance(seconds: 1)
+        let batch = try await sampler.sample(plan: .fixture(at: 1))
+
+        let shell = try XCTUnwrap(batch.processes.first { $0.pid == 1_000 })
+        XCTAssertEqual(shell.sessionID, 900)
+        XCTAssertEqual(shell.controllingTerminal, 0x1000002)
+        XCTAssertEqual(shell.terminalForegroundGroupID, 1_000)
+        XCTAssertEqual(shell.runState, .running)
+        let server = try XCTUnwrap(batch.processes.first { $0.pid == 1_001 })
+        XCTAssertEqual(server.sessionID, 1_001)
+        XCTAssertNil(server.controllingTerminal)
+        XCTAssertEqual(source.recordedCalls.sessionID, 2, "the session never changes, so the second tick reuses it")
+    }
+
     func testCompleteTickPrunesExitedIdentities() async throws {
         let source = FakeProbeSource.table(count: 5)
         let sampler = NativeProcessSampler(source: source)

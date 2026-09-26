@@ -47,14 +47,8 @@ public struct ProcessLiteRecord: Equatable, Sendable {
 }
 
 extension ProcessLiteRecord {
-    /// The session never changes after setsid, so getsid runs once per
-    /// identity and later passes reuse the cached value.
-    func session(cachedSessionID: Int32?) -> ProcessSessionInfo {
-        let sessionID = cachedSessionID ?? {
-            let sid = getsid(pid)
-            return sid > 0 ? Int32(sid) : nil
-        }()
-        return ProcessSessionInfo(
+    func session(sessionID: Int32?) -> ProcessSessionInfo {
+        ProcessSessionInfo(
             processGroupID: processGroupID,
             sessionID: sessionID,
             controllingTerminal: controllingTerminal,

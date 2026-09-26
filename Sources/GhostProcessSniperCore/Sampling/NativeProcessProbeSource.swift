@@ -70,6 +70,11 @@ struct NativeProcessProbeSource: ProcessProbeSource {
         return ProbeTask(threadCount: Int(info.pti_threadnum), virtualBytes: info.pti_virtual_size)
     }
 
+    func sessionID(_ pid: pid_t) -> Int32? {
+        let sid = getsid(pid)
+        return sid > 0 ? Int32(sid) : nil
+    }
+
     func executablePath(_ pid: pid_t) -> String {
         withUnsafeTemporaryAllocation(of: CChar.self, capacity: 4096) { buffer in
             buffer.initialize(repeating: 0)

@@ -54,6 +54,8 @@ protocol ProcessProbeSource: Sendable {
     func bsd(_ pid: pid_t) -> ProbeBSDRead
     func usage(_ pid: pid_t) -> ProbeUsage?
     func taskInfo(_ pid: pid_t) -> ProbeTask?
+    /// getsid(); nil when the kernel refused.
+    func sessionID(_ pid: pid_t) -> Int32?
     func executablePath(_ pid: pid_t) -> String
     func commandLine(_ pid: pid_t) -> String?
     func forensics(_ pid: pid_t) -> (forensics: ProcessForensics, expensiveCallCount: Int)

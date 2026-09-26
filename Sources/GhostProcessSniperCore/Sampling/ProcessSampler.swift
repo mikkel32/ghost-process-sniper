@@ -197,7 +197,9 @@ public actor NativeProcessSampler: ProcessSampling {
             totalProcessorSeconds: usage?.cpuSeconds ?? cached?.totalProcessorSeconds ?? 0,
             cpu: cpu,
             isPriority: raw.priority > 0,
-            session: lite.session(cachedSessionID: cached?.sessionID)
+            // The session never changes after setsid, so getsid runs once per
+            // identity and later passes reuse the cached value.
+            session: lite.session(sessionID: cached?.sessionID ?? source.sessionID(raw.pid))
         )
     }
 

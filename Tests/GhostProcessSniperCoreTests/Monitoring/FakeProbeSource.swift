@@ -17,6 +17,9 @@ final class FakeProbeSource: ProcessProbeSource, @unchecked Sendable {
         var footprint: UInt64 = 64 << 20
         var threads = 4
         var ports: Set<Int> = []
+        var sessionID: Int32?
+        var terminal: UInt32?
+        var terminalForegroundGroup: Int32?
         var startStamp: UInt64 = 0
         var usageDenied = false
         var bsdDenied = false
@@ -31,6 +34,7 @@ final class FakeProbeSource: ProcessProbeSource, @unchecked Sendable {
         var arguments = 0
         var forensics = 0
         var ports = 0
+        var sessionID = 0
     }
 
     private let lock = NSLock()
@@ -103,7 +107,8 @@ final class FakeProbeSource: ProcessProbeSource, @unchecked Sendable {
             if process.bsdDenied { return .denied }
             return .record(ProbeBSD(pid: pid, parentPID: process.parentPID, userID: process.userID,
                 processGroupID: pid, status: 2, flags: 0, openFileCount: process.openFiles,
-                startTimeSeconds: process.start, startTimeMicroseconds: 0, name: process.name))
+                startTimeSeconds: process.start, startTimeMicroseconds: 0, name: process.name,
+                controllingTerminal: process.terminal, terminalForegroundGroupID: process.terminalForegroundGroup))
         }
     }
 
@@ -121,6 +126,13 @@ final class FakeProbeSource: ProcessProbeSource, @unchecked Sendable {
         locked {
             calls.taskInfo += 1
             return find(pid).map { ProbeTask(threadCount: $0.threads, virtualBytes: $0.footprint * 4) }
+        }
+    }
+
+    func sessionID(_ pid: pid_t) -> Int32? {
+        locked {
+            calls.sessionID += 1
+            return find(pid)?.sessionID
         }
     }
 
