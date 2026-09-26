@@ -3320,7 +3320,7 @@ private func radarStoreRecordsKillEventsAndLearning() async throws {
     try check(strategyHistory.operationCount == 1 && strategyHistory.forceRate == 1, "strategy history should query by signature")
     try check(unrelated.operationCount == 0, "strategy history should not pool other families of the same kind")
     try check(expired.operationCount == 0, "strategy history should only use the last 30 days")
-    try check(diagnostics.contains("Ghost Process Sniper Kill Diagnostics"), "store should export compact kill diagnostics")
+    try check(diagnostics.contains("Ghost Process Sniper Stop Diagnostics"), "store should export compact stop diagnostics")
 }
 
 private func radarStoreRecordsInterventionKernelTables() async throws {

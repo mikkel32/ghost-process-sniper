@@ -500,7 +500,7 @@ public struct FamilyRiskForecaster: Sendable {
         switch state {
         case .critical, .runaway:
             return TriageRecommendation(
-                title: family.isKillable ? "Preview Kill Tree" : "Inspect owner",
+                title: family.isKillable ? "Preview Stop Tree" : "Inspect owner",
                 detail: family.isKillable ? "This family is already beyond safe forecast bounds." : "Protected or foreign processes are present.",
                 action: family.isKillable ? .suggestKill : .inspect,
                 confidence: confidence

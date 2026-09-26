@@ -126,7 +126,7 @@ public struct RadarRuleEngine: Sendable {
         case .suggestKill:
             RadarActionSuggestion(
                 type: .suggestKill,
-                title: family.isKillable ? "Kill tree is available" : "Kill tree is locked",
+                title: family.isKillable ? "Stop Tree is available" : "Stop Tree is locked",
                 detail: family.isKillable ? "\(family.ownedIdentities.count) owned processes can be terminated" : "Protected descendants are present",
                 ruleID: rule.id,
                 createdAt: now
@@ -134,7 +134,7 @@ public struct RadarRuleEngine: Sendable {
         case .kill:
             RadarActionSuggestion(
                 type: .kill,
-                title: "Kill action recorded",
+                title: "Stop action recorded",
                 detail: "Destructive actions still require explicit confirmation.",
                 ruleID: rule.id,
                 createdAt: now

@@ -64,7 +64,7 @@ struct KillEngineDetails: View {
                     title: "Budget",
                     icon: "speedometer",
                     accent: preview.performanceReport.didHitBudget ? .orange : .secondary,
-                    primary: "\(Int(preview.performanceReport.snapshotMilliseconds.rounded())) ms \(preview.usedCheapSnapshot ? "arena kill graph" : "full preflight")",
+                    primary: "\(Int(preview.performanceReport.snapshotMilliseconds.rounded())) ms \(preview.usedCheapSnapshot ? "cached process graph" : "full preflight")",
                     secondary: "\(preview.arenaStats.processCount) arena rows, \(preview.performanceReport.graphReadCount) PID reads, \(preview.performanceReport.heavyMetricReadCount) target-heavy reads. \(preview.verificationPlanText)",
                     tags: [
                         "arena \(Int(preview.arenaStats.arenaBuildMilliseconds.rounded())) ms",
@@ -74,7 +74,7 @@ struct KillEngineDetails: View {
                     ],
                     tip: RadarTip(
                         title: "Budget",
-                        message: "What this preview cost to compute. The kill graph is cached and reused between previews, and \"reclaim\" estimates how much memory a successful stop frees."
+                        message: "What this preview cost to compute. The process graph is cached and reused between previews, and \"reclaim\" estimates how much memory a successful stop frees."
                     )
                 )
             }
