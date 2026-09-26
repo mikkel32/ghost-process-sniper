@@ -42,6 +42,8 @@ public struct KillReport: Equatable, Sendable {
     public var graceEndedEarly = false
     /// The launchd job booted out instead of signalling the root.
     public var launchdBootout: LaunchdBootout?
+    /// Whether the ports the workload listened on are really free now.
+    public var portOutcomes: [KillPortOutcome] = []
 
     public var partiallySucceeded: Bool {
         !gracefulPIDs.isEmpty || !forcedPIDs.isEmpty
@@ -108,6 +110,7 @@ public struct KillReport: Equatable, Sendable {
             "Calibrated reclaim: \(RadarFormat.bytes(calibratedReclaimBytes))",
             "Force skipped: \(skipForceRequested ? "yes" : "no")",
             "launchd: \(launchdBootout.map { "\($0.accepted ? "booted out" : "bootout failed (\($0.status))") \($0.job.domainTarget)\($0.disabled ? ", disabled" : "")" } ?? "not used")",
+            "Ports: \(portOutcomes.map(\.text).joined(separator: " ").ifEmpty("not checked"))",
             "Respawned: \(respawnedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))\(respawnedBy.map { " by \($0)" } ?? "")",
             "Graceful: \(gracefulPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Forced: \(forcedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",

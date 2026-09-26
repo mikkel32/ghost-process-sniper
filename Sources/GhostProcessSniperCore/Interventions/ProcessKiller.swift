@@ -8,6 +8,7 @@ public final class ProcessKiller: Sendable {
     let sleeper: @Sendable (UInt64) async -> Void
     let outcomeClassifier = KillOutcomeClassifier()
     let launchdResolver: LaunchdJobResolver?
+    let portProbe: ListeningPortProbing?
     private let reclaimEstimator = KillReclaimEstimator()
     private let preflightBuilder: KillPreflightBuilder
 
@@ -19,7 +20,8 @@ public final class ProcessKiller: Sendable {
         sleeper: @escaping @Sendable (UInt64) async -> Void = { nanoseconds in
             try? await Task.sleep(nanoseconds: nanoseconds)
         },
-        launchdResolver: LaunchdJobResolver? = nil
+        launchdResolver: LaunchdJobResolver? = nil,
+        portProbe: ListeningPortProbing? = nil
     ) {
         if let snapshotProvider {
             self.snapshotProvider = snapshotProvider
@@ -38,6 +40,7 @@ public final class ProcessKiller: Sendable {
         // Fakes run no launchctl unless tests pass their own.
         let native = signaler.usesDarwinProcessNamespace
         self.launchdResolver = launchdResolver ?? (native ? LaunchdJobResolver(userID: currentUserID) : nil)
+        self.portProbe = portProbe ?? (native ? DarwinListeningPortProbe() : nil)
     }
 
     public func preview(plan: KillPlan, forceKillDelay: TimeInterval = 2) async -> KillPreview {
@@ -373,6 +376,8 @@ public final class ProcessKiller: Sendable {
                report.survivorPIDs.isEmpty, report.partiallySucceeded {
                 await detectRespawn(of: targets, by: supervisor, since: totalStart, operationID: operationID, report: &report, eventSink: eventSink)
             }
+            await verifyFreedPorts(preflight.preview.riskAssessment.freedPorts, targets: targets, groupsFrom: preflightSnapshot.arena,
+                                   since: totalStart, operationID: operationID, report: &report, eventSink: eventSink)
             appendEvent(.completed, operationID: operationID, message: report.summary, report: &report, eventSink: eventSink)
             RadarLogger.kill.info("Kill operation \(operationID.rawValue, privacy: .public) \(plan.displayName, privacy: .public) finished in \(report.timeline.totalMilliseconds, privacy: .public)ms, forced \(report.forcedPIDs.count, privacy: .public), survivors \(report.survivorPIDs.count, privacy: .public)")
             return report
