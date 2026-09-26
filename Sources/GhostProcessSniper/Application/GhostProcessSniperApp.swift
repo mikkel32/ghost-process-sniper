@@ -38,6 +38,8 @@ struct GhostProcessSniperApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = MenuBarCoordinator()
     private let metricKitSubscriber = RadarMetricKitSubscriber()
+    private var isTerminating = false
+    private var didReplyToTermination = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -46,6 +48,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.arguments.contains("--console") {
             coordinator.openConsole()
         }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isTerminating else {
+            return .terminateLater
+        }
+        isTerminating = true
+        Task {
+            await coordinator.shutdown()
+            replyToTermination()
+        }
+        Task {
+            // A stuck disk must never hold up quitting.
+            try? await Task.sleep(for: .seconds(1))
+            replyToTermination()
+        }
+        return .terminateLater
+    }
+
+    private func replyToTermination() {
+        guard !didReplyToTermination else {
+            return
+        }
+        didReplyToTermination = true
+        NSApp.reply(toApplicationShouldTerminate: true)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -1,12 +1,15 @@
 import Foundation
 
 /// Latest forecast per signature, plus coalesced recommendation history and
-/// predictive alerts.
+/// predictive alerts. Fingerprints and stats are staged until the caller's
+/// transaction commits.
 final class ForecastLedger {
     private static let recommendationCooldown: TimeInterval = 30 * 60
 
     private let db: SQLiteDatabase
     private var lastRecommendationFingerprints: [String: RecommendationFingerprint] = [:]
+    private var stagedFingerprints: [String: RecommendationFingerprint] = [:]
+    private var stagedStats: StoreCoalescingStats?
     private(set) var lastStats: StoreCoalescingStats = .empty
 
     init(db: SQLiteDatabase) {
@@ -101,7 +104,7 @@ final class ForecastLedger {
                 .double(generatedAt.timeIntervalSince1970)
             )
         }
-        lastStats = StoreCoalescingStats(
+        stagedStats = StoreCoalescingStats(
             forecastCandidates: forecastCandidates,
             forecastWrites: min(families.count, 64),
             recommendationWrites: recommendationWrites,
@@ -109,12 +112,26 @@ final class ForecastLedger {
         )
     }
 
+    func commitStaged() {
+        lastRecommendationFingerprints.merge(stagedFingerprints) { _, staged in staged }
+        stagedFingerprints.removeAll(keepingCapacity: true)
+        if let stagedStats {
+            lastStats = stagedStats
+        }
+        stagedStats = nil
+    }
+
+    func discardStaged() {
+        stagedFingerprints.removeAll(keepingCapacity: true)
+        stagedStats = nil
+    }
+
     private func shouldWriteRecommendation(for family: ProcessFamily, at date: Date) -> Bool {
         let fingerprint = RecommendationFingerprint(family: family, date: date)
         defer {
-            lastRecommendationFingerprints[family.signature.id] = fingerprint
+            stagedFingerprints[family.signature.id] = fingerprint
         }
-        guard let previous = lastRecommendationFingerprints[family.signature.id] else {
+        guard let previous = stagedFingerprints[family.signature.id] ?? lastRecommendationFingerprints[family.signature.id] else {
             return true
         }
         if previous.state != fingerprint.state ||

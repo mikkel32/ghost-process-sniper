@@ -33,14 +33,14 @@ public final class ProcessMonitor {
     @ObservationIgnored private let thermalSampler = ThermalSampler()
     @ObservationIgnored private var selfUsageMonitor = SelfUsageMonitor()
     @ObservationIgnored private let notifier: RadarNotifying
-    @ObservationIgnored private let store: RadarStore?
+    @ObservationIgnored let store: RadarStore?
     @ObservationIgnored private let worker: RadarRefreshWorker
     @ObservationIgnored private let refreshGate = RefreshGate()
     @ObservationIgnored private var pipeline: RadarPipeline
     @ObservationIgnored private var scheduler = RadarScheduler()
     @ObservationIgnored private var injectedThermalHistory = ThermalActivityHistory()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
-    @ObservationIgnored private var settingsSaveTask: Task<Void, Never>?
+    @ObservationIgnored var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
     @ObservationIgnored private var popoverVisible = false
     @ObservationIgnored private var focusedSignatureIDs: Set<String> = []

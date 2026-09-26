@@ -30,7 +30,7 @@ extension RadarStore {
         return [
             "Ghost Process Sniper Store Diagnostics",
             "URL: \(url.path)",
-            "Backlog: \(health.backlogCount), actions: \(health.pendingActionCount)",
+            "Backlog: \(health.backlogCount), actions: \(health.pendingActionCount), dropped models: \(health.droppedModelCount)",
             "Last flush: \(health.lastFlushDate?.formatted() ?? "none")",
             "Last flush cost: \(Int(health.lastFlushMilliseconds.rounded())) ms",
             "Last context cost: \(Int(health.lastContextMilliseconds.rounded())) ms",

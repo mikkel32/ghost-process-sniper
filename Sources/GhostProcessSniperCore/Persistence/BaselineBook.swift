@@ -3,6 +3,9 @@ import Foundation
 /// Learned per-signature baselines. Rows are cached after the first read, and
 /// signatures known to have no row are remembered, so a refresh never re-reads
 /// what it already knows.
+///
+/// Writes are staged until the caller's transaction commits: a rolled-back
+/// flush that is retried must not learn the same samples twice.
 final class BaselineBook {
     private static let maximumUpdates = 512
     // Keeps the cold-load query comfortably below SQLite variable limits.
@@ -10,6 +13,7 @@ final class BaselineBook {
 
     private let db: SQLiteDatabase
     private var cache: [String: FamilyBaseline] = [:]
+    private var staged: [String: FamilyBaseline] = [:]
     private var knownMissing: Set<String> = []
     private var roundRobinOffset = 0
 
@@ -29,7 +33,9 @@ final class BaselineBook {
         missing.reserveCapacity(uniqueIDs.count)
 
         for signatureID in uniqueIDs {
-            if let cached = cache[signatureID] {
+            if let pending = staged[signatureID] {
+                result[signatureID] = pending
+            } else if let cached = cache[signatureID] {
                 result[signatureID] = cached
             } else if !knownMissing.contains(signatureID) {
                 missing.append(signatureID)
@@ -81,6 +87,18 @@ final class BaselineBook {
             )
             try upsert(baseline)
         }
+    }
+
+    func commitStaged() {
+        for (signatureID, baseline) in staged {
+            cache[signatureID] = baseline
+            knownMissing.remove(signatureID)
+        }
+        staged.removeAll(keepingCapacity: true)
+    }
+
+    func discardStaged() {
+        staged.removeAll(keepingCapacity: true)
     }
 
     private func updateCandidates(from families: [ProcessFamily]) -> [ProcessFamily] {
@@ -160,7 +178,6 @@ final class BaselineBook {
             .double(baseline.lastSeenAt.timeIntervalSince1970),
             .int64(Int64(baseline.measurementVersion ?? 0))
         )
-        cache[baseline.signature.id] = baseline
-        knownMissing.remove(baseline.signature.id)
+        staged[baseline.signature.id] = baseline
     }
 }

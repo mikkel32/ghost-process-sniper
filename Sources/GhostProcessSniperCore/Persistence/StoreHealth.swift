@@ -14,6 +14,8 @@ public struct StoreHealth: Equatable, Sendable {
     public let lastKillOperationSummary: String?
     /// The store found a corrupt file at open, moved it aside and started fresh.
     public let recoveredFromCorruption: Bool
+    /// Models dropped from a backlog that failed to flush.
+    public let droppedModelCount: Int
 
     public static let empty = StoreHealth(
         backlogCount: 0,
@@ -41,7 +43,8 @@ public struct StoreHealth: Equatable, Sendable {
         rulesCacheHitCount: Int = 0,
         errorMessage: String?,
         lastKillOperationSummary: String? = nil,
-        recoveredFromCorruption: Bool = false
+        recoveredFromCorruption: Bool = false,
+        droppedModelCount: Int = 0
     ) {
         self.backlogCount = backlogCount
         self.pendingActionCount = pendingActionCount
@@ -55,6 +58,7 @@ public struct StoreHealth: Equatable, Sendable {
         self.errorMessage = errorMessage
         self.lastKillOperationSummary = lastKillOperationSummary
         self.recoveredFromCorruption = recoveredFromCorruption
+        self.droppedModelCount = droppedModelCount
     }
 }
 

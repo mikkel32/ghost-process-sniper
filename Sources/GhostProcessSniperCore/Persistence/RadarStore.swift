@@ -23,6 +23,8 @@ public actor RadarStore {
     public static let denseSampleRetention: TimeInterval = 7 * 24 * 60 * 60
     public static let incidentRetention: TimeInterval = 90 * 24 * 60 * 60
     static let openRetryInterval: TimeInterval = 30
+    /// A locked or full disk must not grow the queue by a full model per tick.
+    static let maximumBacklog = 3
 
     typealias BindingValue = SQLiteValue
 
@@ -32,10 +34,11 @@ public actor RadarStore {
     private let baselineBook: BaselineBook
     private let incidentLedger: IncidentLedger
     private let forecastLedger: ForecastLedger
+    private let ruleBook: RuleBook
     private let clock: @Sendable () -> Date
     private var openFailure: (date: Date, error: any Error)?
     private var recoveredFromCorruption = false
-    private var pendingModels: [(RadarModel, ThresholdSettings)] = []
+    private var pendingModels: [RadarModel] = []
     private var pendingActions: [PendingAction] = []
     private var lastFlushDate: Date?
     private var lastPruneDate: Date?
@@ -44,13 +47,9 @@ public actor RadarStore {
     private var skippedSettingsWriteCount = 0
     private var lastSettingsJSON: String?
     private var lastErrorMessage: String?
+    private var droppedModelCount = 0
+    private var isClosed = false
     var lastKillOperationSummary: String?
-    private var cachedStoredRules: [RadarRule]?
-    private var cachedRulesKey: String?
-    private var cachedComposedRules: [RadarRule] = []
-    private var nextRuleExpiry: Date?
-    private var rulesCacheHitCount = 0
-    private var rulesRevision = 0
 
     public init(url: URL = RadarStore.defaultURL()) {
         self.init(url: url, busyTimeoutMilliseconds: 2_000, clock: { Date() })
@@ -64,6 +63,7 @@ public actor RadarStore {
         baselineBook = BaselineBook(db: database)
         incidentLedger = IncidentLedger(db: database, codec: codec)
         forecastLedger = ForecastLedger(db: database)
+        ruleBook = RuleBook(db: database, codec: codec)
     }
 
     public static func defaultURL() -> URL {
@@ -116,7 +116,7 @@ public actor RadarStore {
         try ensureOpen()
         try pruneIfNeeded(now: now)
         let signatureIDs = Array(Set(families.map(\.signature.id)))
-        let rules = try rulesForContext(settings: settings, now: now)
+        let rules = try ruleBook.composed(settings: settings, now: now)
         return RadarContext(
             baselines: try baselineBook.baselines(for: signatureIDs),
             recentIncidentCounts: try incidentLedger.recentCounts(
@@ -127,8 +127,10 @@ public actor RadarStore {
         )
     }
 
+    /// `settings` only sets the flush cadence. Settings are persisted by
+    /// saveSettings alone, so a queued model cannot overwrite a newer edit.
     public func enqueue(model: RadarModel, settings: ThresholdSettings, now: Date = Date()) throws -> StoreHealth {
-        pendingModels.append((model, settings))
+        pendingModels.append(model)
         if shouldFlush(now: now, settings: settings) {
             try flush(now: now)
         }
@@ -149,8 +151,7 @@ public actor RadarStore {
             try ensureOpen().transaction {
                 var latestForecastFamilies: [String: ProcessFamily] = [:]
                 var forecastCandidates = 0
-                for (model, settings) in models {
-                    try saveSettings(settings)
+                for model in models {
                     try baselineBook.learn(from: model.families, at: model.generatedAt)
                     try incidentLedger.record(model.families, at: model.generatedAt)
                     for family in model.families.prefix(64) {
@@ -161,7 +162,7 @@ public actor RadarStore {
                 if !latestForecastFamilies.isEmpty {
                     try forecastLedger.persist(
                         Array(latestForecastFamilies.values),
-                        at: models.last?.0.generatedAt ?? now,
+                        at: models.last?.generatedAt ?? now,
                         forecastCandidates: forecastCandidates
                     )
                 }
@@ -169,15 +170,40 @@ public actor RadarStore {
                     try writeAction(action)
                 }
             }
+            baselineBook.commitStaged()
+            forecastLedger.commitStaged()
             lastFlushDate = now
             lastFlushMilliseconds = Date().timeIntervalSince(flushStart) * 1_000
             lastErrorMessage = nil
         } catch {
-            pendingModels.insert(contentsOf: models, at: 0)
+            baselineBook.discardStaged()
+            forecastLedger.discardStaged()
+            let retry = models + pendingModels
+            pendingModels = Array(retry.suffix(Self.maximumBacklog))
+            droppedModelCount += retry.count - pendingModels.count
             pendingActions.insert(contentsOf: actions, at: 0)
             lastErrorMessage = error.localizedDescription
             throw error
         }
+    }
+
+    /// Flushes what is queued, checkpoints and truncates the WAL, and closes
+    /// the connection. Every later call throws.
+    public func close() {
+        guard !isClosed else {
+            return
+        }
+        do {
+            try flush()
+        } catch {
+            RadarLogger.store.error("Final flush failed: \(error.localizedDescription, privacy: .public)")
+        }
+        if db.isOpen {
+            try? db.exec("PRAGMA wal_checkpoint(TRUNCATE)")
+            try? db.exec("PRAGMA optimize")
+            db.close()
+        }
+        isClosed = true
     }
 
     public func storeHealth() -> StoreHealth {
@@ -190,10 +216,11 @@ public actor RadarStore {
             lastContextMilliseconds: lastContextMilliseconds,
             skippedSettingsWriteCount: skippedSettingsWriteCount,
             coalescingStats: forecastLedger.lastStats,
-            rulesCacheHitCount: rulesCacheHitCount,
+            rulesCacheHitCount: ruleBook.cacheHitCount,
             errorMessage: lastErrorMessage,
             lastKillOperationSummary: lastKillOperationSummary,
-            recoveredFromCorruption: recoveredFromCorruption
+            recoveredFromCorruption: recoveredFromCorruption,
+            droppedModelCount: droppedModelCount
         )
     }
 
@@ -213,74 +240,23 @@ public actor RadarStore {
     }
 
     public func loadRules(includeBuiltIns: Bool = true, settings: ThresholdSettings = .aggressive) throws -> [RadarRule] {
+        try ensureOpen()
         let now = Date()
         if includeBuiltIns {
-            return try rulesForContext(settings: settings, now: now)
+            return try ruleBook.composed(settings: settings, now: now)
         }
-        return try storedRules().filter { !Self.isExpired($0, at: now) }
-    }
-
-    /// Every stored rule, expired or not; callers filter with their own clock.
-    private func storedRules() throws -> [RadarRule] {
-        if let cachedStoredRules {
-            rulesCacheHitCount += 1
-            return cachedStoredRules
-        }
-        var rules: [RadarRule] = []
-        try ensureOpen().query("SELECT json FROM rules ORDER BY created_at DESC") { row in
-            if let rule = codec.decode(RadarRule.self, from: row.string(0)) {
-                rules.append(rule)
-            }
-        }
-        cachedStoredRules = rules
-        return rules
-    }
-
-    /// Cached per settings and rules revision, but only until the earliest
-    /// expiry, so a snooze ends on time instead of at the next rule edit.
-    private func rulesForContext(settings: ThresholdSettings, now: Date) throws -> [RadarRule] {
-        let key = "\(rulesRevision)|\(settings.memoryBytes)|\(Int(settings.cpuPercent.rounded()))|\(Int(settings.leakVelocityMegabytesPerMinute.rounded()))|\(settings.radarMode.rawValue)"
-        if cachedRulesKey == key, nextRuleExpiry.map({ now < $0 }) ?? true {
-            rulesCacheHitCount += 1
-            return cachedComposedRules
-        }
-        let composed = try (RadarRule.builtIns(settings: settings) + storedRules())
-            .filter { !Self.isExpired($0, at: now) }
-        cachedRulesKey = key
-        cachedComposedRules = composed
-        nextRuleExpiry = composed.compactMap(\.expiresAt).min()
-        return composed
-    }
-
-    private static func isExpired(_ rule: RadarRule, at now: Date) -> Bool {
-        rule.expiresAt.map { $0 <= now } ?? false
-    }
-
-    private func invalidateRulesCache() {
-        rulesRevision += 1
-        cachedStoredRules = nil
-        cachedRulesKey = nil
-        cachedComposedRules.removeAll(keepingCapacity: true)
-        nextRuleExpiry = nil
+        return try ruleBook.stored().filter { !RuleBook.isExpired($0, at: now) }
     }
 
     public func saveRule(_ rule: RadarRule) throws {
-        let db = try ensureOpen()
-        let json = try codec.encode(rule)
-        try db.execute(
-            "INSERT INTO rules(id, json, created_at) VALUES(?, ?, ?) " +
-            "ON CONFLICT(id) DO UPDATE SET json = excluded.json",
-            .text(rule.id.uuidString),
-            .text(json),
-            .double(rule.createdAt.timeIntervalSince1970)
-        )
-        invalidateRulesCache()
+        try ensureOpen()
+        try ruleBook.save(rule)
         RadarLogger.rules.info("Saved rule \(rule.name, privacy: .public)")
     }
 
     public func deleteRule(id: UUID) throws {
-        try ensureOpen().execute("DELETE FROM rules WHERE id = ?", .text(id.uuidString))
-        invalidateRulesCache()
+        try ensureOpen()
+        try ruleBook.delete(id: id)
     }
 
     public func setRuleEnabled(id: UUID, isEnabled: Bool) throws {
@@ -337,19 +313,12 @@ public actor RadarStore {
         for table in RadarStoreSchema.createdAtRetentionTables {
             try db.execute("DELETE FROM \(table) WHERE created_at < ?", .double(cutoff))
         }
-        // Rules encode dates as seconds since 1970.
-        try db.execute(
-            "DELETE FROM rules WHERE json_extract(json, '$.expiresAt') IS NOT NULL AND json_extract(json, '$.expiresAt') < ?",
-            .double(now.timeIntervalSince1970)
-        )
-        if db.changes > 0 {
-            invalidateRulesCache()
-        }
+        try ruleBook.pruneExpired(now: now)
         lastPruneDate = now
     }
 
     private func shouldFlush(now: Date, settings: ThresholdSettings) -> Bool {
-        if pendingModels.count >= 3 || pendingActions.count >= 8 {
+        if pendingModels.count >= Self.maximumBacklog || pendingActions.count >= 8 {
             return true
         }
         guard let lastFlushDate else {
@@ -374,6 +343,9 @@ public actor RadarStore {
     /// callers can surface it.
     @discardableResult
     private func ensureOpen() throws -> SQLiteDatabase {
+        guard !isClosed else {
+            throw RadarStoreError.sqlite("the store is closed")
+        }
         if db.isOpen {
             return db
         }
