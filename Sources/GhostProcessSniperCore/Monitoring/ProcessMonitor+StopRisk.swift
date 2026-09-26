@@ -86,10 +86,12 @@ public extension ProcessMonitor {
         stopRiskEntry(for: family).risk
     }
 
-    /// Why the family can never be stopped, such as Ghost running inside
-    /// it; the family page disables its stop button and says so.
-    func stopBlockedReason(for family: ProcessFamily) -> String? {
-        stopRiskEntry(for: family).blockedReason
+    /// The risk and why the family can never be stopped (such as Ghost
+    /// running inside it), from one lookup; the family page disables its
+    /// stop button and says so.
+    func stopFacts(for family: ProcessFamily) -> (risk: KillRiskAssessment, blockedReason: String?) {
+        let entry = stopRiskEntry(for: family)
+        return (entry.risk, entry.blockedReason)
     }
 
     internal func stopWorkload(for family: ProcessFamily) -> KillWorkloadProfile {

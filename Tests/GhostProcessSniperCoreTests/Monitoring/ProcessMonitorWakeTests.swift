@@ -54,23 +54,33 @@ final class ProcessMonitorWakeTests: XCTestCase {
         XCTAssertTrue(gone, "the loop must not hold the monitor through a 3.5 s sleep")
     }
 
-    func testThermalsAreSampledOnlyWhileASurfaceIsVisible() async {
+    func testHiddenThermalsAreReadOnlyAtALowRate() async {
         let thermals = CountingThermalSampler()
         let monitor = monitor(GatedSampler(), thermals: thermals)
         await monitor.refresh()
         await monitor.refresh()
         var calls = await thermals.calls
-        XCTAssertEqual(calls, 0)
+        XCTAssertEqual(calls, 1, "hidden, the second refresh comes too soon for another reading")
 
         monitor.setSurface(.console, visible: true)
         await monitor.refresh()
         calls = await thermals.calls
-        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(calls, 2, "on screen every refresh reads")
 
         monitor.setConsoleVisible(false)
         await monitor.refresh()
         calls = await thermals.calls
-        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(calls, 2)
+    }
+
+    func testHiddenReadingsStayCloseEnoughForAContinuousTrend() {
+        let monitor = monitor(GatedSampler())
+        let read = Date(timeIntervalSince1970: 1_000)
+        monitor.lastThermalReadAt = read
+        XCTAssertFalse(monitor.readsThermals(at: read.addingTimeInterval(3.5)))
+        XCTAssertTrue(monitor.readsThermals(at: read.addingTimeInterval(4)))
+        // The longest hidden sleep, with its timer slack, still lands under the window's gap.
+        XCTAssertLessThan(ProcessMonitor.hiddenThermalInterval + 8 * 1.15, ThermalObservationWindow.maximumGap)
     }
 
     func testHeartbeatRunsOnlyWhileRunningAndOnScreen() {

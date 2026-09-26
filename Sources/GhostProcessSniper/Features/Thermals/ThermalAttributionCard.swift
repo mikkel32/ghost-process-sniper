@@ -10,7 +10,7 @@ struct ThermalAttributionCard: View {
     /// Offered only for a repeated, user-owned heat suspect; it opens the stop preview.
     let stopTarget: ThermalStopTarget?
     let onInspect: (ThermalContributor) -> Void
-    let onStop: (String) -> Void
+    let onStop: (QuickStopAction) -> Void
     let onCompare: (ThermalContributor) -> Void
     let onBrowse: () -> Void
     let onRefresh: () -> Void

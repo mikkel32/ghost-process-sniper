@@ -7,7 +7,7 @@ Two production targets share the work. **`GhostProcessSniperCore`** samples proc
 ```text
 ProcessMonitor (MainActor, @Observable)          the app's single source of radar state
  ├─ refresh loop (utility QoS) ── one refresh at a time, one shared trailing rerun
- │   ├─ ThermalSampler (actor)                   SMC temperatures, only while a surface is visible
+ │   ├─ ThermalSampler (actor)                   SMC temperatures; every refresh while visible, ≤ every 4 s hidden
  │   └─ RadarRefreshWorker (actor)
  │       ├─ RadarScheduler                        SamplingPlan from demand, power, heat and pressure
  │       ├─ NativeProcessSampler (actor)          usage for every process, then telemetry,
@@ -35,7 +35,7 @@ ProcessKiller (Sendable)                          preview and stop, off the main
 - **Cadence** is a pure function of `RadarSchedulingContext` (`RadarScheduler.nextInterval`): about 1 s while visible (0.75 s when something is hot) with realtime budgets; hidden on mains 3.5 s, 2 s at Watch and 1 s when hot, relaxing to 2.5 s once every hot family was alerted on and has been hot for five minutes (a known long build); ×1.5 on battery; 6/4/3 s in Low Power Mode. Thermal pressure multiplies the interval (up to ×2.5), a tick over its budget ×1.35, and the result stays within 0.5–8 s. While hidden, a self-throttle stretches the interval until the radar's own CPU settles near twice the mode's idle target. Power comes from IOPS and Low Power Mode, cached for 30 s.
 - **QoS.** The loop task runs at utility priority, so hidden sampling, scoring and store work stay off the performance cores; a visible caller awaiting a refresh escalates it. Hidden sleeps carry 15% timer tolerance so the system can batch the wake-up.
 - **Single flight.** A refresh requested while one runs awaits one shared trailing rerun, so any number of callers cost one extra sample and each returns with data sampled after its call. Loop ticks join the running refresh instead.
-- **Visible-only work.** SMC temperatures and the main-actor hitch monitor (a heartbeat on a suspending clock) run only while a surface is visible.
+- **Visible-first work.** The main-actor hitch monitor (a heartbeat on a suspending clock) runs only while a surface is visible; SMC temperatures are read every refresh while visible and at most every 4 s while hidden, so the thermal trend stays warm.
 
 ## Sampling
 
@@ -135,7 +135,7 @@ The kill engine lives in `Interventions/`. Presentation code never widens a stop
 
 ## Thermals
 
-`ThermalSampler` reads AppleSMC read-only while a surface is visible; `ProcessMonitor` keeps the latest snapshot and a 180-second `ThermalObservationWindow`, so trends and traces are ready whenever a thermal view opens. `RadarRefreshWorker` calls `ThermalActivityAnalyzer.project` over the full raw sample on every refresh and records it in `ThermalActivityHistory` (a decayed load per app or job). The thermal views never signal a process; their stop shortcut goes through the regular preview. See [Thermals](Thermals.md).
+`ThermalSampler` reads AppleSMC read-only, before each refresh while a surface is visible and at most every 4 s while hidden; `ProcessMonitor` keeps the latest snapshot and a 180-second `ThermalObservationWindow`, so trends and traces are ready whenever a thermal view opens. `RadarRefreshWorker` calls `ThermalActivityAnalyzer.project` over the full raw sample on every refresh and records it in `ThermalActivityHistory` (a decayed load per app or job). The thermal views never signal a process; their stop shortcut goes through the regular preview. See [Thermals](Thermals.md).
 
 ## The app target
 

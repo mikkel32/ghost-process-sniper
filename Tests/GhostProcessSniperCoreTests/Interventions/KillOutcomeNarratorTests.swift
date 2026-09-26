@@ -42,6 +42,17 @@ final class KillOutcomeNarratorTests: XCTestCase {
                      return report
                  }(),
                  headline: "Stopped Cursor, but PM2 started it again (PID 812).", nextStep: "Stop PM2 instead."),
+            Case(name: "launchd respawn",
+                 report: {
+                     var report = report(targets: [target(812, "postgres", .terminated, root: true)], graceful: [812])
+                     report.respawnedPIDs = [830]
+                     report.respawnedBy = "homebrew.mxcl.postgresql@16"
+                     report.launchdJob = LaunchdJob(label: "homebrew.mxcl.postgresql@16", pid: 812, domain: "gui/501",
+                                                    plistPath: nil, keepAlive: true)
+                     return report
+                 }(),
+                 headline: "Stopped Cursor, but homebrew.mxcl.postgresql@16 started it again (PID 830).",
+                 nextStep: "Run brew services stop postgresql@16 to keep it stopped."),
             Case(name: "forced",
                  report: report(targets: [target(900, "java", .forceKilled, root: true), target(901, "java", .terminated)],
                                 graceful: [900, 901], forced: [900]),
@@ -50,7 +61,16 @@ final class KillOutcomeNarratorTests: XCTestCase {
                  report: report(targets: [target(950, "make", .terminated, root: true), target(951, "cc", .survived),
                                           target(952, "ld", .survived)],
                                 graceful: [950, 951, 952], forced: [951, 952], survivors: [951, 952]),
-                 headline: "cc (PID 951), ld (PID 952) are still running, even after a force stop.", nextStep: nil)
+                 headline: "cc (PID 951), ld (PID 952) are still running, even after a force stop.",
+                 nextStep: "If anything is still running in a minute, open a new preview to try again."),
+            Case(name: "stuck exiting",
+                 report: {
+                     var report = report(targets: [target(960, "rsync", .survived, root: true)], graceful: [960], forced: [960],
+                                         survivors: [960])
+                     report.stuckExitingPIDs = [960]
+                     return report
+                 }(),
+                 headline: "rsync (PID 960) is still running, even after a force stop.", nextStep: nil)
         ]
         for testCase in cases {
             let narrative = testCase.report.narrative

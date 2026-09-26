@@ -61,8 +61,14 @@ public struct KillReport: Equatable, Sendable {
     /// target exited (rather than running out): the family's exit time.
     public var graceWaitedSeconds: TimeInterval = 0
     public var graceEndedEarly = false
+    /// Every target was in a debugger, so the graceful wait watched nothing
+    /// and says nothing about how the family exits.
+    public var graceWatchedNothing = false
     /// The launchd job booted out instead of signalling the root.
     public var launchdBootout: LaunchdBootout?
+    /// The launchd job that runs the root, when one was found; it names the
+    /// command that keeps a restarted job stopped.
+    public var launchdJob: LaunchdJob?
     /// Whether the ports the workload listened on are really free now.
     public var portOutcomes: [KillPortOutcome] = []
 
@@ -81,7 +87,7 @@ public struct KillReport: Equatable, Sendable {
 
     public var diagnosticText: String {
         let story = narrative
-        var lines = ["Ghost Process Sniper Kill Report", story.headline]
+        var lines = ["Ghost Process Sniper Stop Report", story.headline]
         lines += story.nextStep.map { ["Next: \($0)"] } ?? []
         lines += story.details
         let outcomes = KillOutcomeRows.make(report: self)
@@ -101,7 +107,7 @@ public struct KillReport: Equatable, Sendable {
             "Scope: \(scopeUsed.label)",
             "Target drift: \(targetDiff.summary)",
             "Graph delta: \(finalGraphDelta.summary)",
-            "Kill performance: \(Int(performanceReport.snapshotMilliseconds.rounded()))ms, graph \(performanceReport.graphReadCount), heavy \(performanceReport.heavyMetricReadCount), converted \(performanceReport.targetConversionCount)",
+            "Stop performance: \(Int(performanceReport.snapshotMilliseconds.rounded()))ms, graph \(performanceReport.graphReadCount), heavy \(performanceReport.heavyMetricReadCount), converted \(performanceReport.targetConversionCount)",
             "Arena: \(performanceReport.arenaStats.processCount) processes, build \(Int(performanceReport.arenaStats.arenaBuildMilliseconds.rounded())) ms, adjacency \(Int(performanceReport.arenaStats.adjacencyBuildMilliseconds.rounded())) ms",
             "Watcher exits: \(watcherEvents.count), verification snapshots: \(verificationSnapshotCount)",
             "Watcher hints: \(reactorReport.watcherHints.count), early grace saved \(String(format: "%.2f", reactorReport.earlyExitSavingsSeconds))s",

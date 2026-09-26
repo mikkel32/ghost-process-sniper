@@ -48,6 +48,15 @@ final class DuplicateScoringTests: XCTestCase {
         XCTAssertEqual(result.duplicateClusters.first?.memberCount, 3)
     }
 
+    func testClusterLabelDoesNotFollowSampleOrder() throws {
+        let copies = [node(950, "server-1.js"), node(951, "server-2.js"), node(952, "server-10.js")]
+        let forward = try XCTUnwrap(build(copies).duplicateClusters.first)
+        let reversed = try XCTUnwrap(build(copies.reversed()).duplicateClusters.first)
+        XCTAssertEqual(forward.displayName, "node server-1")
+        XCTAssertEqual(reversed.displayName, forward.displayName, "a reordered sample must not relabel the cluster")
+        XCTAssertEqual(reversed.key.displayName, forward.displayName)
+    }
+
     func testIndependentCopiesKeepTheNewestAndSuggestStoppingTheRest() throws {
         let vite = "/Users/dev/web/node_modules/.bin/vite"
         let oldest = node(900, "\(vite) --port 5173", startedAgo: 7_200, ports: [5173])

@@ -20,6 +20,9 @@ struct KillPreviewSheet: View {
     @State private var operationControl = KillOperationControl()
     @State private var waitingStopped = false
     @State private var progress: KillLiveProgress
+    /// The rows a force follow-up starts from: the held stop's outcome, not
+    /// the preview's "Ready" targets. Nil for the stop itself.
+    @State private var followUpRows: [KillTarget]?
     @State private var showsTargets: Bool
     @State private var showsEngineDetails = false
     /// Briefly true after a refresh changed the plan, so a click aimed at
@@ -55,7 +58,8 @@ struct KillPreviewSheet: View {
                     if let report {
                         resultPanel(report)
                     } else if isKilling {
-                        KillProgressPanel(progress: progress, preview: preview, forceHeld: skipForce,
+                        KillProgressPanel(progress: progress, targets: followUpRows ?? preview.targets,
+                                          skippedCount: followUpRows == nil ? skippedCount : 0, forceHeld: skipForce,
                                           waitingStopped: waitingStopped, holdForce: holdForce, stopWaiting: stopWaiting)
                     } else {
                         planPage
@@ -203,6 +207,10 @@ struct KillPreviewSheet: View {
         return all.filter { seen.insert($0.identity).inserted }
     }
 
+    private var skippedCount: Int {
+        preview.lockedTargets.count + preview.staleTargets.count + preview.recycledTargets.count + preview.exitedTargets.count
+    }
+
     private func resultPanel(_ report: KillReport) -> some View {
         let restarter = preview.alternatives.first { $0.kind == .stopSupervisor }
         return KillResultPanel(
@@ -245,8 +253,8 @@ struct KillPreviewSheet: View {
                               : "Report anything that refuses to stop instead of force-stopping it.")
                 }
                 Spacer()
-                if !preview.canKill || preview.strategyProfile.phases.isEmpty {
-                    Text(preview.strategyRecommendation.reasons.first ?? preview.riskSummary)
+                if let caption = footerCaption {
+                    Text(caption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -270,6 +278,14 @@ struct KillPreviewSheet: View {
                 }
             }
         }
+    }
+
+    /// Why Confirm is disabled or missing: the block itself, not the
+    /// strategy's rationale, which may still read "Standard stop".
+    private var footerCaption: String? {
+        if let blocked = preview.confirmBlockedReason { return blocked }
+        guard preview.strategyProfile.phases.isEmpty else { return nil }
+        return preview.strategyRecommendation.reasons.first ?? preview.riskSummary
     }
 
     private var confirmTitle: String {
@@ -297,18 +313,22 @@ struct KillPreviewSheet: View {
         guard !isKilling, canForceSurvivors else { return }
         let pending = pending
         let session = session
-        run { sink in
+        run(from: KillOutcomeRows.make(report: finished)) { sink in
             await session.forceSurvivors(pending, report: finished, eventSink: sink) ?? finished
         }
     }
 
     /// Runs a stop and feeds its events to the display in the order they
     /// were sent; the report is shown only after the last event.
-    private func run(_ stop: @escaping @MainActor @Sendable (@escaping @Sendable (KillOperationEvent) -> Void) async -> KillReport) {
+    private func run(
+        from rows: [KillTarget]? = nil,
+        _ stop: @escaping @MainActor @Sendable (@escaping @Sendable (KillOperationEvent) -> Void) async -> KillReport
+    ) {
         isKilling = true
         report = nil
         waitingStopped = false
         progress = KillLiveProgress(preview: preview)
+        followUpRows = rows
         Task {
             let (events, continuation) = AsyncStream.makeStream(of: KillOperationEvent.self)
             let consumer = Task {

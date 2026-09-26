@@ -8,7 +8,7 @@
   "test_roots": {
     "roots": ["Tests/GhostProcessSniperCoreTests", "Checks/GhostProcessSniperCoreChecks"],
     "legacy_line_budgets": {
-      "Checks/GhostProcessSniperCoreChecks/main.swift": 4053
+      "Checks/GhostProcessSniperCoreChecks/main.swift": 3920
     }
   }
 }

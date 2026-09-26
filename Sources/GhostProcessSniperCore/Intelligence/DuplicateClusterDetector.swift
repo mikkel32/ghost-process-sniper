@@ -30,6 +30,9 @@ public struct DuplicateClusterDetector: Sendable {
         let byPID = byPID ?? Dictionary(processes.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
         var buckets: [DuplicateClusterKey: [ProcessMetrics]] = [:]
         buckets.reserveCapacity(processes.count / 2)
+        // Keys ignore their label, so the kept one would be whichever process
+        // came first; the smallest label is stable across sample orders.
+        var labels: [DuplicateClusterKey: String] = [:]
 
         for process in processes {
             let key: DuplicateClusterKey?
@@ -46,11 +49,14 @@ public struct DuplicateClusterDetector: Sendable {
                 continue
             }
             buckets[key, default: []].append(process)
+            if let label = labels[key], label <= key.displayName { continue }
+            labels[key] = key.displayName
         }
 
         var clusters: [DuplicateProcessCluster] = []
         clusters.reserveCapacity(buckets.count)
-        for (key, members) in buckets where members.count >= minimumClusterSize {
+        for (bucket, members) in buckets where members.count >= minimumClusterSize {
+            let key = DuplicateClusterKey(kind: bucket.kind, value: bucket.value, displayName: labels[bucket] ?? bucket.displayName)
             let bestClassification = members
                 .map { classifications[$0.pid] ?? classifier.classification(for: $0) }
                 .max { $0.groupingPriority < $1.groupingPriority }

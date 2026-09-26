@@ -9,7 +9,7 @@ struct FamilySamplingDemand: Sendable {
     private(set) var candidatePIDs = Set<Int32>()
     private(set) var forensicsIdentities = Set<ProcessIdentity>()
     private(set) var forensicsPIDs = Set<Int32>()
-    /// Members of classified developer families: sampling hints and port-census candidates.
+    /// Members of developer families: sampling hints and port-census candidates.
     private(set) var devIdentities = Set<ProcessIdentity>()
     private(set) var hotFamilyCount = 0
     private(set) var focusedFamilyCount = 0
@@ -72,9 +72,17 @@ struct FamilySamplingDemand: Sendable {
                 forensicsPIDs.insert(family.root.pid)
                 forensicsIdentities.formUnion(family.members.lazy.map(\.identity))
             }
-            if family.classification != nil || family.devConfidence >= Self.developerConfidence {
+            if Self.isDeveloperWork(family) {
                 devIdentities.formUnion(family.members.lazy.map(\.identity))
             }
         }
+    }
+
+    /// Every family carries a classification, so only a confident, specific
+    /// one counts; "Heavy process" is the classifier's fallback, not evidence.
+    static func isDeveloperWork(_ family: ProcessFamily) -> Bool {
+        if family.devConfidence >= developerConfidence { return true }
+        guard let classification = family.classification else { return false }
+        return classification.kind != .unknownHeavy && classification.confidence >= developerConfidence
     }
 }

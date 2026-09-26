@@ -6,7 +6,7 @@ struct ThermalContributorDetailView: View {
     let isInLatestSample: Bool
     let stopTarget: ThermalStopTarget?
     let onInspect: (String) -> Void
-    let onStop: (String) -> Void
+    let onStop: (QuickStopAction) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var processSort: ThermalActivitySort = .cpu
     @State private var orderedProcesses: [ThermalProcessEvidence] = []
@@ -20,7 +20,8 @@ struct ThermalContributorDetailView: View {
         isInLatestSample && isCurrent(contributor.measuredAt, at: now)
     }
 
-    /// Sorted once per new reading or sort choice, never on a render tick.
+    /// Sorted once per new reading, sort choice or expired reading, never on
+    /// a render tick.
     private func sortProcesses() {
         let now = Date()
         orderedProcesses = switch processSort {
@@ -109,6 +110,13 @@ struct ThermalContributorDetailView: View {
         .frame(minWidth: 500, idealWidth: 560, maxWidth: 700, minHeight: 460, idealHeight: 620, maxHeight: 800)
         .onChange(of: processSort, initial: true) { sortProcesses() }
         .onChange(of: contributor.processes) { sortProcesses() }
+        .task(id: contributor.processes) {
+            // An expired reading ranks last, so the order changes with it.
+            for expiry in contributor.expiryDates(after: .now) {
+                do { try await Task.sleep(for: .seconds(max(0, expiry.timeIntervalSinceNow) + 0.05)) } catch { return }
+                sortProcesses()
+            }
+        }
     }
 
     private func header(fresh: Bool) -> some View {
@@ -139,9 +147,9 @@ struct ThermalContributorDetailView: View {
             .buttonStyle(.borderedProminent)
             .help("Open the observed process family. Nothing is stopped.")
             if let stopTarget {
-                ThermalStopButton(target: stopTarget) { familyKey in
+                ThermalStopButton(target: stopTarget) { action in
                     dismiss()
-                    onStop(familyKey)
+                    onStop(action)
                 }
             }
         }

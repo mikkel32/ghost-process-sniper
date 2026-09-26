@@ -70,7 +70,8 @@ public struct KillOutcomeObservation: Equatable, Sendable {
 
     public init(report: KillReport) {
         let outcome: Outcome
-        if report.attempts.isEmpty || report.strategyUsed == .inspectOnly || report.skipForceRequested || !report.signalDeniedPIDs.isEmpty {
+        if report.attempts.isEmpty || report.strategyUsed == .inspectOnly || report.skipForceRequested || !report.signalDeniedPIDs.isEmpty
+            || report.graceWatchedNothing {
             outcome = .excluded
         } else if !report.respawnedPIDs.isEmpty {
             outcome = .respawned

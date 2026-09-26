@@ -45,12 +45,6 @@ struct ThermalTraceView: View {
         .accessibilityLabel(Self.summary(segments))
     }
 
-    static func rangeLabel(_ segments: [ThermalTraceSegment]) -> String {
-        let values = segments.flatMap(\.points).map(\.celsius)
-        guard values.count > 1, let low = values.min(), let high = values.max() else { return "Measured in Celsius" }
-        return String(format: "Range %.1f–%.1f°C", low, high)
-    }
-
     static func summary(_ segments: [ThermalTraceSegment]) -> String {
         let values = segments.flatMap(\.points).map(\.celsius)
         guard values.count > 1, let low = values.min(), let high = values.max() else { return "Collecting sensor history." }

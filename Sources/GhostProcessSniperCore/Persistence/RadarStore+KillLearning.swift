@@ -167,9 +167,9 @@ extension RadarStore {
     public func exportKillDiagnostics(limit: Int = 8) throws -> String {
         let kills = try recentKillOperations(limit: limit)
         guard !kills.isEmpty else {
-            return "Ghost Process Sniper Kill Diagnostics\nNo kill operations recorded yet."
+            return "Ghost Process Sniper Stop Diagnostics\nNo stops recorded yet."
         }
-        var lines = ["Ghost Process Sniper Kill Diagnostics", "Generated \(Date().formatted())", ""]
+        var lines = ["Ghost Process Sniper Stop Diagnostics", "Generated \(Date().formatted())", ""]
         for record in kills {
             lines.append("\(record.displayName) - \(record.strategy.label) - \(record.scope.label)")
             lines.append("  root PID \(record.rootPID), duration \(Int(record.durationMilliseconds.rounded())) ms")

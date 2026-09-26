@@ -250,7 +250,11 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
     /// What stopping the family would do, from one sample. The stop set is
     /// every same-user descendant of the root, including processes of other
     /// families, so it is keyed like `StopRiskCache` and the family page
-    /// agrees with the stop preview.
+    /// agrees with the stop preview. A prepared panel is rebuilt only when the
+    /// snapshot's content revision changes, which does not hash listening
+    /// ports or Ghost's own parent chain, so a change in only those shows on
+    /// the page one content change late; the stop preview always assesses
+    /// the live sample.
     struct StopFacts {
         let risk: KillRiskAssessment
         let blockedReason: String?

@@ -75,7 +75,7 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 - Only what changed is published: diagnostics, health and timing figures no longer redraw their views every second, and the popover, Overview and Settings redraw only the parts whose data changed.
 - A family page's detail and stop risk are built off the main thread as soon as it is selected; assessing a 41-process Electron family's stop risk dropped from about 38 ms to under 2 ms.
 - The stop result appears as soon as the processes are gone; recording and the refresh follow.
-- Temperatures are read only while the popover or console is on screen.
+- Temperatures are read on every scan while the popover or console is on screen and at most every 4 seconds otherwise, which keeps the trend warm without constant sensor reads.
 
 ### Thermals
 - Temperatures on M3 and M4 Macs through catalog sensor maps, and on newer Apple chips through sensors found on the Mac once per launch; the panel says when a map is unverified, and unsupported Macs show macOS thermal pressure with the reason.

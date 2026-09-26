@@ -26,11 +26,16 @@ recorded_groups() {
   awk '{ print $2 }' "$PID_FILE"
 }
 
+# On macOS /usr/bin/python3 is an xcrun shim that picks its tool by argv[0],
+# so `exec -a vite` needs the real interpreter behind it.
+PYTHON=""
+
 launch() {
   local kind="$1"
+  [[ -n "$PYTHON" ]] || PYTHON="$(/usr/bin/python3 -c 'import sys; print(sys.executable)')"
   case "$kind" in
     leak)
-      /usr/bin/python3 - "${MARKER}leak" <<'PY' &
+      "$PYTHON" - "${MARKER}leak" <<'PY' &
 import os, time
 os.setpgrp()
 MiB = 1024 * 1024
@@ -46,7 +51,7 @@ while True:
 PY
       ;;
     cpu)
-      /usr/bin/python3 - "${MARKER}cpu" <<'PY' &
+      "$PYTHON" - "${MARKER}cpu" <<'PY' &
 import os
 os.setpgrp()
 x = 0
@@ -55,7 +60,7 @@ while True:
 PY
       ;;
     ignore-term)
-      /usr/bin/python3 - "${MARKER}ignore-term" <<'PY' &
+      "$PYTHON" - "${MARKER}ignore-term" <<'PY' &
 import os, signal
 os.setpgrp()
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -67,7 +72,7 @@ PY
       ;;
     dev-server)
       # argv0 "vite" makes it read as a dev server; Ctrl-C (SIGINT) is its only clean exit.
-      (exec -a vite /usr/bin/python3 - "${MARKER}dev-server" "$PORT" <<'PY'
+      (exec -a vite "$PYTHON" - "${MARKER}dev-server" "$PORT" <<'PY'
 import os, signal, socket, sys
 os.setpgrp()
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -86,7 +91,7 @@ PY
       ;;
     supervisor)
       # "nodemon" in argv makes it read as a supervisor watching its "node" child.
-      /usr/bin/python3 - "${MARKER}supervisor" nodemon <<'PY' &
+      "$PYTHON" - "${MARKER}supervisor" nodemon <<'PY' &
 import os, subprocess, sys, time
 os.setpgrp()
 child_code = "import time\nwhile True: time.sleep(60)"
@@ -99,7 +104,7 @@ PY
       ;;
     slow-db)
       # argv0 "postgres" makes it read as a database; it takes 4 s to shut down.
-      (exec -a postgres /usr/bin/python3 - "${MARKER}slow-db" <<'PY'
+      (exec -a postgres "$PYTHON" - "${MARKER}slow-db" <<'PY'
 import os, signal, time
 os.setpgrp()
 stopping = []

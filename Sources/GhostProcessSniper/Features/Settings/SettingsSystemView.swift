@@ -57,7 +57,7 @@ struct SystemSettingsTab: View {
             ) {
                 SettingsSafetyRow(
                     title: "Your processes only",
-                    detail: "Protected and differently owned processes are excluded from kill targets.",
+                    detail: "Protected and differently owned processes are never stop targets.",
                     systemImage: "person.crop.circle",
                     status: "Enforced"
                 )
@@ -87,7 +87,7 @@ struct SystemSettingsTab: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Smart protection · Balanced sensitivity")
                             .font(.headline)
-                        Text("Developer tools scope, grouped families, adaptive performance, and the safe kill flow.")
+                        Text("Developer tools scope, grouped families, adaptive performance, and the safe stop flow.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

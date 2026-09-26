@@ -15,16 +15,16 @@ struct RadarConsoleDetail: View {
                 if let family = session.family(forKey: familyKey) {
                     // Look up by the concrete key so an alias still finds the prebuilt panel.
                     let panel = session.detailPanel(for: family)
+                    // Panels carry the assessment and protection floor, built
+                    // off the main actor over the same stop set as the
+                    // monitor's memo; the memo covers a first frame without one.
+                    let stopFacts = panel.stopRisk.map { (risk: $0, blockedReason: panel.stopBlockedReason) }
+                        ?? session.monitor.stopFacts(for: family)
                     FamilyDetailConsoleView(
                         panel: panel,
-                        // Panels carry the assessment and protection floor, built
-                        // off the main actor over the same stop set as the
-                        // monitor's memo; the memo covers a first frame without one.
                         stop: FamilyStopState(
-                            risk: panel.stopRisk ?? session.monitor.stopRisk(for: family),
-                            blockedReason: panel.stopRisk == nil
-                                ? session.monitor.stopBlockedReason(for: family)
-                                : panel.stopBlockedReason,
+                            risk: stopFacts.risk,
+                            blockedReason: stopFacts.blockedReason,
                             isPreparing: session.isPreparingIntervention,
                             stopSupervisor: { session.prepareKillSupervisor(of: family) }
                         ),

@@ -15,7 +15,7 @@ struct FamilyStopState {
     /// is a process the user can stop; stopping it is what lasts.
     var restartingSupervisor: KillSupervisor? {
         guard let supervisor = risk.supervisor, supervisor.pid != nil,
-              KillTargetAdvisor.restartsOnExit(supervisor.kind) else { return nil }
+              supervisor.kind.restartPolicy == .onExit else { return nil }
         return supervisor
     }
 }

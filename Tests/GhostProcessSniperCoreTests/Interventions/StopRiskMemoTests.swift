@@ -84,6 +84,7 @@ final class StopRiskMemoTests: XCTestCase {
         let risk = monitor.stopRisk(for: family)
         let plan = await monitor.killPlan(for: family)
         XCTAssertEqual(KillRiskAssessor().assess(plan.workload ?? .empty), risk)
+        XCTAssertEqual(monitor.stopFacts(for: family).risk, risk)
         XCTAssertEqual(monitor.stopRiskCache.assessmentCount, 1)
     }
 

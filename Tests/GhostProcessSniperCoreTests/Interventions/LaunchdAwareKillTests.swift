@@ -35,24 +35,75 @@ final class LaunchdAwareKillTests: XCTestCase {
 
     func testBootingOutTheJobSendsNoSignalToTheRoot() async {
         let table = FakeProcessTable()
-        let postgres = KillProcessLite.fake(pid: 812, name: "postgres")
-        table.add(postgres, .exits(on: SIGTERM, afterTicks: 2))
+        let syncer = KillProcessLite.fake(pid: 812, name: "syncer")
+        table.add(syncer, .exits(on: SIGTERM, afterTicks: 2))
         let launchctl = FakeLaunchctl(list: listing, onBootout: { table.signalFromOutside(SIGTERM, to: 812) })
         let killer = killer(table, launchctl)
 
-        let report = await killer.kill(plan: plan(postgres).binding(to: [postgres.identity], expiresAt: .distantFuture,
-                                                                    launchdStop: .untilLogin), forceKillDelay: 2)
+        let report = await killer.kill(plan: plan(syncer).binding(to: [syncer.identity], expiresAt: .distantFuture,
+                                                                  launchdStop: .untilLogin), forceKillDelay: 2)
 
         XCTAssertTrue(table.signals(to: 812).isEmpty, "launchd stops it, not Ghost")
         XCTAssertFalse(table.isListed(812))
         XCTAssertEqual(launchctl.invocations, [["list"], ["bootout", "gui/501/homebrew.mxcl.postgresql@16"]])
         XCTAssertEqual(report.launchdBootout?.accepted, true)
         let bootedOut = report.eventHistory.first { $0.kind == .signaled && $0.pid == 812 }
-        XCTAssertEqual(bootedOut?.targetState, .stopping, "the row turns green only once postgres is gone")
+        XCTAssertEqual(bootedOut?.targetState, .stopping, "the row turns green only once it is gone")
         XCTAssertEqual(report.gracefulPIDs, [812])
         XCTAssertTrue(report.succeeded, report.summary)
         XCTAssertTrue(report.respawnedPIDs.isEmpty)
         XCTAssertEqual(report.targetResults.first { $0.pid == 812 }?.state, .terminated)
+    }
+
+    func testBootedOutDatabaseStillGetsItsFastShutdown() async {
+        let table = FakeProcessTable()
+        let postgres = KillProcessLite.fake(pid: 812, name: "postgres")
+        // launchd's SIGTERM starts a smart shutdown that waits for clients.
+        table.add(postgres, FakeProcessTable.Behaviour(onSignal: [SIGTERM: [.ignore], SIGINT: [.exit(afterTicks: 1)]]))
+        let launchctl = FakeLaunchctl(list: listing, onBootout: { table.signalFromOutside(SIGTERM, to: 812) })
+
+        let report = await killer(table, launchctl).kill(
+            plan: plan(postgres).binding(to: [postgres.identity], expiresAt: .distantFuture, launchdStop: .untilLogin), forceKillDelay: 2
+        )
+
+        XCTAssertEqual(report.launchdBootout?.accepted, true)
+        XCTAssertEqual(table.signals(to: 812), [SIGINT], "the booted-out master still gets its fast-shutdown request")
+        XCTAssertTrue(report.forcedPIDs.isEmpty)
+        XCTAssertTrue(report.succeeded, report.summary)
+    }
+
+    func testSuspendedRootIsResumedSoLaunchdCanStopIt() async {
+        let table = FakeProcessTable()
+        let syncer = KillProcessLite.fake(pid: 812, name: "syncer", status: FakeProcessTable.stoppedStatus)
+        table.add(syncer, .exits(on: SIGTERM, afterTicks: 1))
+        let launchctl = FakeLaunchctl(list: listing, onBootout: { table.signalFromOutside(SIGTERM, to: 812) })
+
+        let report = await killer(table, launchctl).kill(
+            plan: plan(syncer).binding(to: [syncer.identity], expiresAt: .distantFuture, launchdStop: .untilLogin), forceKillDelay: 2
+        )
+
+        XCTAssertEqual(table.signals(to: 812), [SIGCONT], "launchd's SIGTERM waits until the root runs again")
+        XCTAssertTrue(report.forcedPIDs.isEmpty)
+        XCTAssertTrue(report.succeeded, report.summary)
+    }
+
+    func testNoRestartIsProbedAfterAnAcceptedBootout() async {
+        let table = FakeProcessTable()
+        let syncer = KillProcessLite.fake(pid: 812, name: "syncer")
+        // Started by hand, not by launchd: the job is booted out.
+        let another = KillProcessLite.fake(pid: 830, name: "syncer", start: UInt64(Date().timeIntervalSince1970) + 60)
+        table.add(syncer)
+        let launchctl = FakeLaunchctl(list: listing, onBootout: {
+            table.signalFromOutside(SIGTERM, to: 812)
+            table.add(another)
+        })
+
+        let report = await killer(table, launchctl).kill(
+            plan: plan(syncer).binding(to: [syncer.identity], expiresAt: .distantFuture, launchdStop: .untilLogin), forceKillDelay: 2
+        )
+
+        XCTAssertTrue(report.succeeded, report.summary)
+        XCTAssertTrue(report.respawnedPIDs.isEmpty, "launchd does not restart a booted-out job")
     }
 
     func testPreviewAndConfirmAskLaunchctlOnce() async {
@@ -83,7 +134,7 @@ final class LaunchdAwareKillTests: XCTestCase {
 
         XCTAssertEqual(launchctl.invocations.last, ["disable", "gui/501/homebrew.mxcl.postgresql@16"])
         XCTAssertEqual(report.launchdBootout?.disabled, true)
-        XCTAssertTrue(table.log.isEmpty)
+        XCTAssertEqual(table.log.map(\.signal), [SIGINT], "only the database's own fast shutdown")
     }
 
     func testRefusedBootoutFallsBackToSignallingTheRoot() async {

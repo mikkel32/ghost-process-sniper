@@ -51,7 +51,7 @@ public struct CulpritAnalysis: Equatable, Sendable {
         switch classification.kind {
         case .nodeServer:
             likelyCause = hasCredibleEscalation ? "Node dev server is trending toward a leak" : (growth > 0 ? "Node dev server or watcher memory growth" : "Node or JavaScript dev server consuming resources")
-            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command, then Kill Tree if this server is stale." : "Inspect tree and stop the owning terminal/app.")
+            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command, then Stop Tree if this server is stale." : "Inspect tree and stop the owning terminal/app.")
         case .electronApp:
             likelyCause = hasCredibleForecast ? "Electron helper tree is heating up before a hard threshold" : (family.childCount >= 4 ? "Electron renderer/helper fanout" : "Electron app helper using memory")
             nextAction = hasCredibleForecast ? forecastActionDetail : "Inspect renderer tree and close or restart the owning app."
@@ -75,25 +75,25 @@ public struct CulpritAnalysis: Equatable, Sendable {
             nextAction = hasCredibleForecast ? forecastActionDetail : "Let active builds finish; kill only stale compiler trees."
         case .goService:
             likelyCause = "Go compiler or backend service is active"
-            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect ports and Kill Tree if the backend service is stale." : "Inspect running Go binary or live-reloading watcher.")
+            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect ports and Stop Tree if the backend service is stale." : "Inspect running Go binary or live-reloading watcher.")
         case .rustService:
             likelyCause = "Rust build target or active server process is running"
-            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command and Kill Tree if target binary is orphaned." : "Let Cargo compilation complete or restart active server.")
+            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command and Stop Tree if target binary is orphaned." : "Let Cargo compilation complete or restart active server.")
         case .bunServer:
             likelyCause = "Bun server runtime is active"
-            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command, then Kill Tree if the Bun server is stale." : "Inspect process tree and stop the server.")
+            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command, then Stop Tree if the Bun server is stale." : "Inspect process tree and stop the server.")
         case .denoServer:
             likelyCause = "Deno secure JavaScript runtime is active"
-            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command, then Kill Tree if Deno server is stale." : "Inspect process and stop it via terminal.")
+            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command, then Stop Tree if Deno server is stale." : "Inspect process and stop it via terminal.")
         case .phpService:
             likelyCause = "PHP service, Laravel server, or composer background task is running"
-            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect cwd and Kill Tree if PHP/Artisan command is orphaned." : "Stop the artisan server or PHP-FPM process manually.")
+            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect cwd and Stop Tree if PHP/Artisan command is orphaned." : "Stop the artisan server or PHP-FPM process manually.")
         case .elixirService:
             likelyCause = "Elixir/Phoenix backend service or mix build is active"
-            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect and Kill Tree if Phoenix server is orphaned." : "Stop the mix server or IEx session.")
+            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect and Stop Tree if Phoenix server is orphaned." : "Stop the mix server or IEx session.")
         case .dotnetService:
             likelyCause = ".NET service, dotnet watch reloader, or build target is active"
-            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command, then Kill Tree if dotnet reloader is stale." : "Terminate the active dotnet session or reload server.")
+            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect command, then Stop Tree if dotnet reloader is stale." : "Terminate the active dotnet session or reload server.")
         case .languageServer:
             likelyCause = growth > 0 ? "Language server is growing its project model" : "Language server is indexing or holding a project model"
             nextAction = hasCredibleForecast ? forecastActionDetail : "Language servers restart automatically when stopped; restart it from the editor if it keeps growing."
@@ -117,7 +117,7 @@ public struct CulpritAnalysis: Equatable, Sendable {
             nextAction = hasCredibleForecast ? forecastActionDetail : "Close unused windows or heavy extensions; quit the app normally to keep unsaved work."
         case .cliTool:
             likelyCause = "Developer CLI process is still running in the background"
-            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect and Kill Tree if this command is stale." : "Inspect owner before taking action.")
+            nextAction = hasCredibleForecast ? forecastActionDetail : (family.isKillable ? "Inspect and Stop Tree if this command is stale." : "Inspect owner before taking action.")
         case .unknownHeavy:
             if let signal = family.hardwareSignals.first {
                 likelyCause = "Unclassified process is creating \(signal.kind.label.lowercased())"

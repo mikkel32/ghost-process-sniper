@@ -43,6 +43,18 @@ final class KillLiveProgressTests: XCTestCase {
         XCTAssertEqual(progress.recentEvents.last?.kind, .completed, "newest last, in the order sent")
     }
 
+    func testForceCountDoesNotChangeTheStage() {
+        var progress = KillLiveProgress(displayName: "make", kind: .build, strategy: .standard)
+        progress.apply(event(.forcePending))
+        let forcing = progress.stage
+        progress.apply([event(.signaled, pid: 500, state: .forceKilled, signal: "SIGKILL"),
+                        event(.signaled, pid: 501, state: .forceKilled, signal: "SIGKILL")])
+        XCTAssertEqual(progress.phase, .forcing(2))
+        XCTAssertEqual(progress.stage, forcing, "one announcement per stage, not per forced process")
+        progress.apply(event(.verified))
+        XCTAssertNotEqual(progress.stage, forcing)
+    }
+
     func testShortWaitShowsNoIndicator() {
         var progress = KillLiveProgress(displayName: "node", kind: .general, strategy: .standard)
         progress.apply(event(.graceWaiting, wait: 1.5))

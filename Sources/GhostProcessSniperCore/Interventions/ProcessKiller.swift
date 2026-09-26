@@ -154,6 +154,7 @@ public final class ProcessKiller: Sendable {
             )
             report.isForceFollowUp = plan.isForceFollowUp
             report.zombieParentName = preflight.zombieParentName
+            report.launchdJob = plan.workload?.launchdJob
             appendEvent(.queued, operationID: operationID,
                         message: "Stopping \(targets.count) process\(targets.count == 1 ? "" : "es") with the \(runProfile.strategy.label.lowercased()) strategy.",
                         report: &report, eventSink: eventSink)
@@ -277,8 +278,10 @@ public final class ProcessKiller: Sendable {
                 eventTriggeredVerificationCount: report.reactorReport.verificationModeCounts[KillVerificationMode.eventTriggeredComplete.rawValue, default: 0]
             )
             var respawned: [KillProcessLite] = []
+            // A booted-out job is not restarted; probing for it would only
+            // hold the result back.
             if let supervisor = preflight.preview.riskAssessment.supervisor,
-               report.survivorPIDs.isEmpty, report.partiallySucceeded {
+               report.survivorPIDs.isEmpty, report.partiallySucceeded, report.launchdBootout?.accepted != true {
                 respawned = await detectRespawn(of: targets, by: supervisor, since: walk.lastSignalAt, operationID: operationID,
                                                 report: &report, eventSink: eventSink)
             }

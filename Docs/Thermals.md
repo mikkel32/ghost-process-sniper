@@ -6,8 +6,8 @@ The thermal feature answers two separate questions: how hot the chip is (measure
 
 ```text
 ThermalSampler (actor, ThermalTelemetry.swift)       read-only AppleSMC, snapshot cached for 3 s
-    └─ ProcessMonitor.refresh                         awaits it before the worker refresh, only while
-                                                      the popover or console is on screen
+    └─ ProcessMonitor.refresh                         awaits it before each refresh while a panel is
+                                                      visible, at most every 4 s while hidden
         └─ ThermalSnapshotStore                       assigns only a changed snapshot; records a new
             ├─ monitor.thermals                       reading into monitor.thermalObservations
             └─ monitor.thermalObservations            (ThermalObservationWindow: 90 readings, 180 s)
@@ -22,7 +22,7 @@ ThermalInsightPanel (Overview)
     └─ ThermalAppInsight.evaluate                     the named workload and its next step
 ```
 
-The projection runs over the raw batch on every refresh, so radar family filters never hide an app; families only supply the navigation target. Temperatures are read only while a surface that shows them is visible (`ProcessMonitor.uiVisible`); a hidden radar does not touch the SMC. The observation window lives in the monitor, so the trend and the traces are ready the moment a thermal view opens, and a gap while everything was hidden simply ends the trend series. Opening a thermal view never starts a second projection.
+The projection runs over the raw batch, so radar family filters never hide an app; families only supply the navigation target. The observation window lives in the monitor, so the trend and the traces are ready the moment a thermal view opens. While no panel is visible the monitor still reads the sensors, but at most every 4 s: hidden refreshes are at most 8 s apart plus 15 % timer slack, so the readings stay under the window's 15 s gap and the trend never has to start again. Opening a thermal view never starts a scan or a second projection.
 
 The console also hands the window to `OverviewThermalBandTracker`, which moves the thermal panel up to second on the Overview only while macOS reports serious throttling or very hot readings (two or more in a row at 90 °C or above) have lasted 30 s, and moves it back after a minute of calm.
 
@@ -74,7 +74,7 @@ Rows rank by the larger of CPU capacity (process CPU divided by the logical proc
 
 `ThermalActivityHistory` keeps, per contributor, a decayed accumulated load, because chip temperature integrates power over roughly a minute:
 
-- Every measured contributor at 5% or more updates it: `ewma = ewma·(1−α) + activity·α` with `α = 1 − exp(−Δt/60)`, where Δt is the time since that contributor's last measurement, capped at 15 s. 1 s and 5 s refresh cadences therefore agree.
+- Every measured contributor at 5% or more updates it: `ewma = ewma·exp(−gap/60) + activity·(1 − exp(−min(gap, 15)/60))`, where gap is the time since that contributor's last measurement. The old average decays over the whole gap; only the new reading's weight is capped at 15 s. With gaps of 15 s or less this is the usual `ewma·(1−α) + activity·α`, so 1 s and 5 s refresh cadences agree.
 - A new contributor starts at `activity·(1 − exp(−Δt/60))` for the time since the previous sample, so one reading can never reach full weight.
 - A reading without a measurement only lets the load decay: `load(t) = ewma·exp(−(t − lastMeasured)/60)`. Entries below 1% or older than 180 s are dropped. Re-publishing the same sample replaces its contribution instead of counting twice.
 
@@ -82,7 +82,7 @@ Rows rank by the larger of CPU capacity (process CPU divided by the logical proc
 
 ### Path to stopping
 
-The thermal panel never signals anything. `ThermalStopTarget` resolves the process family a stop would actually open (a contributor groups a whole app, but its family key points at the busiest member family, so the button can read "Stop SourceKitService (Xcode)…"). It is offered only for user work with owned processes: never for system work, known macOS sources, protected families or Ghost Process Sniper itself. The attribution card shows it only for repeated evidence while heat needs review; the contributor sheet shows it whenever a target resolves. Both go through `RadarConsoleSession.prepareKill`, so the usual stop preview, risk assessment and confirmation apply.
+The thermal panel never signals anything. `ThermalStopTarget` resolves the process family a stop would actually open (a contributor groups a whole app, but its family key points at the busiest member family, so the button can read "Stop SourceKitService (Xcode)…"). It is offered only for user work with owned processes: never for system work, known macOS sources, families with none of the user's processes or Ghost Process Sniper itself; processes the user does not own are left for the stop preview to lock. The attribution card shows it only for repeated evidence while heat needs review; the contributor sheet shows it whenever a target resolves. It follows the family's Quick Stop: "Quit" for an app, red only when the stop is recommended, and it goes through `RadarConsoleSession.quickStop`, which opens the family's page and then the usual stop preview, risk assessment and confirmation.
 
 ### Compare readings
 

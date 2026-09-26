@@ -20,8 +20,8 @@ struct KillPhaseContext: Sendable {
     /// False for a single-process stop or a quitting app: what they start
     /// is only reported.
     let adoptsLateMembers: Bool
-    /// The root whose launchd job was booted out: launchd already asked it
-    /// to stop, so the first phase leaves it alone.
+    /// The root whose launchd job was booted out: launchd already sent it
+    /// SIGTERM, so a first phase that would only repeat that leaves it alone.
     let launchdStoppedPID: Int32?
 }
 
@@ -73,8 +73,16 @@ extension ProcessKiller {
                 recipients = Self.rootAndOutsiders(of: recipients, tree: targets)
             }
             let launchdStopped = index == 0 && !phase.isForce && live.contains { $0.pid == context.launchdStoppedPID }
-            if launchdStopped {
+            // launchd's SIGTERM stands in for a tree phase or another
+            // SIGTERM. A root-only shutdown signal, such as a database's fast
+            // shutdown, still goes out; launchd will not restart the root.
+            if launchdStopped, phase.reach == .tree || phase.action == .signal(SIGTERM) {
                 recipients.removeAll { $0.pid == context.launchdStoppedPID }
+                // Only signalled targets are resumed, and a paused root
+                // would hold launchd's SIGTERM for the whole wait.
+                if let root = live.first(where: { $0.pid == context.launchdStoppedPID }), root.condition == .suspended {
+                    resume(root, operationID: context.operationID, report: &report, eventSink: context.eventSink)
+                }
             }
             // The root launchd is stopping still gets its full wait.
             guard !recipients.isEmpty || launchdStopped else { continue }
@@ -251,6 +259,7 @@ extension ProcessKiller {
             // measured no exit.
             report.graceWaitedSeconds = result.waitedSeconds
             report.graceEndedEarly = result.endedEarly && !result.stoppedByUser && !group.isEmpty
+            report.graceWatchedNothing = group.isEmpty
         }
     }
 }
