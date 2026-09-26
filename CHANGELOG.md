@@ -26,6 +26,9 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 ### Layout
 - Process list column headers sort by name, memory, or CPU; click again for priority order.
 
+### Documentation
+- Dated session notes are replaced by one [Thermals](Docs/Thermals.md) reference and one [Performance](Docs/Performance.md) guide.
+
 ### Fixed
 - Paste, copy, cut, select all, and undo now work in the console's text fields (the app menu had no Edit menu).
 - The **Leaks** filter shows credible leaks only, instead of any family whose memory grew at all.

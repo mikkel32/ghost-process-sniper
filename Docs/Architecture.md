@@ -64,11 +64,11 @@ A newly selected detail is allowed to publish even when its resource numbers sha
 
 The overview scroll shell does not directly observe live process arrays or history. Header, guidance, queues, analytics, thermal readings, and engine status observe their own inputs. Offscreen overview content is lazy. Browser row labels compare only the immutable values they draw. Outer buttons still receive current action and accessibility data. Stable family keys break sorting ties so equal-ranked processes do not shuffle just because sample order changes.
 
-Keep animation scopes local. Do not animate an entire process array or attach a high-frequency timer to the navigation shell. The existing numeric transitions, selection highlights, hover/press feedback, sensor traces, and motion accessibility/power gates remain in place.
+Keep animation scopes local. Do not animate an entire process array or attach a high-frequency timer to the navigation shell. The existing numeric transitions, selection highlights, hover/press feedback, sensor traces, and motion accessibility/power gates remain in place. `RadarMotion.swift` centralizes finite animation timing; the scope's continuous sweep is a Core Animation transform, not a SwiftUI timer, and pauses when offscreen, inactive, hidden, in Low Power Mode or with Reduce Motion.
 
 ## Measurement and intervention invariants
 
-Rendering buckets do not authorize caching raw measurements. `ProcessMonitor` publishes fresh family data and the raw model even when visible rows do not need rebuilding. Existing measurement-age checks and PID/start-time validation remain authoritative for interventions.
+Process readings carry fresh, cached or unavailable provenance. A cached reading keeps its original measurement date and adds no trend sample, and a missing reading never becomes zero. Rendering buckets do not authorize caching raw measurements. `ProcessMonitor` publishes fresh family data and the raw model even when visible rows do not need rebuilding. Existing measurement-age checks and PID/start-time validation remain authoritative for interventions.
 
 Process-stop code is a separate boundary: previews retain their explicit scope, identities, strategy, delay, and expiry. Presentation work must not widen that scope or decide to stop a process.
 
@@ -93,7 +93,7 @@ python3 Scripts/benchmark_incident_query.py \
   --output .build/performance-audit/incident-query.json
 ```
 
-The opt-in benchmark test is skipped during ordinary tests. It uses synthetic families and does not sample or signal real processes. The Python benchmark creates a temporary synthetic database and verifies identical count results before and after adding the covering index. Neither benchmark is a frame-rate measurement.
+See [Performance measurements](Performance.md) for every opt-in benchmark and the recorded results. The opt-in benchmark test is skipped during ordinary tests. It uses synthetic families and does not sample or signal real processes. The Python benchmark creates a temporary synthetic database and verifies identical count results before and after adding the covering index. Neither benchmark is a frame-rate measurement.
 
 `PresentationPipelineTests` exercises selective detail preparation, unchanged-render freshness, deterministic ordering, stale-query rejection, cancellation, closing, query parity, and the SQLite query plan. Existing process-stop and sensor tests remain in the suite.
 
@@ -101,11 +101,11 @@ Main-actor publish timing now includes assignments and observer callbacks, rathe
 
 Primary background references: [Apple's SwiftUI performance guide](https://developer.apple.com/documentation/xcode/understanding-and-improving-swiftui-performance), [WWDC25: Optimize SwiftUI performance with Instruments](https://developer.apple.com/videos/play/wwdc2025/306/), and [SQLite query planning](https://www.sqlite.org/queryplanner.html).
 
-## Thermal activity projection
+## Thermals
 
-`ThermalActivityAnalyzer` owns the process-to-app projection on its own actor. The pure `ThermalActivitySummary` builder deduplicates PID/start-time identities, groups nested application helpers by their outer app bundle, rejects invalid or outdated readings, and produces deterministic activity ordering. It compares the larger of CPU activity normalized by processor count and observed GPU activity. That ordering is not a measurement of power, temperature, or share of total heat.
+`ThermalSampler` reads AppleSMC read-only; `ProcessMonitor` awaits it before each worker refresh and keeps both the latest snapshot and a 180-second `ThermalObservationWindow`, so trends and traces are ready whenever a thermal view opens. `RadarRefreshWorker` calls the nonisolated `ThermalActivityAnalyzer.project` over the full raw sample, not only monitored families, and records the result in its `ThermalActivityHistory` (a decayed load per app or job). Views evaluate the cheap `ThermalDiagnosis` and `ThermalAppInsight` and re-render between publishes only when a reading expires.
 
-`ConsoleThermalDashboard` owns the asynchronous request and discards a cancelled request's result. `ThermalContributorsView` receives a small value snapshot and inspection callbacks. Rows expire against their original measurement time even if no further refresh arrives. This feature never imports a signal executor or performs an intervention. Coverage is limited to monitored process families; unavailable readings are reported rather than presented as zero load.
+Activity ordering compares the larger of CPU capacity and reported GPU activity; it is not a measurement of power, temperature or share of heat. The thermal views never signal a process: the stop shortcut goes through the regular stop preview. See [Thermals](Thermals.md) for the sensor support matrix, review bands, trend rules and attribution.
 
 ## Settings and build lifecycle
 
