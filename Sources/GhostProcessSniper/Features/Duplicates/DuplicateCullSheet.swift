@@ -83,7 +83,9 @@ struct DuplicateCullSheet: View {
                     Label(DuplicateCullLabels.stopTitle(run.checkedCount), systemImage: "stop.circle")
                 }
                 .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
+                // Like the stop sheet: Return alone never stops anything.
+                .keyboardShortcut(.return, modifiers: .command)
+                .help("Command-Return")
                 .disabled(run.checkedCount == 0)
             case .checking:
                 ProgressView()

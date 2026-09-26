@@ -17,6 +17,22 @@ IMPORT = re.compile(
     r"(?:(?:typealias|struct|class|enum|protocol|let|var|func)\s+)?(\w+)",
     re.MULTILINE,
 )
+DESTRUCTIVE_BUTTON = re.compile(r"Button\([^\n]*role:\s*\.destructive")
+BARE_RETURN_SHORTCUT = re.compile(r"\.keyboardShortcut\(\s*(?:\.defaultAction|\.return\s*\))")
+
+
+def check_destructive_shortcuts(key: str, text: str) -> list[str]:
+    """A destructive button confirms with Command-Return, never Return alone."""
+    problems: list[str] = []
+    for match in DESTRUCTIVE_BUTTON.finditer(text):
+        rest = text[match.end():]
+        following = rest.find("Button(")
+        segment = rest if following < 0 else rest[:following]
+        segment = "\n".join(segment.splitlines()[:30])
+        if BARE_RETURN_SHORTCUT.search(segment):
+            line = text.count("\n", 0, match.start()) + 1
+            problems.append(f"{key}:{line}: a destructive button must use .keyboardShortcut(.return, modifiers: .command).")
+    return problems
 
 
 def check(root: Path, policy: dict) -> list[str]:
@@ -55,6 +71,8 @@ def check(root: Path, policy: dict) -> list[str]:
         if "SQLite3" in imports or re.search(r"\bsqlite3_[a-zA-Z_]+\b", text):
             if not key.startswith("GhostProcessSniperCore/Persistence/"):
                 problems.append(f"{key}: SQLite access belongs to core/Persistence.")
+        if target == "GhostProcessSniper":
+            problems += check_destructive_shortcuts(key, text)
 
     problems += ratchet(sources, budgets, maximum)
     problems += check_test_roots(root, policy.get("test_roots", {}), maximum)
@@ -148,7 +166,7 @@ def main() -> int:
     if problems:
         print("\n".join(problems), file=sys.stderr)
         return 1
-    print("Architecture checks passed: source ownership, core/UI boundary, SQLite boundary, and file budgets"
+    print("Architecture checks passed: source ownership, core/UI boundary, SQLite boundary, stop shortcuts, and file budgets"
           " (legacy budgets match their files; tests and checks included).")
     return 0
 
