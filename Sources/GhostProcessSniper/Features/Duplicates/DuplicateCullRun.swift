@@ -53,7 +53,7 @@ final class DuplicateCullRun: Identifiable {
         for decision in plan.decisions {
             if let root = decision.stopsWith { riders[root, default: 0] += 1 }
         }
-        copies = plan.stopTargets.map { decision in
+        let built = plan.stopTargets.map { decision in
             let rideAlong = riders[decision.identity].map { $0 == 1 ? " \u{00b7} takes the copy it started" : " \u{00b7} takes the \($0) copies it started" }
             return DuplicateCullCopy(
                 id: decision.identity,
@@ -62,7 +62,8 @@ final class DuplicateCullRun: Identifiable {
                 memoryText: decision.memoryText
             )
         }
-        positions = Dictionary(uniqueKeysWithValues: copies.enumerated().map { ($1.id, $0) })
+        copies = built
+        positions = Dictionary(uniqueKeysWithValues: built.enumerated().map { ($1.id, $0) })
     }
 
     var checkedCount: Int { copies.count(where: \.isChecked) }

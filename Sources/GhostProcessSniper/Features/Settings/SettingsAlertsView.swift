@@ -11,7 +11,7 @@ struct AlertsSettingsTab: View {
     let openNotificationSettings: () -> Void
 
     private var notificationsAllowed: Bool {
-        notificationStatus == .authorized || notificationStatus == .provisional || notificationStatus == .ephemeral
+        notificationStatus == .authorized || notificationStatus == .provisional
     }
 
     private var notificationsDenied: Bool {
