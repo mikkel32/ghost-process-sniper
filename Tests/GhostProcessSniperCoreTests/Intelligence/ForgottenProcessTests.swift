@@ -123,6 +123,47 @@ final class ForgottenProcessTests: XCTestCase {
         XCTAssertTrue(family?.score.components.contains { $0.slot == "forgotten" } ?? false)
     }
 
+    func testOnlyAMissingPathReadsAsDeleted() {
+        let home = "/Users/dev"
+        XCTAssertFalse(WorkingDirectoryProbe.exists("/Users/dev/gone", home: home, statError: { _ in ENOENT }))
+        XCTAssertFalse(WorkingDirectoryProbe.exists("/Users/dev/file.txt/sub", home: home, statError: { _ in ENOTDIR }))
+        for error in [0, EPERM, EACCES, EIO] {
+            XCTAssertTrue(WorkingDirectoryProbe.exists("/Users/dev/web", home: home, statError: { _ in error }))
+        }
+        // Privacy-guarded folders are never looked at, so no consent prompt.
+        for path in ["/Users/dev/Documents/web", "/Users/dev/Desktop", "/Users/dev/Downloads/api",
+                     "/Users/dev/Library/Mobile Documents/com~apple~CloudDocs/app", "/Users/dev/Library/CloudStorage/Dropbox/x",
+                     "/Volumes/External/site"] {
+            XCTAssertTrue(WorkingDirectoryProbe.exists(path, home: home, statError: { _ in
+                XCTFail("stat on \(path)")
+                return ENOENT
+            }))
+        }
+        XCTAssertFalse(WorkingDirectoryProbe.exists("/Users/dev/Documentsold", home: home, statError: { _ in ENOENT }))
+    }
+
+    /// Without Full Disk Access a live project folder fails with EPERM; that
+    /// is no evidence that it was deleted.
+    func testAnUnreadableWorkingDirectoryIsNotDeleted() throws {
+        let builder = ProcessFamilyBuilder(currentUserID: 501, directoryExists: {
+            WorkingDirectoryProbe.exists($0, home: "/Users/dev", statError: { _ in EPERM })
+        })
+        var window = TrendWindow()
+        var history = RadarHistory()
+        var family: ProcessFamily?
+        for minute in stride(from: 0, through: 40, by: 2) {
+            let date = Fixture.now.addingTimeInterval(Double(minute - 40) * 60)
+            let server = process(pid: 30, command: "node /Users/dev/web/node_modules/.bin/vite", startedAgo: 7_200,
+                                 session: session(pid: 30, sid: 900), ports: [5173], directory: "/Users/dev/web", at: date)
+            family = builder.buildFamiliesWithDuplicates(from: [server], settings: .smart, trendWindow: &window,
+                                                         history: &history, now: date).families.first
+        }
+        let forgotten = try XCTUnwrap(family?.forgotten)
+        XCTAssertEqual(forgotten.launchContext, .abandonedTerminalJob)
+        XCTAssertFalse(forgotten.facts.contains { $0.contains("was deleted") })
+        XCTAssertEqual(forgotten.likelihood, 0.8, accuracy: 0.001)
+    }
+
     func testZombieChildrenAreFlaggedWithoutBlankingTheFamily() throws {
         let parent = process(pid: 50, name: "node", command: "node /Users/dev/api/server.js", cpu: 3, session: session(pid: 50, sid: 50))
         let zombies = (0..<4).map { index in

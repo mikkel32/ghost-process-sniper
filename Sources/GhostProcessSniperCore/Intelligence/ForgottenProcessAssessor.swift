@@ -94,7 +94,7 @@ final class DirectoryExistenceCache: @unchecked Sendable {
     private var entries: [String: (exists: Bool, checkedAt: Date)] = [:]
     private let check: @Sendable (String) -> Bool
 
-    init(check: @escaping @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) {
+    init(check: @escaping @Sendable (String) -> Bool = { WorkingDirectoryProbe.exists($0) }) {
         self.check = check
     }
 
@@ -113,5 +113,34 @@ final class DirectoryExistenceCache: @unchecked Sendable {
         entries[path] = (exists, now)
         lock.unlock()
         return exists
+    }
+}
+
+/// Whether a working directory is really gone. Only ENOENT and ENOTDIR say
+/// so: without Full Disk Access a live project folder fails with EPERM or
+/// EACCES, and that must not read as deleted. Folders macOS guards behind a
+/// privacy prompt are never touched, so a background tick cannot raise one.
+public enum WorkingDirectoryProbe {
+    public static func exists(_ path: String) -> Bool {
+        exists(path, home: home, statError: statError)
+    }
+
+    static func exists(_ path: String, home: String, statError: (String) -> Int32) -> Bool {
+        if isPrivacyProtected(path, home: home) { return true }
+        let error = statError(path)
+        return error != ENOENT && error != ENOTDIR
+    }
+
+    static func isPrivacyProtected(_ path: String, home: String) -> Bool {
+        let guarded = ["Desktop", "Documents", "Downloads", "Library/Mobile Documents", "Library/CloudStorage"]
+            .map { home + "/" + $0 } + ["/Volumes"]
+        return guarded.contains { path == $0 || path.hasPrefix($0 + "/") }
+    }
+
+    private static let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+    private static func statError(_ path: String) -> Int32 {
+        var info = stat()
+        return stat(path, &info) == 0 ? 0 : errno
     }
 }

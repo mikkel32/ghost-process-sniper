@@ -50,7 +50,7 @@ public struct ProcessFamilyBuilder: Sendable {
         classifier: DevProcessClassifier = DevProcessClassifier(),
         currentUserID: UInt32 = UInt32(geteuid()),
         processorCount: Int = ProcessInfo.processInfo.activeProcessorCount,
-        directoryExists: @escaping @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+        directoryExists: @escaping @Sendable (String) -> Bool = { WorkingDirectoryProbe.exists($0) }
     ) {
         self.classifier = classifier
         self.currentUserID = currentUserID
