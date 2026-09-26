@@ -7,13 +7,29 @@ public struct FamilyMetricCard: Identifiable, Equatable, Sendable {
     public let value: String
     public let systemImage: String
     public let level: GhostLevel
+    /// Where the Overview card leads; nil for cards that only display a value.
+    public let destination: OverviewMetricDestination?
+    public let actionTitle: String?
 
-    public init(title: String, value: String, systemImage: String, level: GhostLevel = .quiet) {
+    public init(
+        title: String,
+        value: String,
+        systemImage: String,
+        level: GhostLevel = .quiet,
+        destination: OverviewMetricDestination? = nil,
+        actionTitle: String? = nil
+    ) {
         self.title = title
         self.value = value
         self.systemImage = systemImage
         self.level = level
+        self.destination = destination
+        self.actionTitle = actionTitle
     }
+}
+
+public enum OverviewMetricDestination: Sendable, Equatable {
+    case families, attention, leaking, duplicates, memory
 }
 
 public struct FamilyChangeSummary: Equatable, Sendable {

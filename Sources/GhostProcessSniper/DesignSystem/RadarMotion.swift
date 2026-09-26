@@ -7,27 +7,15 @@ enum RadarMotion {
     static func reading(_ reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .smooth(duration: 0.32)
     }
-}
 
-/// Applied to a handful of dashboard sections, never to each process row.
-private struct RadarEntrance: ViewModifier {
-    let delay: Double
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var appeared = false
-
-    func body(content: Content) -> some View {
-        content
-            .opacity(appeared || reduceMotion ? 1 : 0)
-            .offset(y: appeared || reduceMotion ? 0 : 7)
-            .onAppear {
-                guard !appeared else { return }
-                withAnimation(reduceMotion ? nil : .smooth(duration: 0.38).delay(delay)) { appeared = true }
-            }
+    /// Keeps a scanning indicator up long enough to be seen after a fast refresh.
+    static func holdPerceptibly(since started: Date, minimum: TimeInterval = 0.7) async {
+        let remaining = minimum - Date().timeIntervalSince(started)
+        guard remaining > 0 else {
+            return
+        }
+        try? await Task.sleep(for: .seconds(remaining))
     }
-}
-
-extension View {
-    func radarEntrance(delay: Double = 0) -> some View { modifier(RadarEntrance(delay: delay)) }
 }
 
 /// Animate only a text value, not its surrounding live layout or hit targets.

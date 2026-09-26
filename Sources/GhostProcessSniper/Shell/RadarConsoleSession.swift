@@ -1,3 +1,4 @@
+import Accessibility
 import AppKit
 import GhostProcessSniperCore
 import Observation
@@ -7,6 +8,8 @@ import Observation
 final class RadarConsoleSession {
     let monitor: ProcessMonitor
     let killer: ProcessKiller
+    let quickStops: QuickStopAdvisor
+    let openSettings: () -> Void
     let queries = ConsoleQueryStore()
     private(set) var navigationSubtitle = "Monitoring"
 
@@ -16,11 +19,21 @@ final class RadarConsoleSession {
     var searchFocusToken = 0
     var familyQueryResetToken = 0
     var showQuickGuide = false
-    private(set) var hasNavigationIntent = false
     private(set) var isRefreshing = false
+    /// Drives the Stop toolbar button and menu item without making them
+    /// depend on `monitor.families`, which changes every sample.
+    private(set) var canStopSelection = false
     private(set) var refreshCostHistory: [RefreshCostSample] = []
     private(set) var memoryPulse: [MemoryPulseSample] = []
     private(set) var thermalHistory = ThermalTraceHistory()
+    /// Set from the moment a stop is requested until its preview is ready.
+    var preparingStop: PreparingStop?
+    /// Changes only when the thermal panel should move on the Overview.
+    var overviewThermalBand: OverviewThermalBand = .normal
+    var history = NavigationHistory()
+    @ObservationIgnored var thermalBandTracker = OverviewThermalBandTracker()
+    /// The last confirmed stop, so closing its sheet can return the user.
+    @ObservationIgnored var lastStopResult: (pendingID: UUID, report: KillReport)?
 
     @ObservationIgnored private let commands = RadarCommandCoordinator()
     @ObservationIgnored private var presentationObserverID: UUID?
@@ -28,14 +41,49 @@ final class RadarConsoleSession {
     @ObservationIgnored private var requestedQueryKey: ConsoleDerivedSnapshotKey?
     @ObservationIgnored private var lastFocusedFamilySignatures: Set<String> = []
     @ObservationIgnored private var nextRefreshCostSequence: UInt64 = 0
+    @ObservationIgnored private(set) var isVisible = false
+    @ObservationIgnored private var familyIndex: [String: Int] = [:]
+    @ObservationIgnored private var familyIndexRevision: UInt64 = .max
 
-    init(monitor: ProcessMonitor, killer: ProcessKiller) {
+    init(
+        monitor: ProcessMonitor,
+        killer: ProcessKiller,
+        quickStops: QuickStopAdvisor,
+        openSettings: @escaping () -> Void = {}
+    ) {
         self.monitor = monitor
         self.killer = killer
+        self.quickStops = quickStops
+        self.openSettings = openSettings
+        state.familySort = ConsolePreferences.familySort
+        state.familyFilter = ConsolePreferences.familyFilter
+        history.visit(state.focusedSelection)
     }
 
     var selectedFamily: ProcessFamily? {
-        commands.selectedFamily(selection: state.focusedSelection, families: monitor.families)
+        state.focusedSelection.familyKey.flatMap { family(forKey: $0) }
+    }
+
+    /// Looks a family up by family key or signature ID without scanning every
+    /// family and rebuilding its key string. Reading `monitor.families` keeps
+    /// live pages following each sample; the index is rebuilt once per sample.
+    func family(forKey key: String) -> ProcessFamily? {
+        let families = monitor.families
+        if monitor.sampleRevision != familyIndexRevision {
+            var index: [String: Int] = [:]
+            index.reserveCapacity(families.count * 2)
+            for (offset, family) in families.enumerated() {
+                if index[family.familyKey] == nil { index[family.familyKey] = offset }
+                if index[family.signature.id] == nil { index[family.signature.id] = offset }
+            }
+            familyIndex = index
+            familyIndexRevision = monitor.sampleRevision
+        }
+        if let offset = familyIndex[key], families.indices.contains(offset),
+           families[offset].familyKey == key || families[offset].signature.id == key {
+            return families[offset]
+        }
+        return families.first { $0.familyKey == key || $0.signature.id == key }
     }
 
     var selectedDetail: FamilyDetailViewModel? {
@@ -112,11 +160,7 @@ final class RadarConsoleSession {
         Task {
             let started = Date()
             await monitor.refresh()
-            // Hold the scanning indicator long enough to be perceptible.
-            let elapsed = Date().timeIntervalSince(started)
-            if elapsed < 0.7 {
-                try? await Task.sleep(nanoseconds: UInt64((0.7 - elapsed) * 1_000_000_000))
-            }
+            await RadarMotion.holdPerceptibly(since: started)
             isRefreshing = false
         }
     }
@@ -153,10 +197,32 @@ final class RadarConsoleSession {
         queries.snapshot
     }
 
+    /// Presentation runs only while the window is on screen: a minimized or
+    /// covered console stops projecting queries, recording histories and
+    /// asking the engine to prioritise its families.
+    func setVisible(_ visible: Bool) {
+        guard visible != isVisible else { return }
+        isVisible = visible
+        if visible {
+            startPresentation()
+            updateFocusedFamilies()
+        } else {
+            stopPresentation()
+        }
+    }
+
     func startPresentation() {
         guard presentationObserverID == nil else { return }
         presentationObserverID = monitor.addPublishedStateObserver { [weak self] _ in
             self?.receivePresentationUpdate()
+        }
+        // Draw real rows on the first frame; the async projection refines them.
+        if queries.snapshot.key.contentRevision != monitor.consoleSnapshot.contentRevision {
+            queries.seed(ConsoleDerivedSnapshot.build(
+                snapshot: monitor.consoleSnapshot,
+                incidents: monitor.incidents,
+                state: state.coreState
+            ))
         }
         receivePresentationUpdate()
     }
@@ -168,13 +234,23 @@ final class RadarConsoleSession {
         queryTask = nil
         requestedQueryKey = nil
         queries.cancel()
+        // Otherwise every later refresh keeps prioritising forensics for
+        // families nobody is looking at.
+        lastFocusedFamilySignatures = []
+        monitor.focusFamilies(signatureIDs: [])
     }
 
     private func receivePresentationUpdate() {
         let title = monitor.consoleSnapshot.compact.commandCenter.statusText
         if navigationSubtitle != title { navigationSubtitle = title }
         recordEngineSample()
+        updateOverviewThermalBand()
         scheduleQueryUpdate()
+        updateCanStopSelection()
+    }
+
+    func updateCanStopSelection() {
+        canStopSelection = selectedFamily.map { !$0.ownedIdentities.isEmpty } ?? false
     }
 
     /// Returns the projection task for the current state, so callers that
@@ -205,6 +281,8 @@ final class RadarConsoleSession {
 
     func toggleInspector() {
         state.showInspector.toggle()
+        // Remembered for the next family page, including after relaunch.
+        ConsolePreferences.showInspector = state.showInspector
     }
 
     func nextFamily() {
@@ -222,16 +300,21 @@ final class RadarConsoleSession {
             orderedFamilyKeys: compactFamilyItems.map(\.familyKey),
             direction: direction
         )
+        recordVisit(state.focusedSelection)
         updateFocusedFamilies()
+        updateCanStopSelection()
     }
 
     func focus(_ selection: RadarFocusedSelection) {
-        hasNavigationIntent = true
         state.focusedSelection = selection
+        recordVisit(selection)
         updateFocusedFamilies()
+        updateCanStopSelection()
     }
 
     func updateFocusedFamilies() {
+        // A hidden console must not steer the engine; showing it again re-runs this.
+        guard isVisible else { return }
         scheduleQueryUpdate()
         // The visible priority rows and selection identify concrete instances.
         // A logical signature here would promote every matching sibling too.
@@ -248,6 +331,7 @@ final class RadarConsoleSession {
 
     func showToast(_ message: String, systemImage: String = "checkmark.circle") {
         toast = RadarToast(message: message, systemImage: systemImage)
+        AccessibilityNotification.Announcement(message).post()
     }
 
     func requestSearchFocus() {
@@ -291,22 +375,18 @@ final class RadarConsoleSession {
     func copyReport() {
         Task {
             let report = await monitor.exportIncidentReport()
-            await MainActor.run {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(report, forType: .string)
-                showToast("Incident report copied", systemImage: "doc.on.clipboard")
-            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(report, forType: .string)
+            showToast("Incident report copied", systemImage: "doc.on.clipboard")
         }
     }
 
     func copyDiagnostics() {
         Task {
             let report = await monitor.exportDiagnosticsReport()
-            await MainActor.run {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(report, forType: .string)
-                showToast("Diagnostics copied", systemImage: "stethoscope")
-            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(report, forType: .string)
+            showToast("Diagnostics copied", systemImage: "stethoscope")
         }
     }
 
@@ -364,11 +444,13 @@ final class RadarConsoleSession {
         prepareKill(family)
     }
 
-    func prepareKill(familyKey: String) {
-        guard let family = monitor.family(signatureID: familyKey) else {
+    /// - Parameter name: shown when the family exited before the stop began.
+    func prepareKill(familyKey: String, name: String? = nil, redirectedFrom: String? = nil) {
+        guard let family = self.family(forKey: familyKey) else {
+            showToast("\(name ?? "That process") is no longer running", systemImage: "info.circle")
             return
         }
-        prepareKill(family)
+        prepareKill(family, redirectedFrom: redirectedFrom)
     }
 
     static func durationText(minutes: TimeInterval) -> String {
@@ -379,13 +461,16 @@ final class RadarConsoleSession {
         return hours == hours.rounded() ? "\(Int(hours)) h" : String(format: "%.1f h", hours)
     }
 
-    private(set) var isPreparingIntervention = false
+    var isPreparingIntervention: Bool { preparingStop != nil }
 
-    func prepareKill(_ family: ProcessFamily, member: ProcessIdentity? = nil) {
-        guard !isPreparingIntervention, pendingKill == nil else { return }
-        isPreparingIntervention = true
+    func prepareKill(_ family: ProcessFamily, member: ProcessIdentity? = nil, redirectedFrom: String? = nil) {
+        guard preparingStop == nil, pendingKill == nil else { return }
+        let stop = PreparingStop(name: family.displayName)
+        preparingStop = stop
+        let returnTo = returnSelection(afterStopping: family)
+        expirePreparation(stop)
         Task {
-            defer { isPreparingIntervention = false }
+            defer { if preparingStop?.id == stop.id { preparingStop = nil } }
             var plan = await monitor.killPlan(for: family)
             if let member {
                 guard family.ownedIdentities.contains(member),
@@ -398,13 +483,17 @@ final class RadarConsoleSession {
             }
             let delay = monitor.settings.forceKillDelay
             let preview = await killer.preview(plan: plan, forceKillDelay: delay)
+            // After the timeout the user was told to try again; a late sheet would surprise them.
+            guard preparingStop?.id == stop.id else { return }
             let expiresAt = Date().addingTimeInterval(60)
             pendingKill = PendingKill(
                 family: family,
                 preview: preview,
                 plan: plan.binding(to: preview.targetIdentities, expiresAt: expiresAt, strategy: preview.strategyRecommendation.strategy),
                 forceKillDelay: delay,
-                expiresAt: expiresAt
+                expiresAt: expiresAt,
+                redirectedFrom: redirectedFrom,
+                returnSelection: returnTo
             )
         }
     }
@@ -415,7 +504,7 @@ final class RadarConsoleSession {
         control: KillOperationControl? = nil,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
     ) async -> KillReport {
-        await monitor.confirmKill(
+        let report = await monitor.confirmKill(
             family: pending.family,
             killer: killer,
             approvedPlan: pending.plan,
@@ -424,6 +513,8 @@ final class RadarConsoleSession {
             control: control,
             eventSink: eventSink
         )
+        lastStopResult = (pending.id, report)
+        return report
     }
 }
 
@@ -465,6 +556,15 @@ struct PendingKill: Identifiable {
     let plan: KillPlan
     let forceKillDelay: TimeInterval
     let expiresAt: Date
+    /// The family the user asked to stop when the target is its supervisor.
+    var redirectedFrom: String?
+    /// Where to take the user after a clean stop: where they came from.
+    var returnSelection: RadarFocusedSelection?
+}
+
+struct PreparingStop: Equatable {
+    let id = UUID()
+    let name: String
 }
 
 struct RadarToast: Identifiable, Equatable {

@@ -1,18 +1,38 @@
 import GhostProcessSniperCore
 import SwiftUI
+import UserNotifications
 
 struct AlertsSettingsTab: View {
     @Bindable var monitor: ProcessMonitor
-    let notificationStatus: String
+    /// nil until checked, or in unbundled builds that have no notification center.
+    let notificationStatus: UNAuthorizationStatus?
+    let notificationsAvailable: Bool
     let requestNotifications: () async -> Void
     let openNotificationSettings: () -> Void
 
     private var notificationsAllowed: Bool {
-        notificationStatus == "Allowed" || notificationStatus == "Provisional"
+        notificationStatus == .authorized || notificationStatus == .provisional || notificationStatus == .ephemeral
     }
 
     private var notificationsDenied: Bool {
-        notificationStatus == "Denied"
+        notificationStatus == .denied
+    }
+
+    private var statusText: String {
+        guard notificationsAvailable else {
+            return "Unavailable in unbundled build"
+        }
+        guard let notificationStatus else {
+            return "Not checked"
+        }
+        return switch notificationStatus {
+        case .authorized: "Allowed"
+        case .denied: "Denied"
+        case .notDetermined: "Not asked"
+        case .provisional: "Provisional"
+        case .ephemeral: "Ephemeral"
+        @unknown default: "Unknown"
+        }
     }
 
     var body: some View {
@@ -31,14 +51,14 @@ struct AlertsSettingsTab: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(notificationsAllowed ? "Notifications are ready" : "Notifications need attention")
                             .font(.headline)
-                        Text("macOS status: \(notificationStatus)")
+                        Text("macOS status: \(statusText)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
 
                     Spacer()
 
-                    if !notificationsAllowed {
+                    if notificationsAvailable, !notificationsAllowed {
                         Button(notificationsDenied ? "Open System Settings" : "Enable Notifications") {
                             if notificationsDenied {
                                 openNotificationSettings()
@@ -83,9 +103,10 @@ struct AlertsSettingsTab: View {
                     step: 0.5,
                     display: String(format: "%.1f sec", monitor.settings.forceKillDelay)
                 )
-                Text("After a normal quit signal, the app waits this long before offering the force step.")
+                Text("How long a normal process gets to exit before Ghost offers to force it. Dev servers and runaways are stopped faster; apps, databases and container runtimes automatically get longer (8–15 s).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

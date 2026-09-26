@@ -12,21 +12,14 @@ import SwiftUI
 /// than a per-frame SwiftUI timer. Offscreen/inactive/low-power scopes pause;
 /// sampled blip positions use short, interruptible animations independently.
 struct RadarSweepView: View {
-    let session: RadarConsoleSession
     let rows: [CompactSidebarRowModel]
-    let level: GhostLevel
+    let session: RadarConsoleSession
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isInViewport = false
     @State private var isLowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
 
     private static let sweepPeriod: TimeInterval = 5.5
-
-    init(session: RadarConsoleSession) {
-        self.session = session
-        rows = Array(session.compactFamilyItems.prefix(24))
-        level = session.commandCenter.level
-    }
 
     private var accent: Color {
         RadarTheme.brand
@@ -313,7 +306,7 @@ private struct RadarBlip: View {
     @State private var isHovering = false
 
     private var color: Color {
-        row.level == .quiet ? .teal : RadarStyle.color(for: row.level)
+        row.level == .quiet ? RadarTheme.brand : RadarStyle.color(for: row.level)
     }
 
     private var coreSize: CGFloat {

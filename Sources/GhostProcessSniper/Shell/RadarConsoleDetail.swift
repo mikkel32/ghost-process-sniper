@@ -12,7 +12,7 @@ struct RadarConsoleDetail: View {
             case .processes:
                 ProcessBrowserView(session: session)
             case .family(let familyKey):
-                if let family = session.monitor.family(signatureID: familyKey) {
+                if let family = session.family(forKey: familyKey) {
                     FamilyDetailConsoleView(
                         family: family,
                         detail: session.monitor.detailViewModel(signatureID: familyKey),
@@ -33,8 +33,10 @@ struct RadarConsoleDetail: View {
                     } description: {
                         Text("This family has left the current scan. Browse running processes or check its history in Incidents.")
                     } actions: {
-                        Button("Browse Processes") { session.browseFamilies() }
+                        Button("Back") { session.goBackOrOverview() }
                             .buttonStyle(.borderedProminent)
+                            .help("Back (⌘[)")
+                        Button("Browse Processes") { session.browseFamilies() }
                         Button("View Incidents") { session.focus(.incidents) }
                     }
                 }

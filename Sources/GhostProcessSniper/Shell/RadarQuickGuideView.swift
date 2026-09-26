@@ -33,12 +33,19 @@ struct RadarQuickGuideView: View {
                     shortcut("Find processes", keys: "⌘F")
                     shortcut("Open best match", keys: "↩")
                     shortcut("Scan now", keys: "⌘R")
-                    shortcut("Overview", keys: "⌘1")
+                    shortcut("Overview · All Processes", keys: "⌘1 · ⌘2")
+                    shortcut("Duplicates · Incidents", keys: "⌘3 · ⌘4")
+                    shortcut("Rules · Engine", keys: "⌘5 · ⌘6")
+                    shortcut("Back · Forward", keys: "⌘[ · ⌘]")
+                    shortcut("Settings", keys: "⌘,")
                 }
                 VStack(alignment: .leading, spacing: 12) {
-                    shortcut("Next / previous family", keys: "⌘↓ / ⌘↑")
+                    shortcut("Next / previous family", keys: "⌘↓ / ⌘↑ or ↓ / ↑")
+                    shortcut("Stop…", keys: "⇧⌘⌫")
+                    shortcut("Snooze family", keys: "⇧⌘S")
+                    shortcut("Ignore family", keys: "⇧⌘E")
                     shortcut("Toggle inspector", keys: "⌥⌘I")
-                    shortcut("Settings", keys: "⌘,")
+                    shortcut("Copy diagnostics", keys: "⇧⌘D")
                 }
             }
             Text("Celsius readings are hardware temperatures, not per-process scores. Action labels explain urgency. Use Precision targets to preview one process; the family preview covers the wider tree. Previews expire after 60 seconds.")

@@ -157,7 +157,7 @@ private struct DuplicatesHeader: View {
                     InfoTip(tip: RadarTip(
                         title: "Duplicate Radar",
                         message: "Catches death by a thousand cuts: many small copies of the same tool (language servers, watchers, helpers) that each sit below the heavy-process thresholds but add up. Clusters need two or more live same-user instances to appear.",
-                        shortcut: "⌘2"
+                        shortcut: "⌘3"
                     ))
                 }
                 Text("Small repeated dev tools captured from the normal cheap scan.")

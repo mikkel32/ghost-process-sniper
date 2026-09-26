@@ -90,10 +90,23 @@ struct RadarConsoleSidebar: View {
             }
             .contentMargins(.horizontal, 10, for: .scrollContent)
             .contentMargins(.vertical, 8, for: .scrollContent)
+            // Rows are buttons, so plain ↑/↓ would otherwise do nothing here.
+            .focusable()
+            .focusEffectDisabled()
+            .onKeyPress(.upArrow) {
+                session.previousFamily()
+                return .handled
+            }
+            .onKeyPress(.downArrow) {
+                session.nextFamily()
+                return .handled
+            }
 
-            sidebarTools
+            SidebarToolGrid(session: session)
             HStack {
-                SettingsLink {
+                Button {
+                    session.openSettings()
+                } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
                 Spacer()
@@ -136,42 +149,6 @@ struct RadarConsoleSidebar: View {
         .accessibilityAddTraits(session.state.focusedSelection == selection ? .isSelected : [])
     }
 
-    private var sidebarTools: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
-            SidebarToolButton(
-                title: "Duplicates",
-                systemImage: "square.on.square",
-                color: .orange,
-                badge: "\(session.monitor.consoleSnapshot.duplicateRows.count)",
-                isSelected: session.state.focusedSelection == .duplicates
-            ) { session.focus(.duplicates) }
-            SidebarToolButton(
-                title: "Incidents",
-                systemImage: "waveform.path.ecg",
-                color: .pink,
-                badge: nil,
-                isSelected: session.state.focusedSelection == .incidents
-            ) { session.focus(.incidents) }
-            SidebarToolButton(
-                title: "Rules",
-                systemImage: "slider.horizontal.3",
-                color: .purple,
-                badge: nil,
-                isSelected: session.state.focusedSelection == .rules
-            ) { session.focus(.rules) }
-            SidebarToolButton(
-                title: "Engine",
-                systemImage: "gauge.with.dots.needle.67percent",
-                color: .teal,
-                badge: nil,
-                isSelected: session.state.focusedSelection == .engine
-            ) { session.focus(.engine) }
-        }
-        .padding(10)
-        .background(RadarTheme.panel)
-        .overlay(alignment: .top) { Divider() }
-    }
-
     private var sidebarHeader: some View {
         HStack(spacing: 11) {
             RadarBrandMark(level: .quiet, size: 36)
@@ -198,6 +175,49 @@ struct RadarConsoleSidebar: View {
     }
 }
 
+/// Badges read only the content-gated console snapshot.
+private struct SidebarToolGrid: View {
+    let session: RadarConsoleSession
+
+    var body: some View {
+        let snapshot = session.monitor.consoleSnapshot
+        let activeIncidents = snapshot.incidentRows.reduce(0) { $1.stateText == "Active" ? $0 + 1 : $0 }
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+            SidebarToolButton(
+                title: "Duplicates",
+                systemImage: "square.on.square",
+                color: .orange,
+                badge: "\(snapshot.duplicateRows.count)",
+                isSelected: session.state.focusedSelection == .duplicates
+            ) { session.focus(.duplicates) }
+            SidebarToolButton(
+                title: "Incidents",
+                systemImage: "waveform.path.ecg",
+                color: .pink,
+                badge: "\(activeIncidents)",
+                isSelected: session.state.focusedSelection == .incidents
+            ) { session.focus(.incidents) }
+            SidebarToolButton(
+                title: "Rules",
+                systemImage: "slider.horizontal.3",
+                color: .purple,
+                badge: nil,
+                isSelected: session.state.focusedSelection == .rules
+            ) { session.focus(.rules) }
+            SidebarToolButton(
+                title: "Engine",
+                systemImage: "gauge.with.dots.needle.67percent",
+                color: .teal,
+                badge: nil,
+                isSelected: session.state.focusedSelection == .engine
+            ) { session.focus(.engine) }
+        }
+        .padding(10)
+        .background(RadarTheme.panel)
+        .overlay(alignment: .top) { Divider() }
+    }
+}
+
 private struct SidebarToolButton: View {
     let title: String
     let systemImage: String
@@ -218,6 +238,14 @@ private struct SidebarToolButton: View {
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if let badge, badge != "0" {
+                    Text(badge)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Color.primary.opacity(0.07), in: Capsule())
+                }
             }
             .frame(maxWidth: .infinity, minHeight: 30)
             .padding(.horizontal, 6)

@@ -52,4 +52,69 @@ final class ConsoleNavigationTests: XCTestCase {
         let coordinator = RadarCommandCoordinator()
         XCTAssertEqual(coordinator.selection(after: .family("a"), orderedFamilyKeys: ["a", "b", "c"], direction: -4), .family("c"))
     }
+
+    func testHistoryStepsBackAndForward() {
+        var history = NavigationHistory()
+        history.visit(.overview)
+        history.visit(.family("a"))
+        history.visit(.incidents)
+        XCTAssertTrue(history.canGoBack)
+        XCTAssertFalse(history.canGoForward)
+        XCTAssertEqual(history.goBack(), .family("a"))
+        XCTAssertEqual(history.goBack(), .overview)
+        XCTAssertNil(history.goBack())
+        XCTAssertEqual(history.goForward(), .family("a"))
+        XCTAssertEqual(history.current, .family("a"))
+        XCTAssertEqual(history.previous, .overview)
+    }
+
+    func testHistoryCollapsesRepeatsAndDropsTheForwardTrailOnANewVisit() {
+        var history = NavigationHistory()
+        history.visit(.overview)
+        history.visit(.overview)
+        history.visit(.processes)
+        history.visit(.processes)
+        XCTAssertEqual(history.entries, [.overview, .processes])
+        _ = history.goBack()
+        history.visit(.engine)
+        XCTAssertEqual(history.entries, [.overview, .engine])
+        XCTAssertFalse(history.canGoForward)
+    }
+
+    func testHistoryKeepsOnlyTheMostRecentSteps() {
+        var history = NavigationHistory()
+        for index in 0..<(NavigationHistory.capacity + 5) {
+            history.visit(.family("f\(index)"))
+        }
+        XCTAssertEqual(history.entries.count, NavigationHistory.capacity)
+        XCTAssertEqual(history.entries.first, .family("f5"))
+        XCTAssertEqual(history.current, .family("f\(NavigationHistory.capacity + 4)"))
+    }
+
+    func testPruneDropsExitedFamiliesButKeepsThePageOnScreen() {
+        var history = NavigationHistory()
+        history.visit(.overview)
+        history.visit(.family("gone"))
+        history.visit(.overview)
+        history.visit(.family("live"))
+        history.visit(.family("stopped"))
+        history.prune(liveFamilyKeys: ["live"])
+        XCTAssertEqual(history.entries, [.overview, .family("live"), .family("stopped")], "repeated Overview entries collapse")
+        XCTAssertEqual(history.current, .family("stopped"))
+        XCTAssertEqual(history.goBack(), .family("live"))
+        XCTAssertEqual(history.goBack(), .overview)
+    }
+
+    func testPruneKeepsTheIndexOnTheSamePage() {
+        var history = NavigationHistory()
+        history.visit(.family("gone"))
+        history.visit(.processes)
+        history.visit(.family("gone-too"))
+        _ = history.goBack()
+        history.prune(liveFamilyKeys: [])
+        XCTAssertEqual(history.entries, [.processes])
+        XCTAssertEqual(history.current, .processes)
+        XCTAssertFalse(history.canGoBack)
+        XCTAssertFalse(history.canGoForward)
+    }
 }

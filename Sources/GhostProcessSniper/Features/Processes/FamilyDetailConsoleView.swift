@@ -630,7 +630,7 @@ private struct FamilyProcessTreePanel: View {
                         Text("\(process.pid)")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
-                        Text(RadarBytes.string(process.memoryForScoringBytes))
+                        Text(RadarFormat.bytes(process.memoryForScoringBytes))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                         Text("\(Int(process.cpuPercent.rounded()))%")

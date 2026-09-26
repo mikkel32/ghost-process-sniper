@@ -101,6 +101,7 @@ struct SettingsChoiceCard: View {
         .buttonStyle(.plain)
         .accessibilityLabel("\(title). \(detail)")
         .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

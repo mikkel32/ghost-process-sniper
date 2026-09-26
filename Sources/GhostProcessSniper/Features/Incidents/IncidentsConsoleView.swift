@@ -50,7 +50,7 @@ struct IncidentsConsoleView: View {
                 InfoTip(tip: RadarTip(
                     title: "Incidents",
                     message: "The radar's memory: every time a family crosses into hot, an incident is recorded with its peak score, metrics, evidence, and timeline. Active incidents are still misbehaving; resolved ones calmed down on their own or after intervention.",
-                    shortcut: "⌘3"
+                    shortcut: "⌘4"
                 ))
                 Button {
                     session.copyReport()
@@ -173,7 +173,7 @@ struct IncidentsConsoleView: View {
 
                     RadarSection(title: "Metrics") {
                         HStack(spacing: 8) {
-                            RadarChip(title: "Memory", value: RadarBytes.string(incident.memoryBytes), systemImage: "memorychip", level: incident.level)
+                            RadarChip(title: "Memory", value: RadarFormat.bytes(incident.memoryBytes), systemImage: "memorychip", level: incident.level)
                             RadarChip(title: "CPU", value: "\(Int(incident.cpuPercent.rounded()))%", systemImage: "cpu", level: incident.level)
                             RadarChip(title: "Leak", value: "\(Int(incident.leakVelocityMegabytesPerMinute.rounded())) MB/min", systemImage: "chart.line.uptrend.xyaxis", level: incident.leakVelocityMegabytesPerMinute > 0 ? .watch : .quiet)
                         }

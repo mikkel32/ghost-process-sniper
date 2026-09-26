@@ -11,7 +11,6 @@ struct ProcessBrowserView: View {
     var body: some View {
         browserContent
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .radarEntrance()
     }
 
     private var browserContent: some View {
@@ -66,9 +65,11 @@ struct ProcessBrowserView: View {
                 ContentUnavailableView {
                     Label(hasFilters ? "No matching processes" : "Waiting for processes", systemImage: hasFilters ? "magnifyingglass" : "waveform.path")
                 } description: {
-                    Text(hasFilters
-                         ? "Nothing running matches. Check the spelling, remove a filter, or search by PID or port."
-                         : session.monitor.storeError ?? "The next scan will populate this list.")
+                    // A failed projection would otherwise leave this empty state unexplained.
+                    Text(session.queries.errorMessage.map { "The list could not be updated: \($0)" }
+                         ?? (hasFilters
+                             ? "Nothing running matches. Check the spelling, remove a filter, or search by PID or port."
+                             : session.monitor.storeError ?? "The next scan will populate this list."))
                 } actions: {
                     if hasFilters {
                         Button("Show All Processes") { session.clearFamilyFilters() }

@@ -58,7 +58,7 @@ struct RulesConsoleView: View {
             InfoTip(tip: RadarTip(
                 title: "Rules",
                 message: "Advisory automations that match families by command, path, level, or leak rate. Your snoozes and ignores live here too — delete a rule to undo one. Nothing destructive ever runs without an explicit confirmation.",
-                shortcut: "⌘4"
+                shortcut: "⌘5"
             ))
             RadarChip(title: "Matches", value: "\(session.monitor.consoleSnapshot.rulePreviews.reduce(0) { $0 + $1.matchCount })", systemImage: "scope")
                 .frame(width: 150)

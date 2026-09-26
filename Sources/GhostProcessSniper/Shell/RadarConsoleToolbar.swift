@@ -18,6 +18,15 @@ struct RadarConsoleToolbar: ToolbarContent {
         session.state.focusedSelection.familyKey != nil
     }
 
+    private func stopHelp(_ action: QuickStopAction?) -> String {
+        guard session.canStopSelection else { return "No live processes owned by you to target" }
+        guard let action else {
+            return "Preview stopping the selected family — nothing runs without confirmation (⇧⌘⌫)"
+        }
+        let detail = action.detail.map { " \($0)." } ?? ""
+        return "\(action.title) opens a preview first; nothing runs without confirmation (⇧⌘⌫).\(detail)"
+    }
+
     var body: some ToolbarContent {
         ToolbarItemGroup {
             Button {
@@ -38,7 +47,6 @@ struct RadarConsoleToolbar: ToolbarContent {
                         Label("Previous Family", systemImage: "chevron.up")
                     }
                     .disabled(!session.availability(.previousFamily).isEnabled)
-                    .keyboardShortcut(.upArrow, modifiers: [.command])
 
                     Button {
                         session.nextFamily()
@@ -46,7 +54,6 @@ struct RadarConsoleToolbar: ToolbarContent {
                         Label("Next Family", systemImage: "chevron.down")
                     }
                     .disabled(!session.availability(.nextFamily).isEnabled)
-                    .keyboardShortcut(.downArrow, modifiers: [.command])
                 }
                 .controlGroupStyle(.navigation)
                 .help("Walk through process families (⌘↑ / ⌘↓)")
@@ -82,18 +89,17 @@ struct RadarConsoleToolbar: ToolbarContent {
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help("Toggle the inspector panel (⌥⌘I)")
 
+                // ⇧⌘⌫ comes from the Radar menu's Stop… item.
+                let quickStop = session.selectedQuickStop
                 Button(role: .destructive) {
-                    session.prepareKillSelected()
+                    session.stopSelected()
                 } label: {
-                    Label("Kill Preview", systemImage: "scope")
+                    Label(quickStop?.shortTitle ?? "Stop…", systemImage: quickStop?.systemImage ?? "scope")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
-                .disabled(!session.availability(.killPreview).isEnabled)
-                .keyboardShortcut(.delete, modifiers: [.command, .shift])
-                .help(session.availability(.killPreview).isEnabled
-                    ? "Preview a kill of the selected family — nothing runs without confirmation (⇧⌘⌫)"
-                    : "No live processes owned by you to target")
+                .disabled(!session.canStopSelection || session.preparingStop != nil)
+                .help(stopHelp(quickStop))
             }
 
             Menu {
@@ -112,7 +118,9 @@ struct RadarConsoleToolbar: ToolbarContent {
                     Label("Quick Guide & Shortcuts", systemImage: "questionmark.circle")
                 }
 
-                SettingsLink {
+                Button {
+                    session.openSettings()
+                } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
             } label: {
