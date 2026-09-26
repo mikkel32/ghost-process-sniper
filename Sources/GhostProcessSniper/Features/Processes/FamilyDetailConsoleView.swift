@@ -13,6 +13,8 @@ struct FamilyDetailConsoleView: View {
     let onKill: () -> Void
     let thermals: ThermalSnapshot
     let onPreviewProcess: (ProcessIdentity) -> Void
+    /// What stopping this family would do, shown before any preview opens.
+    let stopRisk: KillRiskAssessment
 
     @State private var selectedTab: FamilyDetailTab = .overview
 
@@ -79,11 +81,11 @@ struct FamilyDetailConsoleView: View {
                         PrecisionTargetsView(family: family, onPreview: onPreviewProcess)
                         FamilyProcessTreePanel(family: family, panel: panelModel)
                         FamilyCulpritPanel(panel: panelModel)
-                        FamilyActionsPanel(panel: panelModel, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
+                        FamilyActionsPanel(panel: panelModel, risk: stopRisk, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
 
                     case .forensics:
                         FamilyForensicsPanel(panel: panelModel)
-                        FamilyActionsPanel(panel: panelModel, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
+                        FamilyActionsPanel(panel: panelModel, risk: stopRisk, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
                     }
                 }
                 .padding(18)
@@ -693,6 +695,7 @@ private struct FamilyForensicsPanel: View {
 
 private struct FamilyActionsPanel: View {
     let panel: FamilyDetailPanelModel
+    let risk: KillRiskAssessment
     let onSnooze: (TimeInterval) -> Void
     let onIgnore: () -> Void
     let onKill: () -> Void
@@ -721,6 +724,17 @@ private struct FamilyActionsPanel: View {
                 }
             }
 
+            if let headline = risk.headline {
+                Label(headline, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // The most serious consequence, so it is seen before the preview.
+            if let hazard = risk.hazards.max(by: { $0.severity < $1.severity }), hazard.severity > .info {
+                KillRiskCard(risk: hazard)
+            }
+
             HStack {
                 Menu {
                     FamilySnoozeMenu(snooze: onSnooze)
@@ -734,10 +748,10 @@ private struct FamilyActionsPanel: View {
                 }
                 Spacer()
                 Button(role: .destructive, action: onKill) {
-                    Label("Kill Tree", systemImage: "scope")
+                    Label(risk.appQuitPID != nil ? "Quit App\u{2026}" : "Stop Tree\u{2026}", systemImage: "scope")
                 }
                 .disabled(!panel.hasOwnedTargets)
-                .help(panel.hasOwnedTargets ? "Preview and confirm a kill of this process tree" : "No live processes owned by you to target")
+                .help(panel.hasOwnedTargets ? "Preview exactly what will be stopped, then confirm" : "No live processes owned by you to target")
             }
             .controlSize(.small)
         }

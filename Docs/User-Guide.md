@@ -73,6 +73,25 @@ In a family's details, **Precision targets** previews one contributor at a time;
 
 Expiry prevents starting an intervention; it does not undo one already admitted. High usage alone is not a reason to stop work you need.
 
+### Knowing what a stop will do
+
+Before anything is stopped, Ghost Process Sniper works out what the process actually is from its name, path, and command line. The preview's first page explains the result in plain words (**What will happen**, **Before you stop it**, **You get back**), and the family page shows the same summary before you open a preview.
+
+| Workload | How it is stopped | Force |
+| --- | --- | --- |
+| Apps and document editors (Xcode, Pages, VS Code…) | Asked to quit like **⌘Q**, so they can save and close their own helpers; anything left gets `SIGTERM` | Only if you allow it |
+| Databases (Postgres, MySQL, Redis, Mongo, Elasticsearch…) | `SIGTERM` with 12 seconds to flush data | Only if you allow it |
+| Container runtimes (Docker, OrbStack, Colima…) | `SIGTERM` with 15 seconds; every container stops | Only if you allow it |
+| git mid-operation, package installs | `SIGTERM`; warns about `.git/index.lock` or half-installed dependencies | Only if you allow it |
+| Dev servers | Interrupted like **Ctrl-C** (`SIGINT`) first; freed ports are listed | Automatic for survivors |
+| Builds, model runners, other processes | `SIGTERM`, then force for survivors | Automatic for survivors |
+
+"Only if you allow it" means the **Report anything that refuses to stop** switch starts on. If something is still running afterwards — often an app waiting on a save prompt — check it, then use **Force Stop** in the result.
+
+If a supervisor such as **nodemon**, **pm2**, **forever**, **watchexec**, **cargo watch**, or a launchd agent would restart the process, the preview says so and suggests stopping the supervisor instead. After a stop, Ghost watches briefly and tells you if the process came back and who restarted it.
+
+Waiting always ends as soon as the processes exit, so long grace periods only cost time when something is genuinely slow to shut down.
+
 ## Keyboard shortcuts
 
 | Action | Shortcut |

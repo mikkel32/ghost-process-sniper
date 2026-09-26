@@ -38,7 +38,7 @@ Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a 
 - **Real temperatures.** Measured CPU and GPU Celsius from hardware sensors (never invented per-app temperatures), plus *What's heating your Mac?*, which ties heat to the apps doing the work.
 - **Incident history.** A local timeline of leaks, spikes, and runaways, so recurring offenders stand out.
 - **Rules.** Notify, highlight, snooze, ignore, or suggest stopping matching families.
-- **Careful interventions.** Previews pin exact PID + start-time identities, re-check ownership and protected processes, refuse recycled PIDs, expire after 60 seconds, and ask politely (`SIGTERM`) before escalating.
+- **Careful interventions.** Every stop knows what it interrupts: apps are asked to quit like ⌘Q so they can save, databases and Docker get time to shut down cleanly, and nothing that can lose data is forced without your say-so. Previews warn when nodemon, pm2, or launchd would just restart the process, pin exact PID + start-time identities, refuse recycled PIDs, and expire after 60 seconds.
 - **Light on your Mac.** Adaptive sampling backs off under memory pressure; the Engine view shows exactly how much CPU and memory the radar itself costs.
 
 ## Private and unprivileged by design

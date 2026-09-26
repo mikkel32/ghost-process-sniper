@@ -70,7 +70,11 @@ Keep animation scopes local. Do not animate an entire process array or attach a 
 
 Rendering buckets do not authorize caching raw measurements. `ProcessMonitor` publishes fresh family data and the raw model even when visible rows do not need rebuilding. Existing measurement-age checks and PID/start-time validation remain authoritative for interventions.
 
-Process-stop code is a separate boundary: previews retain their explicit scope, identities, strategy, delay, and expiry. Presentation work must not widen that scope or decide to stop a process. This refactor does not change the signal executor, approval model, escalation policy, or sensor-control permissions.
+Process-stop code is a separate boundary: previews retain their explicit scope, identities, strategy, delay, and expiry. Presentation work must not widen that scope or decide to stop a process.
+
+### Risk-aware stops
+
+`KillWorkloadProfile` captures names, paths, command lines, ports, and the ancestor chain when a plan is made (the kill snapshot itself stays cheap and skips them). `KillRiskAssessor` turns that into a `KillRiskAssessment`: the workload kind, hazards, freed ports, a supervisor that would restart the target, the app process to quit politely, a clean-shutdown grace period, and whether force needs the user's consent. `InterventionPolicyEngine` folds the assessment into the decision factors and strategy (`quitApp` asks `NSRunningApplication` to terminate before any signal; `carefulShutdown` gives databases and container runtimes long SIGTERM grace). Calibration is looked up per strategy and never shortens a clean-shutdown grace. After a successful stop with a known supervisor, `ProcessKiller` samples once more to report a restart.
 
 ## Persistence
 
