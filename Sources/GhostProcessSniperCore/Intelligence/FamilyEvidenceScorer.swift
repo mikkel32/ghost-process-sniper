@@ -24,7 +24,10 @@ struct FamilyEvidenceScorer: Sendable {
         let leakVelocity = trend.credibleMemoryVelocity
         let leakRatio = leakVelocity / max(settings.leakVelocityMegabytesPerMinute, 1)
         let childFanout = max(0, members.count - 6)
-        let duplicateImpact = duplicateCluster.map { min(12, Double($0.memberCount) * 3) } ?? 0
+        // Only copies started independently count; a worker pool inside one
+        // family is how the tool works, not a duplicate.
+        let copies = duplicateCluster.flatMap { $0.countsAsIndependentCopies ? $0 : nil }
+        let duplicateImpact = copies.map { min(12, Double($0.independentRootCount - 1) * 4) } ?? 0
         let hardwareImpact = min(24, hardwareSignals.reduce(0) { $0 + $1.impact })
         let ageMinutes = max(0, now.timeIntervalSince(Date(timeIntervalSince1970: TimeInterval(root.identity.startTimeSeconds))) / 60)
         let orphanBonus = confidence >= 0.35 && LaunchOrigin.isDetachedFromLauncher(root) ? 6.0 : 0
@@ -98,14 +101,14 @@ struct FamilyEvidenceScorer: Sendable {
                 level: childFanout >= 6 ? .hot : .watch
             ))
         }
-        if let duplicateCluster, duplicateImpact > 0 {
+        if let copies, duplicateImpact > 0 {
             components.append(GhostScoreComponent(
                 slot: "duplicate",
                 kind: .fanout,
-                title: "\(duplicateCluster.memberCount) matching instances",
-                detail: duplicateCluster.reason,
+                title: "\(copies.independentRootCount) independent copies",
+                detail: copies.reason,
                 impact: duplicateImpact,
-                level: duplicateCluster.memberCount >= 4 ? .hot : .watch
+                level: copies.independentRootCount >= 4 ? .hot : .watch
             ))
         }
         if orphanBonus > 0 {
@@ -178,8 +181,8 @@ struct FamilyEvidenceScorer: Sendable {
         if childFanout > 0 {
             reasons.append("\(members.count - 1) child processes")
         }
-        if let duplicateCluster {
-            reasons.append("\(duplicateCluster.memberCount) matching instances")
+        if let copies {
+            reasons.append("\(copies.independentRootCount) independent copies")
         }
         if orphanBonus > 0 {
             reasons.append("background dev process")
@@ -203,12 +206,12 @@ struct FamilyEvidenceScorer: Sendable {
             trend: trend,
             hardwareLevel: hardwareLevel
         )
-        if let duplicateCluster, heat.level == .quiet {
+        if let copies, heat.level == .quiet {
             heat = GhostHeat(
                 value: max(30, heat.value),
                 level: .watch,
                 confidence: max(0.5, heat.confidence),
-                evidence: heat.evidence + ["\(duplicateCluster.memberCount) independent matching instances need review"],
+                evidence: heat.evidence + ["\(copies.independentRootCount) independent copies need review"],
                 sustainedSignalCount: heat.sustainedSignalCount,
                 corroborationCount: heat.corroborationCount
             )

@@ -283,8 +283,8 @@ private func duplicateDetectorCapturesSmallSameUserProcesses() throws {
     try check(result.promotedDuplicateCandidateCount == 2, "duplicate members should be promoted as family candidates")
     try check(result.families.count == 2, "independent duplicate roots should become visible families")
     try check(result.families.allSatisfy { $0.score.level >= .watch }, "duplicate-promoted families should have watch visibility")
-    try check(result.families.contains { $0.score.reasons.contains("2 matching instances") }, "duplicate score should explain matching instances")
-    try check(result.families.contains { $0.score.components.contains(where: { $0.kind == .fanout && $0.title.contains("matching instances") }) }, "duplicate score should expose a fanout component")
+    try check(result.families.contains { $0.score.reasons.contains("2 independent copies") }, "duplicate score should explain the independent copies")
+    try check(result.families.contains { $0.score.components.contains(where: { $0.kind == .fanout && $0.title.contains("independent copies") }) }, "duplicate score should expose a fanout component")
 }
 
 private func duplicateDetectorIgnoresSingletonsAndSystemBundles() throws {

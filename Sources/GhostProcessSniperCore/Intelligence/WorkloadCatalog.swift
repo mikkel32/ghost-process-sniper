@@ -20,6 +20,8 @@ public struct WorkloadTokens: Sendable {
     public let script: String?
     /// The node_modules package the script lives in, e.g. "jest-worker".
     public let package: String?
+    /// The script or module argument as given, lowercased.
+    public let scriptPath: String?
     /// Lowercased arguments after argv0, at most 24.
     public let arguments: [String]
     /// Every component of the executable and script paths.
@@ -71,6 +73,7 @@ public struct WorkloadTokens: Sendable {
         arguments = rest.split(whereSeparator: \.isWhitespace).prefix(24).map(String.init)
 
         let scriptPath = Self.scriptPath(interpreter: argv0, arguments: arguments)
+        self.scriptPath = scriptPath
         script = scriptPath.map(Self.scriptStem)
         package = scriptPath.flatMap(Self.nodePackage)
 

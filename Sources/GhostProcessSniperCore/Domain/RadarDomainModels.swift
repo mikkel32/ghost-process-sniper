@@ -71,6 +71,10 @@ public struct RadarActionSuggestion: Identifiable, Codable, Equatable, Sendable 
     public let detail: String
     public let ruleID: UUID?
     public let createdAt: Date
+    /// The processes the action is about when they are not the family
+    /// itself, e.g. the redundant copies of a duplicated server. Stop the
+    /// family that owns each one.
+    public let targetIdentities: [ProcessIdentity]?
 
     /// Without an explicit `id`, the same rule (or the forecast) and action
     /// always get the same id, so a suggestion card keeps its identity
@@ -81,7 +85,8 @@ public struct RadarActionSuggestion: Identifiable, Codable, Equatable, Sendable 
         title: String,
         detail: String,
         ruleID: UUID? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        targetIdentities: [ProcessIdentity]? = nil
     ) {
         self.id = id ?? Self.stableID(ruleID: ruleID, type: type)
         self.type = type
@@ -89,10 +94,16 @@ public struct RadarActionSuggestion: Identifiable, Codable, Equatable, Sendable 
         self.detail = detail
         self.ruleID = ruleID
         self.createdAt = createdAt
+        self.targetIdentities = targetIdentities
     }
 
     public static func stableID(ruleID: UUID?, type: RadarActionType) -> UUID {
-        let key = Array("\(ruleID?.uuidString ?? "forecast")|\(type.rawValue)".utf8)
+        stableID(scope: ruleID?.uuidString ?? "forecast", type: type)
+    }
+
+    /// A stable id for a suggestion that no rule owns, e.g. "duplicate|<key>".
+    public static func stableID(scope: String, type: RadarActionType) -> UUID {
+        let key = Array("\(scope)|\(type.rawValue)".utf8)
         let basis: UInt64 = 0xcbf2_9ce4_8422_2325
         let high = fnv1a(key, seed: basis)
         let low = fnv1a(key, seed: basis ^ 1)

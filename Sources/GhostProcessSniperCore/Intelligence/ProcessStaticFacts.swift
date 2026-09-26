@@ -22,6 +22,24 @@ struct ProcessStaticFacts: Sendable {
         return slash == path.startIndex ? "/" : String(path[..<slash])
     }
 
+    /// The first word naming a dev runtime or node_modules script.
+    static func commandHint(of command: String) -> String? {
+        for piece in command.split(whereSeparator: \.isWhitespace).prefix(16) {
+            let lower = piece.lowercased()
+            if lower.contains("node_modules") ||
+                lower.hasSuffix("vite") ||
+                lower.hasSuffix("next") ||
+                lower.hasSuffix("ollama") ||
+                lower.hasSuffix("python") ||
+                lower.hasSuffix("python3") ||
+                lower.hasSuffix("bun") ||
+                lower.hasSuffix("docker") {
+                return WorkloadTokens.basename(String(piece))
+            }
+        }
+        return nil
+    }
+
     static func appBundlePrefix(of path: String) -> String? {
         guard let range = path.range(of: ".app/", options: [.caseInsensitive]) else {
             return nil

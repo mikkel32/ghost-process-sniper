@@ -86,7 +86,7 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.protectedPIDs = protectedPIDs
         let signature = signature ?? ProcessSignature.from(root: root)
         self.signature = signature
-        self.familyKey = "\(signature.id)|pid:\(root.identity.pid)|start:\(root.identity.startTimeSeconds).\(root.identity.startTimeMicroseconds)"
+        self.familyKey = Self.key(signature: signature, root: root.identity)
         self.baseline = baseline
         self.forensics = forensics ?? ProcessFamily.aggregateForensics(from: members)
         self.suggestions = suggestions
@@ -104,10 +104,9 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.parentFamilyKey = parentFamilyKey
     }
 
-    func linked(toParentFamily key: String) -> ProcessFamily {
-        var copy = self
-        copy.parentFamilyKey = key
-        return copy
+    /// One concrete instance of a signature: the signature plus the root.
+    public static func key(signature: ProcessSignature, root: ProcessIdentity) -> String {
+        "\(signature.id)|pid:\(root.pid)|start:\(root.startTimeSeconds).\(root.startTimeMicroseconds)"
     }
 
     /// Families launched by this one (see parentFamilyKey), for a stop that

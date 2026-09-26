@@ -213,7 +213,9 @@ public struct RadarIntelligence: Sendable {
         )
         let finalSuggestions: [RadarActionSuggestion]
         if finalSuppression.isEmpty {
-            finalSuggestions = mergedSuggestions(finalRules + forecastSuggestion(for: heatResolvedFamily))
+            finalSuggestions = mergedSuggestions(
+                finalRules + forecastSuggestion(for: heatResolvedFamily) + duplicateSuggestion(for: heatResolvedFamily, now: now)
+            )
         } else {
             // Muted families keep their underlying diagnostics, but should not
             // simultaneously tell the user to inspect, notify, or kill.
@@ -297,6 +299,31 @@ public struct RadarIntelligence: Sendable {
                 detail: "\(forecast.etaText) - \(forecast.whyNow)",
                 ruleID: nil,
                 createdAt: forecast.generatedAt
+            )
+        ]
+    }
+
+    /// One suggestion per duplicated workload, on the copy to keep: stop the
+    /// others. The copy with the suggestion is never a target.
+    private func duplicateSuggestion(for family: ProcessFamily, now: Date) -> [RadarActionSuggestion] {
+        guard let cluster = family.duplicateCluster, cluster.countsAsIndependentCopies,
+              let keep = cluster.keepIdentity, family.members.contains(where: { $0.identity == keep })
+        else {
+            return []
+        }
+        let redundant = cluster.redundantRootIdentities
+        guard !redundant.isEmpty else { return [] }
+        let ports = cluster.redundantPorts
+        let noun = redundant.count == 1 ? "copy" : "copies"
+        let portText = ports.isEmpty ? "" : " (port\(ports.count == 1 ? "" : "s") \(ports.map(String.init).joined(separator: ", ")))"
+        return [
+            RadarActionSuggestion(
+                id: RadarActionSuggestion.stableID(scope: "duplicate|\(cluster.key.id)", type: .suggestKill),
+                type: .suggestKill,
+                title: "Stop \(redundant.count) older \(noun)\(portText)",
+                detail: "\(cluster.independentRootCount) copies of \(cluster.displayName) are running; keeps PID \(keep.pid), \(cluster.keepReason).",
+                createdAt: now,
+                targetIdentities: redundant
             )
         ]
     }

@@ -58,6 +58,9 @@ public struct FamilyScoringCache: Sendable {
         hasher.combine(Int(family.totalCPUPercent.rounded()))
         hasher.combine(Int(family.totalGPUPercent.rounded()))
         hasher.combine(family.hardwareSignals.map(\.reason))
+        if let cluster = family.duplicateCluster, cluster.countsAsIndependentCopies {
+            hasher.combine(cluster.copyPlanHash)
+        }
         hasher.combine(Int(family.trend.credibleMemoryVelocity.rounded()))
         hasher.combine(Int(family.root.sampledAt.timeIntervalSince1970 / 300))
         hasher.combine(family.score.value.rounded())
