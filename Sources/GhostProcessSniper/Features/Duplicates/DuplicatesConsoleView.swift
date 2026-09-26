@@ -1,36 +1,54 @@
+import Darwin
 import GhostProcessSniperCore
 import SwiftUI
 
+/// Duplicate clusters in a table and, for the selected one, a plan that
+/// keeps the copies in use and offers to stop the orphaned extras.
 struct DuplicatesConsoleView: View {
     let session: RadarConsoleSession
-    @State private var selectedID: String?
+    @State private var selectedID: DuplicateClusterViewModel.ID?
+    @State private var plans: [String: DuplicateCullPlan] = [:]
+    @State private var cullRun: DuplicateCullRun?
 
     private var rows: [DuplicateClusterViewModel] {
         session.duplicateRows
     }
 
     private var selectedRow: DuplicateClusterViewModel? {
-        if let selectedID, let row = rows.first(where: { $0.id == selectedID }) {
-            return row
-        }
-        return rows.first
+        guard let selectedID else { return nil }
+        return rows.first { $0.id == selectedID }
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            duplicateList
-                .frame(minWidth: 440, idealWidth: 500, maxWidth: 560)
+        VStack(spacing: 0) {
+            header
+            if rows.isEmpty {
+                ContentUnavailableView(
+                    "No Duplicate Clusters",
+                    systemImage: "doc.on.doc",
+                    description: Text("Matching small tools appear here when two or more of your copies run at once.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                HSplitView {
+                    DuplicateClusterTable(
+                        rows: rows,
+                        plans: plans,
+                        selection: $selectedID,
+                        session: session,
+                        stopExtras: stopExtras
+                    )
+                    .frame(minWidth: 360, idealWidth: 440)
 
-            Divider()
-
-            DuplicateClusterDetailView(
-                row: selectedRow,
-                inspectFamily: inspectRelatedFamily,
-                snoozeFamily: snoozeRelatedFamily,
-                ignoreFamily: ignoreRelatedFamily,
-                copyReport: session.copyDuplicateReport
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    DuplicateClusterDetailView(
+                        row: selectedRow,
+                        plan: selectedID.flatMap { plans[$0] },
+                        session: session,
+                        stopExtras: stopExtras
+                    )
+                    .frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
         }
         .navigationTitle("Duplicates")
         .background {
@@ -44,64 +62,45 @@ struct DuplicatesConsoleView: View {
         .onChange(of: rows.map(\.id)) { _, _ in
             stabilizeSelection()
         }
+        .task(id: PlanInput(sampleRevision: session.monitor.sampleRevision, rows: rows)) {
+            await updatePlans()
+        }
+        .sheet(item: $cullRun) { run in
+            DuplicateCullSheet(
+                run: run,
+                start: {
+                    Task { await session.stopDuplicateCopies(run) }
+                },
+                close: {
+                    cullRun = nil
+                }
+            )
+        }
     }
 
-    private var duplicateList: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            DuplicatesHeader(count: rows.count)
-
-            if rows.isEmpty {
-                ContentUnavailableView(
-                    "No Duplicate Clusters",
-                    systemImage: "doc.on.doc",
-                    description: Text("Matching small tools will appear here when two or more same-user instances are live.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        DuplicateTableHeader()
-                        ForEach(rows) { row in
-                            Button {
-                                selectedID = row.id
-                            } label: {
-                                DuplicateClusterRow(row: row, isSelected: selectedRow?.id == row.id)
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu {
-                                Button {
-                                    inspectRelatedFamily(row)
-                                } label: {
-                                    Label("Inspect Related Family", systemImage: "sidebar.right")
-                                }
-                                .disabled(row.cluster.relatedFamilyKeys.isEmpty)
-                                Button {
-                                    snoozeRelatedFamily(row)
-                                } label: {
-                                    Label("Snooze Related Family", systemImage: "moon")
-                                }
-                                .disabled(row.cluster.relatedFamilyKeys.isEmpty)
-                                Button {
-                                    ignoreRelatedFamily(row)
-                                } label: {
-                                    Label("Ignore Related Family", systemImage: "eye.slash")
-                                }
-                                .disabled(row.cluster.relatedFamilyKeys.isEmpty)
-                                Divider()
-                                Button {
-                                    session.copyDuplicateReport(row)
-                                } label: {
-                                    Label("Copy Report", systemImage: "doc.on.clipboard")
-                                }
-                            }
-                            Divider()
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 14)
-                }
-            }
+    private var header: some View {
+        RadarPageHeader(
+            eyebrow: "Cluster Analysis",
+            title: "Duplicates",
+            subtitle: headerSubtitle,
+            systemImage: "doc.on.doc",
+            accent: .orange
+        ) {
+            InfoTip(tip: RadarTip(
+                title: "Duplicates",
+                message: "Catches death by a thousand cuts: many small copies of the same tool (language servers, watchers, helpers) that each sit below the heavy-process thresholds but add up. Stop the extras keeps every copy that is in use and stops only idle copies whose app is gone, each through its own stop preview.",
+                shortcut: "\u{2318}3"
+            ))
         }
+        .padding([.top, .horizontal], 20)
+        .padding(.bottom, 14)
+    }
+
+    private var headerSubtitle: String {
+        guard !rows.isEmpty else { return "No repeated tools right now." }
+        let extras = rows.reduce(0) { $0 + (plans[$1.id]?.stopCount ?? 0) }
+        let clusters = "\(rows.count) \(rows.count == 1 ? "cluster" : "clusters")"
+        return extras > 0 ? "\(clusters) \u{00b7} \(extras) orphaned \(extras == 1 ? "copy" : "copies") can go" : clusters
     }
 
     private func stabilizeSelection() {
@@ -114,261 +113,175 @@ struct DuplicatesConsoleView: View {
         }
     }
 
-    private func inspectRelatedFamily(_ row: DuplicateClusterViewModel) {
-        guard let familyKey = row.cluster.relatedFamilyKeys.first else {
-            return
-        }
-        session.focus(.family(familyKey))
+    private func stopExtras(_ row: DuplicateClusterViewModel) {
+        guard cullRun == nil, let plan = plans[row.id], plan.stopCount > 0 else { return }
+        cullRun = DuplicateCullRun(plan: plan)
     }
 
-    private func snoozeRelatedFamily(_ row: DuplicateClusterViewModel) {
-        guard let familyKey = row.cluster.relatedFamilyKeys.first else {
+    private func updatePlans() async {
+        let clusters = rows.map(\.cluster)
+        guard !clusters.isEmpty else {
+            plans = [:]
             return
         }
-        Task { await session.monitor.snooze(signatureID: familyKey, minutes: 60) }
-    }
-
-    private func ignoreRelatedFamily(_ row: DuplicateClusterViewModel) {
-        guard let familyKey = row.cluster.relatedFamilyKeys.first else {
-            return
-        }
-        Task { await session.monitor.ignore(signatureID: familyKey) }
+        let sample = session.monitor.sampledProcesses
+        let userID = geteuid()
+        // Parent and child lookups walk the whole sample; keep them off the main thread.
+        let fresh = await Task.detached(priority: .userInitiated) {
+            DuplicateCullPlan.plans(for: clusters, sample: sample, currentUserID: userID)
+        }.value
+        guard !Task.isCancelled else { return }
+        plans = fresh
     }
 }
 
-private struct DuplicatesHeader: View {
-    let count: Int
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "doc.on.doc")
-                .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(count > 0 ? .orange : .secondary)
-                .frame(width: 38, height: 38)
-                .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-            VStack(alignment: .leading, spacing: 2) {
-                Text("CLUSTER ANALYSIS")
-                    .font(.caption2.weight(.heavy))
-                    .tracking(1.05)
-                    .foregroundStyle(.orange)
-                HStack(spacing: 8) {
-                    Text("Duplicate Radar")
-                        .font(.title3.weight(.semibold))
-                    InfoTip(tip: RadarTip(
-                        title: "Duplicate Radar",
-                        message: "Catches death by a thousand cuts: many small copies of the same tool (language servers, watchers, helpers) that each sit below the heavy-process thresholds but add up. Clusters need two or more live same-user instances to appear.",
-                        shortcut: "⌘3"
-                    ))
-                }
-                Text("Small repeated dev tools captured from the normal cheap scan.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Text("\(count)")
-                .font(.headline.monospacedDigit().weight(.semibold))
-                .foregroundStyle(count > 0 ? .orange : .secondary)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(Color.orange.opacity(0.1), in: Capsule())
-        }
-        .padding(12)
-        .radarSurface(tint: .orange, cornerRadius: 14)
-        .padding(14)
-    }
+/// Plans depend on the clusters and on the sample their parents are looked up in.
+private struct PlanInput: Equatable {
+    let sampleRevision: UInt64
+    let rows: [DuplicateClusterViewModel]
 }
 
-private struct DuplicateTableHeader: View {
-    var body: some View {
-        HStack(spacing: 10) {
-            Text("Name")
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text("Count")
-                .frame(width: 48, alignment: .trailing)
-            Text("Memory")
-                .frame(width: 70, alignment: .trailing)
-            Text("CPU")
-                .frame(width: 48, alignment: .trailing)
-        }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.tertiary)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-    }
-}
-
-private struct DuplicateClusterRow: View {
-    let row: DuplicateClusterViewModel
-    let isSelected: Bool
+/// Clusters in a native table: arrow keys move, Return or a double-click
+/// opens the related family, and Delete previews stopping the extras.
+private struct DuplicateClusterTable: View {
+    let rows: [DuplicateClusterViewModel]
+    let plans: [String: DuplicateCullPlan]
+    @Binding var selection: DuplicateClusterViewModel.ID?
+    let session: RadarConsoleSession
+    let stopExtras: (DuplicateClusterViewModel) -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+        Table(rows, selection: $selection) {
+            TableColumn("Name") { row in
+                VStack(alignment: .leading, spacing: 2) {
                     Text(row.title)
-                        .font(.caption.weight(.semibold))
+                        .fontWeight(.semibold)
                         .lineLimit(1)
                     Text(row.kindText)
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                Text(row.reasonText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                .help(row.subtitle)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .width(min: 150, ideal: 210)
 
-            Text(row.countText)
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .frame(width: 48, alignment: .trailing)
-            Text(row.memoryText)
-                .font(.caption.monospacedDigit())
-                .frame(width: 70, alignment: .trailing)
-            Text(row.cpuText)
-                .font(.caption.monospacedDigit())
-                .frame(width: 48, alignment: .trailing)
+            TableColumn("Copies") { row in
+                Text(row.countText)
+                    .monospacedDigit()
+            }
+            .width(min: 44, ideal: 52)
+            .alignment(.trailing)
+
+            TableColumn("Extras") { row in
+                let stopCount = plans[row.id]?.stopCount ?? 0
+                Text(stopCount > 0 ? String(stopCount) : "\u{2014}")
+                    .monospacedDigit()
+                    .fontWeight(stopCount > 0 ? .semibold : .regular)
+                    .foregroundStyle(stopCount > 0 ? Color.orange : Color.secondary)
+                    .help(plans[row.id]?.summary ?? "")
+            }
+            .width(min: 44, ideal: 52)
+            .alignment(.trailing)
+
+            TableColumn("Memory") { row in
+                Text(row.memoryText)
+                    .monospacedDigit()
+            }
+            .width(min: 60, ideal: 72)
+            .alignment(.trailing)
+
+            TableColumn("CPU") { row in
+                Text(row.cpuText)
+                    .monospacedDigit()
+            }
+            .width(min: 44, ideal: 52)
+            .alignment(.trailing)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.16))
+        .tableStyle(.inset)
+        .contextMenu(forSelectionType: DuplicateClusterViewModel.ID.self) { ids in
+            if let row = row(in: ids) {
+                DuplicateClusterMenu(row: row, plan: plans[row.id], session: session, stopExtras: stopExtras)
+            }
+        } primaryAction: { ids in
+            if let row = row(in: ids) {
+                session.inspectRelatedFamily(of: row)
             }
         }
-        .contentShape(Rectangle())
-        .help(row.subtitle)
+        .onDeleteCommand {
+            if let selection, let row = row(in: [selection]) {
+                stopExtras(row)
+            }
+        }
+    }
+
+    private func row(in ids: Set<DuplicateClusterViewModel.ID>) -> DuplicateClusterViewModel? {
+        guard !ids.isEmpty else { return nil }
+        return rows.first { ids.contains($0.id) }
     }
 }
 
-private struct DuplicateClusterDetailView: View {
-    let row: DuplicateClusterViewModel?
-    let inspectFamily: (DuplicateClusterViewModel) -> Void
-    let snoozeFamily: (DuplicateClusterViewModel) -> Void
-    let ignoreFamily: (DuplicateClusterViewModel) -> Void
-    let copyReport: (DuplicateClusterViewModel) -> Void
+private struct DuplicateClusterMenu: View {
+    let row: DuplicateClusterViewModel
+    let plan: DuplicateCullPlan?
+    let session: RadarConsoleSession
+    let stopExtras: (DuplicateClusterViewModel) -> Void
 
     var body: some View {
-        if let row {
-            let detail = DuplicateClusterDetailModel(cluster: row.cluster)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    detailHeader(row: row, detail: detail)
-                    metricBand(row: row)
-                    hintSection(title: "Representative Commands", image: "terminal", values: detail.commandHints)
-                    hintSection(title: "Executable Paths", image: "folder", values: detail.pathHints)
-                    hintSection(title: "Grouped PIDs", image: "number", values: detail.pidGroups)
-                    actionSection(row: row)
-                }
-                .padding(18)
-            }
-        } else {
-            ContentUnavailableView(
-                "No Duplicate Selected",
-                systemImage: "doc.on.doc",
-                description: Text("Duplicate clusters are quiet until two or more matching same-user processes appear.")
-            )
+        let stopCount = plan?.stopCount ?? 0
+        let familyCount = row.cluster.relatedFamilyKeys.count
+        Button(DuplicateCullLabels.stopTitle(stopCount), systemImage: "stop.circle", role: .destructive) {
+            stopExtras(row)
+        }
+        .disabled(stopCount == 0)
+        Divider()
+        Button("Show Related Family", systemImage: "sidebar.right") {
+            session.inspectRelatedFamily(of: row)
+        }
+        .disabled(familyCount == 0)
+        Menu {
+            FamilySnoozeMenu { minutes in session.snoozeRelatedFamilies(of: row, minutes: minutes) }
+        } label: {
+            Label(familyCount > 1 ? "Snooze \(familyCount) Families" : "Snooze", systemImage: "moon")
+        }
+        .disabled(familyCount == 0)
+        Button(familyCount > 1 ? "Ignore \(familyCount) Families" : "Ignore Family", systemImage: "eye.slash") {
+            session.ignoreRelatedFamilies(of: row)
+        }
+        .disabled(familyCount == 0)
+        Divider()
+        Button("Copy Report", systemImage: "doc.on.clipboard") {
+            session.copyDuplicateReport(row)
         }
     }
+}
 
-    private func detailHeader(row: DuplicateClusterViewModel, detail: DuplicateClusterDetailModel) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(detail.title)
-                    .font(.title3.weight(.semibold))
-                    .lineLimit(1)
-                Spacer()
-                Text(row.reasonText)
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.orange)
-            }
-            Text(detail.keyText)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .truncationMode(.middle)
-            Text("Captured because the normal radar saw \(detail.captureReason.lowercased()) below individual heavy-process thresholds.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+enum DuplicateCullLabels {
+    static func stopTitle(_ stopCount: Int) -> String {
+        switch stopCount {
+        case 0: "Nothing to Stop"
+        case 1: "Stop 1 Copy\u{2026}"
+        default: "Stop \(stopCount) Copies\u{2026}"
         }
     }
+}
 
-    private func metricBand(row: DuplicateClusterViewModel) -> some View {
-        HStack(spacing: 10) {
-            CompactRadarChip(title: "Instances", value: row.countText, systemImage: "doc.on.doc", level: .watch)
-            CompactRadarChip(title: "Roots", value: row.rootCountText, systemImage: "point.3.connected.trianglepath.dotted")
-            CompactRadarChip(title: "Memory", value: row.memoryText, systemImage: "memorychip", level: .watch)
-            CompactRadarChip(title: "CPU", value: row.cpuText, systemImage: "cpu")
-            CompactRadarChip(title: "Kind", value: row.kindText, systemImage: "tag")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .radarSurface(tint: .orange, cornerRadius: 14)
+/// Snooze and Ignore cover every family the cluster spans, and say so in a toast.
+extension RadarConsoleSession {
+    func inspectRelatedFamily(of row: DuplicateClusterViewModel) {
+        guard let familyKey = row.cluster.relatedFamilyKeys.first else { return }
+        focus(.family(familyKey))
     }
 
-    private func hintSection(title: String, image: String, values: [String]) -> some View {
-        CompactRadarSection(
-            title: title,
-            subtitle: values.isEmpty ? "none" : "\(values.count)",
-            systemImage: image,
-            accent: .orange
-        ) {
-            if values.isEmpty {
-                Text("No cached hint from the cheap scan.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(values, id: \.self) { value in
-                        Label(value, systemImage: image)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                    }
-                }
-            }
-        }
+    func snoozeRelatedFamilies(of row: DuplicateClusterViewModel, minutes: TimeInterval) {
+        snooze(families: relatedFamilies(of: row), minutes: minutes)
     }
 
-    private func actionSection(row: DuplicateClusterViewModel) -> some View {
-        let hasRelatedFamily = !row.cluster.relatedFamilyKeys.isEmpty
-        return CompactRadarSection(title: "Safe Actions", subtitle: "advisory", systemImage: "checkmark.shield", accent: .orange) {
-            HStack(spacing: 8) {
-                Button {
-                    inspectFamily(row)
-                } label: {
-                    Label("Inspect Related", systemImage: "sidebar.right")
-                }
-                .disabled(!hasRelatedFamily)
+    func ignoreRelatedFamilies(of row: DuplicateClusterViewModel) {
+        ignore(families: relatedFamilies(of: row))
+    }
 
-                Button {
-                    snoozeFamily(row)
-                } label: {
-                    Label("Snooze", systemImage: "moon")
-                }
-                .disabled(!hasRelatedFamily)
-
-                Button {
-                    ignoreFamily(row)
-                } label: {
-                    Label("Ignore", systemImage: "eye.slash")
-                }
-                .disabled(!hasRelatedFamily)
-
-                Spacer()
-
-                Button {
-                    copyReport(row)
-                } label: {
-                    Label("Copy Report", systemImage: "doc.on.clipboard")
-                }
-            }
-            .controlSize(.small)
-        }
+    private func relatedFamilies(of row: DuplicateClusterViewModel) -> [(key: String, name: String)] {
+        row.cluster.relatedFamilyKeys.map { (key: $0, name: row.title) }
     }
 }

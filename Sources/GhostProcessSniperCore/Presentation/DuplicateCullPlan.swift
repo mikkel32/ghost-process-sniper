@@ -23,6 +23,8 @@ public struct DuplicateCullPlan: Equatable, Sendable {
         public let reason: String
         public let memoryBytes: UInt64
         public let cpuPercent: Double
+        public let memoryText: String
+        public let cpuText: String
         /// The stopped copy that started this one; it goes down with that
         /// copy's tree instead of getting a stop of its own.
         public let stopsWith: ProcessIdentity?
@@ -43,6 +45,8 @@ public struct DuplicateCullPlan: Equatable, Sendable {
             self.reason = reason
             memoryBytes = process.memoryForScoringBytes
             cpuPercent = process.cpuPercent
+            memoryText = RadarFormat.bytes(process.memoryForScoringBytes)
+            cpuText = RadarFormat.percent(process.cpuPercent)
             self.stopsWith = stopsWith
         }
     }
@@ -59,6 +63,7 @@ public struct DuplicateCullPlan: Equatable, Sendable {
     public let decisions: [Decision]
     public let stopCount: Int
     public let reclaimBytes: UInt64
+    public let reclaimText: String
     public let summary: String
 
     public init(clusterID: String, displayName: String, decisions: [Decision]) {
@@ -68,6 +73,7 @@ public struct DuplicateCullPlan: Equatable, Sendable {
         let stops = decisions.filter { $0.verdict == .stop }
         stopCount = stops.count
         reclaimBytes = stops.reduce(UInt64(0)) { $0 + $1.memoryBytes }
+        reclaimText = stops.isEmpty ? "\u{2014}" : RadarFormat.bytes(reclaimBytes)
         summary = Self.summary(decisions: decisions, stopCount: stops.count, reclaimBytes: reclaimBytes)
     }
 
