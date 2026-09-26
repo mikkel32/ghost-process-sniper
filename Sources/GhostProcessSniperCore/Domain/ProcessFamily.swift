@@ -154,12 +154,6 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.growth = growth
     }
 
-    /// Families launched by this one (see parentFamilyKey), for a stop that
-    /// should take an editor's servers with it.
-    public func childFamilies(in families: [ProcessFamily]) -> [ProcessFamily] {
-        families.filter { $0.parentFamilyKey == familyKey }
-    }
-
     public func killPlan(
         killHistory: KillHistorySummary? = nil,
         workload: KillWorkloadProfile? = nil,

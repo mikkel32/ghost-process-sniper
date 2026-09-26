@@ -48,9 +48,6 @@ public struct SamplingPlan: Equatable, Sendable {
     public var portCensusIdentities: Set<ProcessIdentity>
     /// One-shot: read the listening ports of every same-user process this tick.
     public var portCensusAll: Bool
-    /// Skips the path and argv lanes: processes keep cached telemetry or get
-    /// a name-only placeholder. For kill snapshots, which need only the graph.
-    public var telemetryDisabled: Bool
 
     public static func balanced(now: Date = Date()) -> SamplingPlan {
         let budget = ScannerBudget.budget(for: .balanced)
@@ -89,8 +86,7 @@ public struct SamplingPlan: Equatable, Sendable {
         uiVisible: Bool = false,
         hintedIdentities: Set<ProcessIdentity> = [],
         portCensusIdentities: Set<ProcessIdentity> = [],
-        portCensusAll: Bool = false,
-        telemetryDisabled: Bool = false
+        portCensusAll: Bool = false
     ) {
         self.sampledAt = sampledAt
         self.performanceMode = performanceMode
@@ -108,7 +104,6 @@ public struct SamplingPlan: Equatable, Sendable {
         self.hintedIdentities = hintedIdentities
         self.portCensusIdentities = portCensusIdentities
         self.portCensusAll = portCensusAll
-        self.telemetryDisabled = telemetryDisabled
     }
 }
 

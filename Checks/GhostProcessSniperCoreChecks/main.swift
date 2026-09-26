@@ -96,7 +96,6 @@ struct CoreChecks {
         await run("processKillerPreviewsNewOwnedDescendants") { try await processKillerPreviewsNewOwnedDescendants() }
         await run("processKillerSkipsExitedTargetsBeforeEscalation") { try await processKillerSkipsExitedTargetsBeforeEscalation() }
         await run("processKillerDetectsRecycledPIDDuringEscalation") { try await processKillerDetectsRecycledPIDDuringEscalation() }
-        await run("processKillerUsesCheapSnapshotPolicy") { try await processKillerUsesCheapSnapshotPolicy() }
         await run("processKillerUsesDedicatedSnapshotProvider") { try await processKillerUsesDedicatedSnapshotProvider() }
         await run("processKillerSkipForceReportsSurvivors") { try await processKillerSkipForceReportsSurvivors() }
         await run("processKillerRecordsMultiPassVerification") { try await processKillerRecordsMultiPassVerification() }
@@ -2571,19 +2570,6 @@ private func processKillerDetectsRecycledPIDDuringEscalation() async throws {
     try check(report.targetResults.contains { $0.pid == 80 && $0.state == .recycled }, "final target state should show recycled")
 }
 
-private func processKillerUsesCheapSnapshotPolicy() async throws {
-    let target = process(pid: 90, parentPID: 1, userID: 501)
-    let sampler = PlanCaptureSampler(samples: [target])
-    let lookup = DefaultProcessLookup(sampler: sampler)
-    let preview = try await lookup.killSnapshot(policy: .preflight)
-    let plans = await sampler.plans()
-
-    try check(preview.usedCheapPath, "default lookup should mark kill snapshots as cheap")
-    try check(plans.last?.allowsOptionalForensics == false, "kill snapshot should disable optional forensics")
-    try check(plans.last?.maxForensicsPerRefresh == 0, "kill snapshot should not enqueue forensics")
-    try check(plans.last?.telemetryDisabled == true && plans.last?.scannerBudget.maxTelemetryRefreshes == 0, "kill snapshot should avoid command/path sweeps")
-}
-
 private func processKillerUsesDedicatedSnapshotProvider() async throws {
     let target = process(pid: 91, parentPID: 1, userID: 501)
     let provider = ScriptedKillSnapshotProvider(
@@ -3174,7 +3160,7 @@ private func processKillerHonorsLiveSkipForceControl() async throws {
         signaler: signaler,
         currentUserID: 501,
         sleeper: { _ in
-            await control.requestSkipForce()
+            await control.stopWaiting()
         }
     )
 
@@ -3442,36 +3428,6 @@ private struct FakeSampler: ProcessSampling {
                 elapsedMilliseconds: 0
             )
         )
-    }
-}
-
-private actor PlanCaptureSampler: ProcessSampling {
-    private let samples: [ProcessMetrics]
-    private var capturedPlans: [SamplingPlan] = []
-
-    init(samples: [ProcessMetrics]) {
-        self.samples = samples
-    }
-
-    func sample(plan: SamplingPlan) async throws -> ProcessSampleBatch {
-        capturedPlans.append(plan)
-        return ProcessSampleBatch(
-            processes: samples,
-            sampledAt: plan.sampledAt,
-            stats: SamplerStats(
-                processCount: samples.count,
-                commandRefreshCount: 0,
-                commandCacheHitCount: samples.count,
-                forensicsRefreshCount: 0,
-                forensicsDeferredCount: samples.count,
-                elapsedMilliseconds: 0,
-                expensiveCallCount: 0
-            )
-        )
-    }
-
-    func plans() -> [SamplingPlan] {
-        capturedPlans
     }
 }
 

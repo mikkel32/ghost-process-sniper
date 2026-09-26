@@ -33,7 +33,7 @@ final class FamilyBoundaryTests: XCTestCase {
         XCTAssertEqual(server.parentFamilyKey, editor.familyKey)
         XCTAssertNil(editor.parentFamilyKey)
         XCTAssertEqual(editor.classification?.kind, .editorApp)
-        XCTAssertEqual(editor.childFamilies(in: families).map(\.root.pid), [503])
+        XCTAssertEqual(families.filter { $0.parentFamilyKey == editor.familyKey }.map(\.root.pid), [503])
     }
 
     func testNotebookKernelAndTypeScriptServerLeaveTheEditor() {

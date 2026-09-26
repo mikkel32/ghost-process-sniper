@@ -1,14 +1,14 @@
 {
   "default_max_lines": 600,
   "targets": {
-    "GhostProcessSniper": ["Application", "MenuBar", "Shell", "DesignSystem", "Features/Overview", "Features/Thermals", "Features/Processes", "Features/Interventions", "Features/Incidents", "Features/Duplicates", "Features/Rules", "Features/Engine", "Features/Settings"],
+    "GhostProcessSniper": ["Application", "MenuBar", "Shell", "DesignSystem", "Features/Overview", "Features/Thermals", "Features/Processes", "Features/Interventions", "Features/Incidents", "Features/Duplicates", "Features/Rules", "Features/Settings"],
     "GhostProcessSniperCore": ["Domain", "Configuration", "Monitoring", "Sampling", "Thermals", "Intelligence", "Persistence", "Search", "Presentation", "Diagnostics", "Interventions", "Cleanup"]
   },
   "legacy_line_budgets": {},
   "test_roots": {
     "roots": ["Tests/GhostProcessSniperCoreTests", "Checks/GhostProcessSniperCoreChecks"],
     "legacy_line_budgets": {
-      "Checks/GhostProcessSniperCoreChecks/main.swift": 3920
+      "Checks/GhostProcessSniperCoreChecks/main.swift": 3876
     }
   }
 }
