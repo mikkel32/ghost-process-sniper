@@ -68,6 +68,20 @@ final class StoreOpenRecoveryTests: XCTestCase {
         XCTAssertNil(recovered.errorMessage)
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
     }
+
+    func testEngineStatusLineCarriesTheStoresOwnError() {
+        let failing = StoreHealth(backlogCount: 0, pendingActionCount: 0, lastFlushDate: nil, lastPruneDate: nil,
+                                  errorMessage: "The radar database could not be opened.")
+        let engine = EngineDiagnosticsViewModel(
+            metrics: .empty,
+            health: SamplerHealth(engineName: "test", lastSampleDate: nil, processCount: 10, familyCount: 1, errorMessage: nil),
+            storeHealth: failing,
+            storeError: nil,
+            summary: RadarSummary(statusText: "Quiet", level: .quiet, familyCount: 1, hotCount: 0, totalMemoryBytes: 1, topFamilyName: "node"),
+            generatedAt: Date(timeIntervalSince1970: 2)
+        )
+        XCTAssertEqual(engine.statusLine, "The radar database could not be opened.", "a failing store never reads as all well")
+    }
 }
 
 private final class TestClock: @unchecked Sendable {

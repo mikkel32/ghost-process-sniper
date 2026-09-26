@@ -36,6 +36,7 @@ public final class ProcessMonitor {
     @ObservationIgnored var stopRiskCache = StopRiskCache()
 
     @ObservationIgnored private let thermalSampler: any ThermalSampling
+    @ObservationIgnored var lastThermalReadAt: Date?
     @ObservationIgnored private var selfUsageMonitor = SelfUsageMonitor()
     @ObservationIgnored private let notifier: RadarNotifying
     @ObservationIgnored let store: RadarStore?
@@ -175,8 +176,8 @@ public final class ProcessMonitor {
         defer { signpost.endInterval("RadarRefresh", refreshState) }
 
         do {
-            // Only the popover and console show temperatures.
-            if uiVisible {
+            if readsThermals(at: now) {
+                lastThermalReadAt = now
                 let sampled = await thermalSampler.sample(now: now)
                 if let next = ThermalSnapshotStore.update(thermals, thermalObservations, with: sampled, at: now) { (thermals, thermalObservations) = next }
             }

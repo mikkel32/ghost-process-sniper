@@ -180,7 +180,10 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         summary: RadarSummary,
         generatedAt: Date
     ) {
-        statusLine = storeError ?? health.errorMessage ?? "\(summary.statusText) - \(health.processCount) processes sampled"
+        // The refresh's own store error, else the store's open or corruption
+        // error, like ProcessMonitor.storeError: a failing store never reads as fine.
+        statusLine = storeError ?? storeHealth.errorMessage ?? health.errorMessage
+            ?? "\(summary.statusText) - \(health.processCount) processes sampled"
         // Bucketed to 5 ms: the exact per-tick jitter (9 → 12 → 8 ms) is
         // noise, and every distinct string invalidates console layout.
         refreshCostText = "\(max(5, Self.fiveMillisecondBucket(metrics.lastRefresh.totalMilliseconds))) ms"

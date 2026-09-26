@@ -103,7 +103,7 @@ Primary background references: [Apple's SwiftUI performance guide](https://devel
 
 ## Thermals
 
-`ThermalSampler` reads AppleSMC read-only; `ProcessMonitor` awaits it before each worker refresh and keeps both the latest snapshot and a 180-second `ThermalObservationWindow`, so trends and traces are ready whenever a thermal view opens. `RadarRefreshWorker` calls the nonisolated `ThermalActivityAnalyzer.project` over the full raw sample, not only monitored families, and records the result in its `ThermalActivityHistory` (a decayed load per app or job). Views evaluate the cheap `ThermalDiagnosis` and `ThermalAppInsight` and re-render between publishes only when a reading expires.
+`ThermalSampler` reads AppleSMC read-only; `ProcessMonitor` awaits it before each worker refresh while a panel is visible, and at most every 4 s while hidden, and keeps both the latest snapshot and a 180-second `ThermalObservationWindow`, so trends and traces are ready whenever a thermal view opens. `RadarRefreshWorker` calls the nonisolated `ThermalActivityAnalyzer.project` over the full raw sample, not only monitored families, and records the result in its `ThermalActivityHistory` (a decayed load per app or job). Views evaluate the cheap `ThermalDiagnosis` and `ThermalAppInsight` and re-render between publishes only when a reading expires.
 
 Activity ordering compares the larger of CPU capacity and reported GPU activity; it is not a measurement of power, temperature or share of heat. The thermal views never signal a process: the stop shortcut goes through the regular stop preview. See [Thermals](Thermals.md) for the sensor support matrix, review bands, trend rules and attribution.
 

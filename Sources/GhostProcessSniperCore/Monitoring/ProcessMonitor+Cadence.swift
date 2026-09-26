@@ -49,6 +49,17 @@ extension ProcessMonitor {
         }
     }
 
+    /// Only the popover and console show temperatures, so while hidden they
+    /// are read at most this often: enough to keep the trend continuous
+    /// (hidden sleeps last at most 8 s plus 15 % slack, under the
+    /// observation window's 15 s gap), so it is ready when a panel opens.
+    static let hiddenThermalInterval: TimeInterval = 4
+
+    func readsThermals(at now: Date) -> Bool {
+        guard !uiVisible, let last = lastThermalReadAt else { return true }
+        return !(0..<Self.hiddenThermalInterval).contains(now.timeIntervalSince(last))
+    }
+
     /// Runs one loop tick and returns how long to sleep before the next.
     func runLoopTick(isFirstTick: Bool) async -> TimeInterval {
         wakePending = false
