@@ -161,6 +161,12 @@ public struct FamilyVerdict: Equatable, Sendable {
             effectiveForecastState = .quiet
         }
 
+        // A measured Hot level outranks a quiet or immature forecast: the
+        // verdict must never reassure next to a Hot badge.
+        if effectiveForecastState <= .warming, family.score.level >= .hot {
+            return measuredVerdict(family: family)
+        }
+
         switch effectiveForecastState {
         case .critical:
             return FamilyVerdict(
@@ -254,7 +260,7 @@ public struct FamilyVerdict: Equatable, Sendable {
                     systemImage: "arrow.up.right.circle"
                 )
             }
-            if trustedBaseline != nil {
+            if trustedBaseline != nil, family.score.level <= .watch {
                 return FamilyVerdict(
                     headline: "Behaving normally",
                     detail: "Inside its learned range with no predictive signals.",
@@ -269,6 +275,29 @@ public struct FamilyVerdict: Equatable, Sendable {
                 systemImage: "checkmark.circle"
             )
         }
+    }
+
+    private static func measuredVerdict(family: ProcessFamily) -> FamilyVerdict {
+        let evidence = family.score.heat.evidence
+        let headline: String
+        let systemImage: String
+        if evidence.contains(GhostHeat.memoryAboveLimitEvidence) {
+            headline = "Using a lot of memory now"
+            systemImage = "memorychip"
+        } else if evidence.contains(GhostHeat.sustainedCPUEvidence) || evidence.contains(GhostHeat.instantCPUEvidence) {
+            headline = "CPU busy now"
+            systemImage = "cpu"
+        } else {
+            headline = "Heavy right now"
+            systemImage = "flame"
+        }
+        let observed = evidence.first.map { sentence($0) + " " } ?? ""
+        return FamilyVerdict(
+            headline: headline,
+            detail: observed + "Not confirmed as a leak yet.",
+            level: family.score.level,
+            systemImage: systemImage
+        )
     }
 
     private static func leakETASentence(_ forecast: RiskForecast) -> String {

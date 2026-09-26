@@ -52,6 +52,10 @@ public struct GhostHeat: Equatable, Sendable {
         )
     }
 
+    static let sustainedCPUEvidence = "CPU stayed elevated across the sampling window"
+    static let instantCPUEvidence = "CPU is high now, but persistence is not proven yet"
+    static let memoryAboveLimitEvidence = "Memory footprint is above its adaptive limit"
+
     public var valueText: String {
         "\(Int(value.rounded()))"
     }
@@ -154,11 +158,11 @@ public enum GhostHeatModel {
         let hardwareCorroborates = hardwareLevel >= .hot && (memoryRatio >= 0.85 || cpuRatio >= 0.75)
 
         var evidence: [String] = []
-        if sustainedCPU { evidence.append("CPU stayed elevated across the sampling window") }
-        else if cpuRatio >= 1 { evidence.append("CPU is high now, but persistence is not proven yet") }
+        if sustainedCPU { evidence.append(GhostHeat.sustainedCPUEvidence) }
+        else if cpuRatio >= 1 { evidence.append(GhostHeat.instantCPUEvidence) }
         if sustainedLeak { evidence.append("Memory growth is sustained with a trusted trend") }
         else if leakRatio >= 1 { evidence.append("Memory is rising, but the trend still needs confirmation") }
-        if memoryRatio >= 1 { evidence.append("Memory footprint is above its adaptive limit") }
+        if memoryRatio >= 1 { evidence.append(GhostHeat.memoryAboveLimitEvidence) }
         if gpuRatio >= 0.55 { evidence.append("GPU load is materially elevated") }
         if hardwareLevel >= .hot { evidence.append("Hardware-offender detection also flags this process") }
 
