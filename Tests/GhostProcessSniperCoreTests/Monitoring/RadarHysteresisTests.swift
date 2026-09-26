@@ -41,4 +41,28 @@ final class RadarHysteresisTests: XCTestCase {
         XCTAssertEqual(level(after: &hysteresis, .watch, at: 1).score.level, .watch)
         XCTAssertEqual(level(after: &hysteresis, .quiet, at: 2).score.level, .quiet)
     }
+
+    func testHoldDoesNotSurviveAbsence() {
+        let other = RefreshPerformanceFixture.family(RefreshPerformanceFixture.process(2))
+        for returning in [GhostLevel.watch, .hot] {
+            var hysteresis = RadarHysteresis()
+            XCTAssertEqual(level(after: &hysteresis, .critical, at: 0).score.level, .critical)
+            for seconds in stride(from: 3.0, through: 600, by: 3) {
+                _ = hysteresis.apply(to: [other], now: t0.addingTimeInterval(seconds))
+            }
+            let back = level(after: &hysteresis, returning, at: 630)
+            XCTAssertEqual(back.score.level, returning)
+            XCTAssertFalse(back.score.reasons.contains(RadarHysteresis.holdReason))
+        }
+    }
+
+    func testShortAbsenceKeepsTheHold() {
+        var hysteresis = RadarHysteresis()
+        let other = RefreshPerformanceFixture.family(RefreshPerformanceFixture.process(2))
+        XCTAssertEqual(level(after: &hysteresis, .critical, at: 0).score.level, .critical)
+        _ = hysteresis.apply(to: [other], now: t0.addingTimeInterval(6))
+        let back = level(after: &hysteresis, .watch, at: 12)
+        XCTAssertEqual(back.score.level, .critical)
+        XCTAssertTrue(back.score.reasons.contains(RadarHysteresis.holdReason))
+    }
 }

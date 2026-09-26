@@ -200,7 +200,8 @@ public struct RadarPipeline: Sendable {
 /// `holdDuration`, then steps down one level at a time, each step held too,
 /// so a family oscillating around a threshold does not flap and a bursty
 /// runaway keeps its rich sampling for at least `holdDuration` after its
-/// last hot reading.
+/// last hot reading. A family unseen for longer than `holdDuration` starts
+/// over: a hold must not outlive the readings it smooths.
 struct RadarHysteresis: Sendable {
     static let holdReason = "held briefly to avoid flicker"
 
@@ -208,6 +209,7 @@ struct RadarHysteresis: Sendable {
         var level: GhostLevel
         /// When the current step started; nil when the level is not held.
         var stepStartedAt: Date?
+        var lastSeen: Date
     }
 
     private var held: [String: Held] = [:]
@@ -226,21 +228,23 @@ struct RadarHysteresis: Sendable {
             let suppressed = family.alertState.kind == .ignored || family.alertState.kind == .snoozed ||
                 !family.coverage.isScorable
             guard let previous = held[key], !suppressed, incoming < previous.level,
+                  now.timeIntervalSince(previous.lastSeen) <= holdDuration,
                   previous.level >= .hot || previous.stepStartedAt != nil
             else {
-                held[key] = Held(level: incoming, stepStartedAt: nil)
+                held[key] = Held(level: incoming, stepStartedAt: nil, lastSeen: now)
                 return family
             }
 
             var step = previous
             let startedAt = previous.stepStartedAt ?? now
             step.stepStartedAt = startedAt
+            step.lastSeen = now
             if now.timeIntervalSince(startedAt) >= holdDuration {
                 let lower = GhostLevel(rawValue: previous.level.rawValue - 1) ?? incoming
-                step = Held(level: max(incoming, lower), stepStartedAt: now)
+                step = Held(level: max(incoming, lower), stepStartedAt: now, lastSeen: now)
             }
             if step.level <= incoming {
-                held[key] = Held(level: incoming, stepStartedAt: nil)
+                held[key] = Held(level: incoming, stepStartedAt: nil, lastSeen: now)
                 return family
             }
             held[key] = step
