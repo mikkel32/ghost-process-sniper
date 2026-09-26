@@ -2748,7 +2748,7 @@ private func processKillerReportsReclaimEstimate() async throws {
     )
 
     try check(preview.reclaimEstimate.memoryBytes == 256 * 1_048_576, "preview should estimate memory reclaim from cheap target metrics")
-    try check(!preview.decisionEvidence.isEmpty, "preview should include decision evidence")
+    try check(!preview.decisionScore.factors.isEmpty, "preview should include decision factors")
     try check(report.realizedMemoryReclaimBytes == 256 * 1_048_576, "report should carry realized reclaim estimate for terminated targets")
 }
 
@@ -2928,8 +2928,7 @@ private func interventionPolicyEngineSimulatesStrategies() throws {
         devKindLabel: "Node server",
         memoryBytes: 512 * 1_048_576,
         cpuPercent: 35,
-        childCount: 0,
-        isBackgroundOrOrphan: false
+        childCount: 0
     )
     let plan = KillPlan(rootIdentity: target.identity, targetIdentities: [target.identity], protectedPIDs: [], displayName: "vite", familyMetadata: metadata, workload: viteWorkload(pid: 174))
     let evaluation = engine.evaluate(
@@ -2940,7 +2939,6 @@ private func interventionPolicyEngineSimulatesStrategies() throws {
         recycled: [],
         reclaim: KillReclaimEstimate(memoryBytes: 512 * 1_048_576, cpuPercent: 35, confidence: 0.8, sourceText: "test"),
         diff: .empty,
-        nearbyCount: 0,
         forceKillDelay: 2
     )
 
@@ -2980,8 +2978,7 @@ private func interventionPolicyEngineAppliesCalibration() throws {
         devKindLabel: "Node server",
         memoryBytes: 300_000_000,
         cpuPercent: 20,
-        childCount: 0,
-        isBackgroundOrOrphan: false
+        childCount: 0
     )
     let plan = KillPlan(
         rootIdentity: target.identity,
@@ -3001,7 +2998,6 @@ private func interventionPolicyEngineAppliesCalibration() throws {
         recycled: [],
         reclaim: KillReclaimEstimate(memoryBytes: 300_000_000, cpuPercent: 20, confidence: 0.8, sourceText: "test"),
         diff: .empty,
-        nearbyCount: 0,
         forceKillDelay: 2
     )
 
@@ -3022,8 +3018,7 @@ private func processKillerRecommendsGentleDevServerStrategy() async throws {
         devKindLabel: "Node server",
         memoryBytes: 512 * 1_048_576,
         cpuPercent: 35,
-        childCount: 0,
-        isBackgroundOrOrphan: false
+        childCount: 0
     )
     let provider = ScriptedKillSnapshotProvider(snapshots: [
         KillProcessSnapshot(processes: [target], policy: .preflight, usedCheapPath: true)

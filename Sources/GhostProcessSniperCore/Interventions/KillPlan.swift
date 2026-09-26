@@ -82,7 +82,8 @@ public struct KillFamilyMetadata: Equatable, Sendable {
     public let memoryBytes: UInt64
     public let cpuPercent: Double
     public let childCount: Int
-    public let isBackgroundOrOrphan: Bool
+    /// The forecast's own words for why the family matters now.
+    public let forecastReason: String
 
     public init(
         signatureID: String,
@@ -94,7 +95,7 @@ public struct KillFamilyMetadata: Equatable, Sendable {
         memoryBytes: UInt64,
         cpuPercent: Double,
         childCount: Int,
-        isBackgroundOrOrphan: Bool
+        forecastReason: String = ""
     ) {
         self.signatureID = signatureID
         self.displayName = displayName
@@ -105,7 +106,7 @@ public struct KillFamilyMetadata: Equatable, Sendable {
         self.memoryBytes = memoryBytes
         self.cpuPercent = cpuPercent
         self.childCount = childCount
-        self.isBackgroundOrOrphan = isBackgroundOrOrphan
+        self.forecastReason = forecastReason
     }
 
     public init(family: ProcessFamily) {
@@ -119,7 +120,7 @@ public struct KillFamilyMetadata: Equatable, Sendable {
             memoryBytes: family.totalPhysicalFootprintBytes,
             cpuPercent: family.totalCPUPercent,
             childCount: family.childCount,
-            isBackgroundOrOrphan: family.root.parentPID == 1
+            forecastReason: family.forecast.whyNow
         )
     }
 }

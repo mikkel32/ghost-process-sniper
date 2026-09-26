@@ -14,8 +14,6 @@ struct KillPreflight {
 struct KillPreflightBuilder: Sendable {
     let currentUserID: UInt32
     let usesDarwinProcessNamespace: Bool
-    private let confidenceModel = KillConfidenceModel()
-    private let safetyGate = KillSafetyGate()
     private let reclaimEstimator = KillReclaimEstimator()
     private let policyEngine = InterventionPolicyEngine()
     private let deltaEngine = KillGraphDeltaEngine()
@@ -108,21 +106,12 @@ struct KillPreflightBuilder: Sendable {
             recycled: recycled,
             reclaim: reclaim,
             diff: diff,
-            nearbyCount: nearby.count,
             forceKillDelay: profile.forceKillDelay
         )
         let decisionScore = policy.decisionScore
         let strategy = policy.recommendation
         let strategyProfile = policy.profile
-        let evidence = decisionScore.factors.map(Self.evidence(from:)) + confidenceModel.evidence(
-            plan: plan,
-            targets: targets,
-            locked: locked,
-            stale: stale,
-            recycled: recycled,
-            reclaim: reclaim
-        )
-        let readiness = safetyGate.readiness(hasTargets: !targets.isEmpty, evidence: evidence)
+        let readiness = decisionScore.readiness(hasTargets: !targets.isEmpty)
         let performanceReport = KillPerformanceReport(snapshot: snapshot)
 
         let preview = KillPreview(
@@ -137,7 +126,6 @@ struct KillPreflightBuilder: Sendable {
             readiness: readiness,
             usedCheapSnapshot: snapshot.usedCheapPath,
             reclaimEstimate: reclaim,
-            decisionEvidence: evidence,
             scopePreview: scopePreview,
             strategyRecommendation: strategy,
             targetDiff: diff,
@@ -184,14 +172,5 @@ struct KillPreflightBuilder: Sendable {
                 locked.append(KillTarget(process: process, depth: 0, state: .locked, reason: "Owned by \(process.ownerName)", rootIdentity: plan.rootIdentity))
             }
         }
-    }
-
-    private static func evidence(from factor: KillDecisionFactor) -> KillDecisionEvidence {
-        let kind: KillDecisionEvidenceKind = switch factor.kind {
-        case .whyKill: .positive
-        case .whyWait: .caution
-        case .blocking: .blocking
-        }
-        return KillDecisionEvidence(kind: kind, title: factor.title, detail: factor.detail)
     }
 }

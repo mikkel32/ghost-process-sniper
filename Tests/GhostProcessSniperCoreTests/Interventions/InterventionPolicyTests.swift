@@ -57,6 +57,53 @@ final class InterventionPolicyTests: XCTestCase {
         }
     }
 
+    func testDockLaunchedAppIsNotCalledOrphaned() {
+        let slack = evaluate(command: "/Applications/Slack.app/Contents/MacOS/Slack", name: "Slack", parent: 1,
+                             path: "/Applications/Slack.app/Contents/MacOS/Slack")
+        let titles = slack.decisionScore.factors.map(\.title)
+        XCTAssertFalse(titles.contains { $0.localizedCaseInsensitiveContains("orphan") || $0.contains("Background") }, "\(titles)")
+        XCTAssertEqual(slack.recommendation.strategy, .quitApp)
+    }
+
+    func testEvidenceTitlesAreUnique() {
+        let history = KillHistorySummary(signatureID: "sig", operationCount: 5, gracefulSuccessRate: 0.8, forceRate: 0.6,
+                                         survivorRate: 0, averageReclaimBytes: 0, commonDenialCount: 0)
+        let locked = KillTarget(unresolved: ProcessIdentity(pid: 801, startTimeSeconds: 1, startTimeMicroseconds: 0), state: .locked, reason: "root")
+        let evaluation = evaluate(command: "node /app/node_modules/.bin/vite", name: "node", history: history, level: .critical,
+                                  forecast: .runaway, label: "Swift build", parent: 1, locked: [locked])
+        let titles = evaluation.decisionScore.factors.map(\.title)
+        XCTAssertEqual(titles.count, Set(titles).count, "\(titles)")
+        XCTAssertFalse(titles.contains("Active build caution"), "a label substring is not a build")
+    }
+
+    func testStaleFamilyIsForgottenNotHighRisk() {
+        let evaluation = evaluate(command: "python3 train.py", name: "python3", level: .watch, forecast: .stale,
+                                  reason: "Idle for 3 h with 2.1 GB resident")
+        let radar = evaluation.decisionScore.factors.filter { $0.source == .radar }
+        XCTAssertEqual(radar.map(\.title), ["Forgotten"])
+        XCTAssertEqual(radar.first?.detail, "Idle for 3 h with 2.1 GB resident")
+        XCTAssertEqual(radar.first?.weight, 10)
+    }
+
+    func testRadarFactorsNameWhatTheRadarSaw() {
+        XCTAssertEqual(evaluate(command: "x", name: "x", forecast: .leaking).decisionScore.factors.filter { $0.source == .radar }.map(\.title), ["Leaking memory"])
+        XCTAssertEqual(evaluate(command: "x", name: "x", level: .critical).decisionScore.factors.filter { $0.source == .radar }.map(\.title), ["Runaway"])
+        XCTAssertTrue(evaluate(command: "x", name: "x", level: .hot).decisionScore.factors.filter { $0.source == .radar }.isEmpty)
+    }
+
+    func testRiskFactorsAreMarkedSoTheSheetCanSkipThem() {
+        let evaluation = evaluate(command: "npm install", name: "npm")
+        let partial = evaluation.decisionScore.factors.first { $0.title == "Half-finished install" }
+        XCTAssertEqual(partial?.source, .risk)
+        XCTAssertEqual(evaluation.decisionScore.factors.first { $0.title == "Identity verified" }?.source, .tree)
+    }
+
+    func testReadinessCautionOnlyForRealReasonsToWait() {
+        XCTAssertEqual(evaluate(command: "cruncher", name: "cruncher").decisionScore.readiness(hasTargets: true), .ready)
+        XCTAssertEqual(evaluate(command: "npm install", name: "npm").decisionScore.readiness(hasTargets: true), .caution)
+        XCTAssertEqual(evaluate(command: "cruncher", name: "cruncher").decisionScore.readiness(hasTargets: false), .locked)
+    }
+
     // MARK: - Fixtures
 
     func evaluate(
@@ -68,25 +115,29 @@ final class InterventionPolicyTests: XCTestCase {
         level: GhostLevel = .watch,
         forecast: ForecastState = .quiet,
         label: String = "Process family",
+        reason: String = "",
+        parent: Int32 = 700,
+        path: String = "",
+        locked: [KillTarget] = [],
         forceKillDelay: TimeInterval = 2
     ) -> InterventionPolicyEvaluation {
         let identity = ProcessIdentity(pid: 800, startTimeSeconds: 1, startTimeMicroseconds: 0)
-        let lite = KillProcessLite(identity: identity, parentPID: 700, userID: 501, ownerName: "me", name: name, status: 2,
+        let lite = KillProcessLite(identity: identity, parentPID: parent, userID: 501, ownerName: "me", name: name, status: 2,
                                    flags: 0, processGroupID: 800, openFileCount: 0, physicalFootprintBytes: memory, cpuPercent: cpu)
         let target = KillTarget(process: lite, depth: 0, state: .ready, reason: "owned", rootIdentity: identity)
         let metadata = KillFamilyMetadata(signatureID: "sig", displayName: name, scoreValue: 90, scoreLevel: level,
                                           forecastState: forecast, devKindLabel: label, memoryBytes: memory,
-                                          cpuPercent: cpu, childCount: 0, isBackgroundOrOrphan: false)
+                                          cpuPercent: cpu, childCount: 0, forecastReason: reason)
         let workload = KillWorkloadProfile(
-            processes: [KillWorkloadProcess(pid: 800, parentPID: 700, name: name, executablePath: "", commandLine: command, isRoot: true)],
-            ancestors: [], parentIsLaunchd: false
+            processes: [KillWorkloadProcess(pid: 800, parentPID: parent, name: name, executablePath: path, commandLine: command, isRoot: true)],
+            ancestors: [], parentIsLaunchd: parent == 1
         )
         let plan = KillPlan(rootIdentity: identity, targetIdentities: [identity], protectedPIDs: [], displayName: name,
                             familyMetadata: metadata, killHistory: history, workload: workload)
         return InterventionPolicyEngine().evaluate(
-            plan: plan, targets: [target], locked: [], stale: [], recycled: [],
+            plan: plan, targets: [target], locked: locked, stale: [], recycled: [],
             reclaim: KillReclaimEstimate(memoryBytes: memory, cpuPercent: cpu, confidence: 0.8, sourceText: "test"),
-            diff: .empty, nearbyCount: 0, forceKillDelay: forceKillDelay
+            diff: .empty, forceKillDelay: forceKillDelay
         )
     }
 }

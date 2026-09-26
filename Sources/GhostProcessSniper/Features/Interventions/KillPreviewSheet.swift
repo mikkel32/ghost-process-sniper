@@ -148,8 +148,8 @@ struct KillPreviewSheet: View {
             KillPlanOverview(preview: preview)
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
                 GridRow {
-                    compactEvidenceBlock(title: "Why stop it", factors: preview.whyKillEvidence, empty: "No strong reason to stop it yet.")
-                    compactEvidenceBlock(title: "Why wait", factors: preview.whyWaitEvidence, empty: "Nothing suggests waiting.")
+                    compactEvidenceBlock(title: "Why stop it", factors: preview.whyKillEvidence.filter { $0.source != .risk }, empty: "No strong reason to stop it yet.")
+                    compactEvidenceBlock(title: "Why wait", factors: preview.whyWaitEvidence.filter { $0.source != .risk }, empty: "Nothing suggests waiting.")
                 }
             }
             DisclosureGroup("Engine details", isExpanded: $showsEngineDetails) {

@@ -14,7 +14,6 @@ public struct KillPreview: Equatable, Sendable {
     public let readiness: KillReadiness
     public let usedCheapSnapshot: Bool
     public let reclaimEstimate: KillReclaimEstimate
-    public let decisionEvidence: [KillDecisionEvidence]
     public let scopePreview: KillScopePreview
     public let strategyRecommendation: KillStrategyRecommendation
     public let targetDiff: KillTargetDiff
@@ -72,7 +71,6 @@ public struct KillPreview: Equatable, Sendable {
         readiness: KillReadiness = .ready,
         usedCheapSnapshot: Bool = false,
         reclaimEstimate: KillReclaimEstimate = .empty,
-        decisionEvidence: [KillDecisionEvidence] = [],
         scopePreview: KillScopePreview = .empty,
         strategyRecommendation: KillStrategyRecommendation = .standard,
         targetDiff: KillTargetDiff = .empty,
@@ -95,7 +93,6 @@ public struct KillPreview: Equatable, Sendable {
         self.readiness = readiness
         self.usedCheapSnapshot = usedCheapSnapshot
         self.reclaimEstimate = reclaimEstimate
-        self.decisionEvidence = decisionEvidence
         self.scopePreview = scopePreview
         self.strategyRecommendation = strategyRecommendation
         self.targetDiff = targetDiff

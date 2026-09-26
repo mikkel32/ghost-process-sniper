@@ -65,13 +65,9 @@ public final class ProcessKiller: Sendable {
                     KillTarget(unresolved: $0, state: .stale, reason: "Preflight failed")
                 },
                 readiness: .locked,
-                decisionEvidence: [
-                    KillDecisionEvidence(
-                        kind: .blocking,
-                        title: "Preflight failed",
-                        detail: error.localizedDescription
-                    )
-                ]
+                decisionScore: KillDecisionScore(value: 0, confidence: 0, factors: [
+                    KillDecisionFactor(kind: .blocking, title: "Preflight failed", detail: error.localizedDescription, weight: -100)
+                ])
             )
         }
     }

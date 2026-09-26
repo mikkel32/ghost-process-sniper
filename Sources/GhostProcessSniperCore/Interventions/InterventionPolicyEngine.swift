@@ -41,7 +41,6 @@ public struct InterventionPolicyEngine: Sendable {
         recycled: [KillTarget],
         reclaim: KillReclaimEstimate,
         diff: KillTargetDiff,
-        nearbyCount: Int,
         forceKillDelay: TimeInterval
     ) -> InterventionPolicyEvaluation {
         let risk = riskAssessor.assess(plan.workload ?? .empty)
@@ -53,7 +52,6 @@ public struct InterventionPolicyEngine: Sendable {
             recycled: recycled,
             reclaim: reclaim,
             diff: diff,
-            nearbyCount: nearbyCount,
             risk: risk
         )
         let recommendation = strategyRecommendation(
@@ -104,7 +102,6 @@ public struct InterventionPolicyEngine: Sendable {
         recycled: [KillTarget],
         reclaim: KillReclaimEstimate,
         diff: KillTargetDiff,
-        nearbyCount: Int,
         risk: KillRiskAssessment
     ) -> KillDecisionScore {
         var factors: [KillDecisionFactor] = []
@@ -118,16 +115,7 @@ public struct InterventionPolicyEngine: Sendable {
             factors.append(KillDecisionFactor(kind: .whyKill, title: "Likely reclaim", detail: "\(RadarFormat.bytes(reclaim.memoryBytes)), \(Int(reclaim.cpuPercent.rounded()))% CPU.", weight: reclaimWeight))
         }
         if let metadata = plan.familyMetadata {
-            if metadata.scoreLevel >= .hot || metadata.forecastState >= .leaking {
-                let weight: Double = metadata.scoreLevel >= .critical || metadata.forecastState >= .runaway ? 22 : 14
-                factors.append(KillDecisionFactor(kind: .whyKill, title: "High-risk radar state", detail: "\(metadata.scoreLevel.label), forecast \(metadata.forecastState.label).", weight: weight))
-            }
-            if metadata.isBackgroundOrOrphan {
-                factors.append(KillDecisionFactor(kind: .whyKill, title: "Background candidate", detail: "The root appears orphaned or backgrounded.", weight: 10))
-            }
-            if metadata.devKindLabel.localizedCaseInsensitiveContains("build") && metadata.scoreLevel < .critical {
-                factors.append(KillDecisionFactor(kind: .whyWait, title: "Active build caution", detail: "Build-like process; interrupt only when stale or critical.", weight: -24))
-            }
+            factors.append(contentsOf: radarFactors(metadata))
         }
         if !locked.isEmpty {
             factors.append(KillDecisionFactor(kind: .whyWait, title: "Protected descendants", detail: "\(locked.count) locked or foreign process\(locked.count == 1 ? "" : "es") will be skipped.", weight: -min(24, Double(locked.count) * 6)))
@@ -135,18 +123,15 @@ public struct InterventionPolicyEngine: Sendable {
         if !stale.isEmpty || !recycled.isEmpty || !diff.isEmpty {
             factors.append(KillDecisionFactor(kind: .whyWait, title: "Tree drift", detail: diff.summary, weight: -min(20, Double(stale.count + recycled.count + diff.reparentedPIDs.count) * 5)))
         }
-        if nearbyCount > 0 {
-            factors.append(KillDecisionFactor(kind: .whyWait, title: "Nearby process group", detail: "\(nearbyCount) same-user neighbor\(nearbyCount == 1 ? "" : "s") shown but not targeted.", weight: -4))
-        }
         if let history = plan.killHistory, history.operationCount > 0 {
             if history.forceRate >= 0.5 {
-                factors.append(KillDecisionFactor(kind: .whyWait, title: "Force history", detail: "\(Int((history.forceRate * 100).rounded()))% of recent interventions required force.", weight: -10))
+                factors.append(KillDecisionFactor(kind: .whyWait, title: "Force history", detail: "\(Int((history.forceRate * 100).rounded()))% of recent interventions required force.", weight: -10, source: .history))
             }
             if history.gracefulSuccessRate >= 0.65 {
-                factors.append(KillDecisionFactor(kind: .whyKill, title: "Graceful history", detail: "\(Int((history.gracefulSuccessRate * 100).rounded()))% recent graceful success.", weight: 8))
+                factors.append(KillDecisionFactor(kind: .whyKill, title: "Graceful history", detail: "\(Int((history.gracefulSuccessRate * 100).rounded()))% recent graceful success.", weight: 8, source: .history))
             }
             if history.survivorRate >= 0.35 || history.commonDenialCount >= 2 {
-                factors.append(KillDecisionFactor(kind: .blocking, title: "Poor intervention history", detail: "Recent interventions had survivors or repeated denials.", weight: -35))
+                factors.append(KillDecisionFactor(kind: .blocking, title: "Poor intervention history", detail: "Recent interventions had survivors or repeated denials.", weight: -35, source: .history))
             }
         }
 
@@ -156,6 +141,24 @@ public struct InterventionPolicyEngine: Sendable {
         let blockingPenalty = factors.contains { $0.kind == .blocking } ? 35.0 : 0
         let confidence = min(1, max(0.2, 0.45 + Double(targets.count) * 0.08 + reclaim.confidence * 0.25 - Double(locked.count) * 0.04))
         return KillDecisionScore(value: raw - blockingPenalty, confidence: confidence, factors: factors)
+    }
+
+    /// What the radar saw, named for what it is. The forecast states are
+    /// ordered by display, not by urgency, so they are matched explicitly:
+    /// a forgotten (stale) family is not a runaway.
+    private func radarFactors(_ metadata: KillFamilyMetadata) -> [KillDecisionFactor] {
+        let state = "\(metadata.scoreLevel.label), forecast \(metadata.forecastState.label.lowercased())."
+        var factors: [KillDecisionFactor] = []
+        if [.runaway, .critical].contains(metadata.forecastState) || metadata.scoreLevel >= .critical {
+            factors.append(KillDecisionFactor(kind: .whyKill, title: "Runaway", detail: state, weight: 22, source: .radar))
+        } else if metadata.forecastState == .leaking {
+            factors.append(KillDecisionFactor(kind: .whyKill, title: "Leaking memory", detail: state, weight: 14, source: .radar))
+        }
+        if metadata.forecastState == .stale {
+            let detail = metadata.forecastReason.isEmpty ? "Idle and likely forgotten." : metadata.forecastReason
+            factors.append(KillDecisionFactor(kind: .whyKill, title: "Forgotten", detail: detail, weight: 10, source: .radar))
+        }
+        return factors
     }
 
     /// Consequences weigh on the decision without blocking it: the user may
@@ -170,7 +173,7 @@ public struct InterventionPolicyEngine: Sendable {
             case (false, _, .caution): -6
             case (false, _, .info): -1
             }
-            return KillDecisionFactor(kind: item.isBenefit ? .whyKill : .whyWait, title: item.title, detail: item.detail, weight: weight)
+            return KillDecisionFactor(kind: item.isBenefit ? .whyKill : .whyWait, title: item.title, detail: item.detail, weight: weight, source: .risk)
         }
     }
 
