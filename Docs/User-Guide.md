@@ -4,7 +4,7 @@ Ghost Process Sniper lives in the menu bar and keeps watching while its console 
 
 ## The menu bar
 
-The menu-bar icon is a small scope. Its shape carries the state as well as its colour, so it reads under colour filters too: a plain ring when quiet (it follows the menu bar's appearance), a filled orange centre at Watch, a red scope with heavier crosshairs at Hot, and a solid glowing red disc at Critical.
+The menu-bar icon is a small scope. Its shape carries the state as well as its color, so it reads under color filters too: a plain ring when quiet (it follows the menu bar's appearance), a filled orange center at Watch, a red scope with heavier crosshairs at Hot, and a solid glowing red disc at Critical.
 
 Click it for the popover. It leads with one verdict, then up to three culprits with their cause and numbers — or up to two early warnings, or a quiet line once the first scan is done — followed by CPU and GPU temperature and memory pressure. Culprit rows carry a [Quick Stop](#quick-stop) button; every row's context menu can show it in the console, snooze it or ignore it. An orange row appears only when history cannot be saved.
 
@@ -127,7 +127,7 @@ When survivors were held back, the result offers **Force Stop N Processes**, whi
 
 ### launchd services and Homebrew
 
-A `brew services` database or another LaunchAgent with KeepAlive is started again by launchd within a second of a normal stop. For such a service the preview shows **launchd keeps it running**, with **Stop the launchd service (until next login)**, on by default, and **Keep it off after restart**. The confirm button then reads **Stop the Service**: launchd itself asks the process to stop and honours its shutdown timeout, while the rest of the stop runs as usual. If launchd refuses, the process is signalled instead.
+A `brew services` database or another LaunchAgent with KeepAlive is started again by launchd within a second of a normal stop. For such a service the preview shows **launchd keeps it running**, with **Stop the launchd service (until next login)**, on by default, and **Keep it off after restart**. The confirm button then reads **Stop the Service**: launchd itself asks the process to stop and honors its shutdown timeout, while the rest of the stop runs as usual. If launchd refuses, the process is signalled instead.
 
 The panel also shows the command to keep it off yourself (`brew services stop <formula>`, or `launchctl disable gui/<uid>/<label>`) and the command to undo it (`brew services start <formula>`, or `launchctl enable …` followed by `launchctl bootstrap …`), each with a copy button.
 

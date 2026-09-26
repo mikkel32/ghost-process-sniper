@@ -31,12 +31,12 @@ Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a 
 
 ## Highlights
 
-- **Menu-bar radar.** A tiny scope whose shape and colour change with the state, and a popover that leads with one verdict, the culprits, and a **Quick Stop** for the ones worth stopping.
+- **Menu-bar radar.** A tiny scope whose shape and color change with the state, and a popover that leads with one verdict, the culprits, and a **Quick Stop** for the ones worth stopping.
 - **Leak and runaway detection.** CPU and memory are measured for every one of your processes on every scan. Slow leaks are caught from up to 90 minutes of per-process history, and the helper that is growing is named. Builds, busy loops, idle services that start burning CPU, and a saturated Mac are told apart, so a long compile is not a "runaway".
 - **Process families.** Apps, helpers, dev servers, and the workers they spawn are grouped, so you see "Slack" or "vite dev" — not forty anonymous PIDs. Language servers, databases and notebook kernels an editor starts get their own family.
 - **Forgotten processes.** Judged on real evidence — a job that outlived its terminal, no CPU use for half an hour, a deleted working directory, a port held while idle — never on "its parent is launchd", which is true of every app.
 - **Duplicate finder.** Spots independently started copies of the same work, says which one to keep, and stops the orphaned extras.
-- **Real temperatures.** Measured CPU and GPU Celsius from hardware sensors, never invented per-app temperatures. *What's heating your Mac?* names the app or job doing the work and offers a stop preview when it is yours.
+- **Real temperatures.** Measured CPU and GPU Celsius from hardware sensors, never invented per-app temperatures. The **Heat & CPU activity** panel names the app or job doing the work and offers a stop preview when it is yours.
 - **Incident history.** A local timeline of leaks, spikes, and runaways, one entry per episode, so recurring offenders stand out.
 - **Rules.** Notify, highlight, snooze, ignore, or suggest stopping matching families.
 - **Careful, thorough stopping.** Every stop knows what it interrupts, so apps can save and databases can flush, and nothing that can lose data is forced unless you allow it. It offers to stop the launchd service or supervisor that would otherwise restart the process, catches children born mid-stop, and then says by name what exited and whether each port is really free ([details](#what-a-stop-does)).
@@ -138,7 +138,7 @@ ProcessMonitor (MainActor)            observable facade; schedules scans by dema
     └─ RadarRefreshWorker (actor)     one scan at a time, at utility priority
         ├─ NativeProcessSampler       libproc probes: CPU and memory for every process, then paths,
         │                             argv, ports and forensics within a deadline
-        ├─ RadarPipeline              families, duplicates, baselines, member trends, CPU behaviour,
+        ├─ RadarPipeline              families, duplicates, baselines, member trends, CPU behavior,
         │                             forgotten-process evidence, pressure attribution, rules
         ├─ RadarStore (actor)         local SQLite, versioned migrations, learned in memory and written behind
         └─ RadarPublishPayload        console snapshot and detail panels, published only when they change
