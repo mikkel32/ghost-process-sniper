@@ -53,6 +53,10 @@ struct ThermalTemperatureHero: View {
                 .accessibilityElement(children: .combine)
             }
             Text(diagnosis.pressureText).font(.caption).foregroundStyle(.secondary)
+            if let note = snapshot.mappingNote {
+                Text(note).font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(18)

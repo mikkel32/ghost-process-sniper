@@ -64,7 +64,15 @@ public struct ThermalDiagnosis: Equatable, Sendable {
             headline = "Your Mac is experiencing thermal pressure"
             explanation = "macOS reports elevated thermal conditions. Review demanding work even if the readable sensors show a lower temperature."
         case .checking, .normal:
-            if temperature.band == .unavailable {
+            if temperature.band == .unavailable, (0...15).contains(thermalAge), let reason = snapshot.unavailableReason {
+                // A fresh snapshot that names a reason is final for this Mac, not a reading on its way.
+                let unmapped = snapshot.mappingSource == nil
+                status = unmapped ? "Sensors unsupported" : "Sensors unavailable"
+                headline = unmapped
+                    ? "Temperature sensors aren't mapped for this Mac yet — showing macOS thermal pressure instead"
+                    : "Temperature sensors couldn't be read — showing macOS thermal pressure instead"
+                explanation = "\(reason). macOS thermal pressure still shows when the Mac is working to stay cool."
+            } else if temperature.band == .unavailable {
                 status = "Checking"
                 headline = "Waiting for a current temperature reading"
                 explanation = "Without a valid current sensor reading, the dashboard cannot assess the temperature. The macOS pressure report is shown separately."

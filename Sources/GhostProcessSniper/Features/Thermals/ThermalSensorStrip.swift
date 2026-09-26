@@ -9,9 +9,10 @@ struct ThermalSensorStrip: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             ThermalSensorReading(title: "CPU temperature", value: snapshot.temperatureText(snapshot.cpuCelsius, at: now),
-                component: .cpu, history: history, now: now, tint: RadarTheme.brand)
+                reason: snapshot.unavailableReason, component: .cpu, history: history, now: now, tint: RadarTheme.brand)
             ThermalSensorReading(title: "GPU temperature", value: snapshot.temperatureText(snapshot.gpuCelsius, at: now),
-                component: .gpu, history: history, now: now, tint: RadarTheme.brandSecondary)
+                reason: snapshot.unavailableReason, component: .gpu, history: history, now: now,
+                tint: RadarTheme.brandSecondary)
         }
     }
 }
@@ -19,6 +20,7 @@ struct ThermalSensorStrip: View {
 private struct ThermalSensorReading: View {
     let title: String
     let value: String
+    let reason: String?
     let component: ThermalComponent
     let history: ThermalTraceHistory?
     let now: Date
@@ -35,7 +37,7 @@ private struct ThermalSensorReading: View {
                     .frame(height: 34)
                     .accessibilityHidden(true)
             }
-            Text(value == "Unavailable" ? "No current sensor reading" : "Hottest readable hardware sensor")
+            Text(value == "Unavailable" ? reason ?? "No current sensor reading" : "Hottest readable hardware sensor")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
