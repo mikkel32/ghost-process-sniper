@@ -396,17 +396,34 @@ final class RadarConsoleSession {
                 }
                 plan = plan.targetingOnly(process)
             }
-            let delay = monitor.settings.forceKillDelay
-            let preview = await killer.preview(plan: plan, forceKillDelay: delay)
-            let expiresAt = Date().addingTimeInterval(60)
-            pendingKill = PendingKill(
-                family: family,
-                preview: preview,
-                plan: plan.binding(to: preview.targetIdentities, expiresAt: expiresAt, strategy: preview.strategyRecommendation.strategy),
-                forceKillDelay: delay,
-                expiresAt: expiresAt
-            )
+            await presentPreview(of: plan, for: family)
         }
+    }
+
+    /// Previews an alternative the advisor proposed, such as the supervisor
+    /// that restarts the family. It replaces any open preview, and the stop
+    /// is recorded against the family that owns the new root.
+    func prepareKill(_ family: ProcessFamily, plan: KillPlan) {
+        guard !isPreparingIntervention else { return }
+        isPreparingIntervention = true
+        Task {
+            defer { isPreparingIntervention = false }
+            let owner = monitor.families.first { $0.ownedIdentities.contains(plan.rootIdentity) } ?? family
+            await presentPreview(of: plan, for: owner)
+        }
+    }
+
+    private func presentPreview(of plan: KillPlan, for family: ProcessFamily) async {
+        let delay = monitor.settings.forceKillDelay
+        let preview = await killer.preview(plan: plan, forceKillDelay: delay)
+        let expiresAt = Date().addingTimeInterval(60)
+        pendingKill = PendingKill(
+            family: family,
+            preview: preview,
+            plan: plan.binding(to: preview.targetIdentities, expiresAt: expiresAt, strategy: preview.strategyRecommendation.strategy),
+            forceKillDelay: delay,
+            expiresAt: expiresAt
+        )
     }
 
     func confirmKill(

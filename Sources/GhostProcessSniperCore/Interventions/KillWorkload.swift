@@ -96,4 +96,21 @@ public struct KillWorkloadProfile: Equatable, Sendable {
             parentIsLaunchd: isRootOfFamily ? parentIsLaunchd : process.parentPID == 1
         )
     }
+
+    /// The context of stopping an ancestor instead, such as the supervisor
+    /// that keeps restarting this family: the ancestor becomes the root and
+    /// everything below it, this family included, goes down with it.
+    public func rerooted(atAncestor pid: Int32) -> KillWorkloadProfile? {
+        guard let index = ancestors.firstIndex(where: { $0.pid == pid }) else { return nil }
+        let chain = ancestors[...index].reversed().enumerated().map { depth, ancestor in
+            KillWorkloadProcess(pid: ancestor.pid, name: ancestor.name, executablePath: ancestor.executablePath,
+                                commandLine: ancestor.commandLine, isRoot: depth == 0)
+        }
+        let below = processes.map { process in
+            KillWorkloadProcess(pid: process.pid, parentPID: process.parentPID, name: process.name,
+                                executablePath: process.executablePath, commandLine: process.commandLine,
+                                listeningPorts: process.listeningPorts)
+        }
+        return KillWorkloadProfile(processes: chain + below, ancestors: Array(ancestors[(index + 1)...]), parentIsLaunchd: false)
+    }
 }

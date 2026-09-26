@@ -142,7 +142,7 @@ public struct KillOutcomeModel: Sendable {
         grace: TimeInterval,
         workloadKind: KillWorkloadKind
     ) -> String {
-        let usually = typical.map { ", usually within \(seconds($0))" } ?? ""
+        let usually = typical.map { ", usually within \(RadarFormat.seconds($0))" } ?? ""
         if signature.observationCount > 0 {
             let count = signature.observationCount
             let clean = Int((signature.cleanFraction * Double(count)).rounded())
@@ -154,10 +154,6 @@ public struct KillOutcomeModel: Sendable {
             let similar = [.general, .versionControl].contains(workloadKind) ? "similar processes" : "similar \(workloadKind.label.lowercased())s"
             return "No history for this one yet; \(similar) stopped cleanly \(clean) of \(count) times\(clean > 0 ? usually : "")."
         }
-        return "No history yet; waits up to \(seconds(grace)) for a clean exit."
-    }
-
-    private static func seconds(_ value: TimeInterval) -> String {
-        value < 10 ? String(format: "%.1f s", value) : "\(Int(value.rounded())) s"
+        return "No history yet; waits up to \(RadarFormat.seconds(grace)) for a clean exit."
     }
 }

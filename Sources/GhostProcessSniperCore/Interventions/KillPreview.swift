@@ -26,6 +26,9 @@ public struct KillPreview: Equatable, Sendable {
     public let arenaStats: KillGraphArenaStats
     /// What the stop interrupts and what could go wrong.
     public let riskAssessment: KillRiskAssessment
+    /// Better stops than this one: the supervisor that restarts it, or only
+    /// the helper that holds most of it.
+    public let alternatives: [KillAlternative]
 
     public var targetIdentities: [ProcessIdentity] { targets.map(\.identity) }
     public var targetPIDs: [Int32] { targets.map(\.pid) }
@@ -41,6 +44,7 @@ public struct KillPreview: Equatable, Sendable {
     public var whyWaitEvidence: [KillDecisionFactor] { decisionScore.whyWait }
     public var recommendedGraceSeconds: TimeInterval { strategyProfile.verificationSchedule.graceSeconds }
     public var verificationPlanText: String { Self.verificationPlanText }
+    public var recommendedAlternative: KillAlternative? { alternatives.first(where: \.isRecommended) }
 
     public var canKill: Bool {
         !targets.isEmpty && readiness != .locked
@@ -78,7 +82,8 @@ public struct KillPreview: Equatable, Sendable {
         strategyForecast: KillStrategyForecast = .none,
         watcherAvailable: Bool = false,
         arenaStats: KillGraphArenaStats = .empty,
-        riskAssessment: KillRiskAssessment = .none
+        riskAssessment: KillRiskAssessment = .none,
+        alternatives: [KillAlternative] = []
     ) {
         self.displayName = displayName
         self.rootPID = rootPID
@@ -101,5 +106,6 @@ public struct KillPreview: Equatable, Sendable {
         self.watcherAvailable = watcherAvailable
         self.arenaStats = arenaStats
         self.riskAssessment = riskAssessment
+        self.alternatives = alternatives
     }
 }

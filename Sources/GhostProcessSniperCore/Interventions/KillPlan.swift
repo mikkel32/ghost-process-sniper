@@ -61,10 +61,14 @@ public struct KillPlan: Equatable, Sendable {
     }
 
     public func targetingOnly(_ process: ProcessMetrics) -> KillPlan {
-        KillPlan(rootIdentity: process.identity, targetIdentities: [process.identity], protectedPIDs: protectedPIDs,
-                 displayName: process.name, gracefulSignal: gracefulSignal, scope: .singleRoot,
+        targetingOnly(process.identity, name: process.name)
+    }
+
+    public func targetingOnly(_ identity: ProcessIdentity, name: String) -> KillPlan {
+        KillPlan(rootIdentity: identity, targetIdentities: [identity], protectedPIDs: protectedPIDs,
+                 displayName: name, gracefulSignal: gracefulSignal, scope: .singleRoot,
                  familyMetadata: familyMetadata, killHistory: killHistory,
-                 workload: workload?.restricted(to: process.pid), strategyCalibrations: strategyCalibrations)
+                 workload: workload?.restricted(to: identity.pid), strategyCalibrations: strategyCalibrations)
     }
 }
 

@@ -17,6 +17,7 @@ struct KillPreflightBuilder: Sendable {
     private let reclaimEstimator = KillReclaimEstimator()
     private let policyEngine = InterventionPolicyEngine()
     private let deltaEngine = KillGraphDeltaEngine()
+    private let advisor = KillTargetAdvisor()
 
     func build(
         plan: KillPlan,
@@ -135,7 +136,8 @@ struct KillPreflightBuilder: Sendable {
             strategyForecast: policy.forecast,
             watcherAvailable: !targets.isEmpty && usesDarwinProcessNamespace,
             arenaStats: arena.stats,
-            riskAssessment: policy.risk
+            riskAssessment: policy.risk,
+            alternatives: advisor.alternatives(plan: plan, arena: arena, targets: targets, risk: policy.risk, currentUserID: currentUserID)
         )
         return KillPreflight(preview: preview, targets: targets, locked: locked, stale: stale, recycled: recycled)
     }
