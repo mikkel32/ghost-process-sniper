@@ -79,3 +79,65 @@ public struct KillPlan: Equatable, Sendable {
                  workload: workload?.restricted(to: process.pid), strategyCalibrations: strategyCalibrations)
     }
 }
+
+public enum KillTreePolicy: String, Codable, Sendable {
+    case ownedFamily
+
+    public var label: String {
+        switch self {
+        case .ownedFamily: "Owned family"
+        }
+    }
+}
+
+public struct KillFamilyMetadata: Equatable, Sendable {
+    public let signatureID: String
+    public let displayName: String
+    public let scoreValue: Double
+    public let scoreLevel: GhostLevel
+    public let forecastState: ForecastState
+    public let devKindLabel: String
+    public let memoryBytes: UInt64
+    public let cpuPercent: Double
+    public let childCount: Int
+    public let isBackgroundOrOrphan: Bool
+
+    public init(
+        signatureID: String,
+        displayName: String,
+        scoreValue: Double,
+        scoreLevel: GhostLevel,
+        forecastState: ForecastState,
+        devKindLabel: String,
+        memoryBytes: UInt64,
+        cpuPercent: Double,
+        childCount: Int,
+        isBackgroundOrOrphan: Bool
+    ) {
+        self.signatureID = signatureID
+        self.displayName = displayName
+        self.scoreValue = scoreValue
+        self.scoreLevel = scoreLevel
+        self.forecastState = forecastState
+        self.devKindLabel = devKindLabel
+        self.memoryBytes = memoryBytes
+        self.cpuPercent = cpuPercent
+        self.childCount = childCount
+        self.isBackgroundOrOrphan = isBackgroundOrOrphan
+    }
+
+    public init(family: ProcessFamily) {
+        self.init(
+            signatureID: family.signature.id,
+            displayName: family.displayName,
+            scoreValue: family.score.value,
+            scoreLevel: family.score.level,
+            forecastState: family.forecast.state,
+            devKindLabel: family.classification?.kind.label ?? "Process family",
+            memoryBytes: family.totalPhysicalFootprintBytes,
+            cpuPercent: family.totalCPUPercent,
+            childCount: family.childCount,
+            isBackgroundOrOrphan: family.root.parentPID == 1
+        )
+    }
+}

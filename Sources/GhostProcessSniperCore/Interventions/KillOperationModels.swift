@@ -1,0 +1,353 @@
+import Darwin
+import Foundation
+
+public struct KillOperationID: RawRepresentable, Hashable, Codable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String = UUID().uuidString) {
+        self.rawValue = rawValue
+    }
+}
+
+public enum KillOperationEventKind: String, Codable, Sendable {
+    case queued
+    case preflight
+    case targetUpdated
+    case signaled
+    case graceWaiting
+    case forcePending
+    case forceSkipped
+    case verified
+    case completed
+    case failed
+}
+
+public struct KillOperationEvent: Identifiable, Codable, Equatable, Sendable {
+    public let id: UUID
+    public let operationID: KillOperationID
+    public let kind: KillOperationEventKind
+    public let pid: Int32?
+    public let signalName: String?
+    public let targetState: KillTargetState?
+    public let message: String
+    public let createdAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        operationID: KillOperationID,
+        kind: KillOperationEventKind,
+        pid: Int32? = nil,
+        signalName: String? = nil,
+        targetState: KillTargetState? = nil,
+        message: String,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.operationID = operationID
+        self.kind = kind
+        self.pid = pid
+        self.signalName = signalName
+        self.targetState = targetState
+        self.message = message
+        self.createdAt = createdAt
+    }
+}
+
+public actor KillOperationControl {
+    private var skipForceRequested = false
+
+    public init() {}
+
+    public func requestSkipForce() {
+        skipForceRequested = true
+    }
+
+    public func shouldSkipForce() -> Bool {
+        skipForceRequested
+    }
+}
+
+public struct KillOperationProgress: Equatable, Sendable {
+    public let operationID: KillOperationID
+    public var events: [KillOperationEvent]
+    public var targetStates: [Int32: KillTargetState]
+    public var report: KillReport?
+
+    public init(operationID: KillOperationID, events: [KillOperationEvent] = [], targetStates: [Int32: KillTargetState] = [:], report: KillReport? = nil) {
+        self.operationID = operationID
+        self.events = events
+        self.targetStates = targetStates
+        self.report = report
+    }
+
+    public var isComplete: Bool {
+        report != nil || events.contains { $0.kind == .completed || $0.kind == .failed }
+    }
+
+    public mutating func append(_ event: KillOperationEvent) {
+        events.append(event)
+        if let pid = event.pid, let state = event.targetState {
+            targetStates[pid] = state
+        }
+    }
+}
+
+public struct KillOperationProgressViewModel: Equatable, Sendable {
+    public let operationID: KillOperationID
+    public let stageText: String
+    public let targetStates: [Int32: KillTargetState]
+    public let latestEvents: [KillOperationEvent]
+    public let eventCoalescingCount: Int
+    public let isComplete: Bool
+
+    public init(
+        progress: KillOperationProgress,
+        coalescingWindow: Int = 6,
+        eventCoalescingCount: Int = 0
+    ) {
+        operationID = progress.operationID
+        targetStates = progress.targetStates
+        latestEvents = Array(progress.events.suffix(max(1, coalescingWindow)))
+        self.eventCoalescingCount = eventCoalescingCount
+        isComplete = progress.isComplete
+        stageText = progress.report?.summary ?? progress.events.last?.message ?? "Preparing intervention"
+    }
+}
+
+public actor KillOperationRunner {
+    public init() {}
+
+    public func runReport(
+        plan: KillPlan,
+        killer: ProcessKiller,
+        forceKillDelay: TimeInterval = 2,
+        control: KillOperationControl = KillOperationControl(),
+        eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
+    ) async -> KillReport {
+        await killer.kill(
+            plan: plan,
+            forceKillDelay: forceKillDelay,
+            skipForceCheck: {
+                await control.shouldSkipForce()
+            },
+            eventSink: eventSink
+        )
+    }
+
+    public func run(
+        plan: KillPlan,
+        killer: ProcessKiller,
+        forceKillDelay: TimeInterval = 2,
+        control: KillOperationControl = KillOperationControl()
+    ) -> AsyncStream<KillOperationEvent> {
+        AsyncStream { continuation in
+            Task {
+                let report = await self.runReport(
+                    plan: plan,
+                    killer: killer,
+                    forceKillDelay: forceKillDelay,
+                    control: control,
+                    eventSink: { event in
+                        continuation.yield(event)
+                    }
+                )
+                if report.eventHistory.last?.kind != .completed {
+                    continuation.yield(
+                        KillOperationEvent(
+                            operationID: report.operationID,
+                            kind: report.failures.isEmpty ? .completed : .failed,
+                            message: report.summary
+                        )
+                    )
+                }
+                continuation.finish()
+            }
+        }
+    }
+}
+
+public struct KillExecutionTimeline: Equatable, Sendable {
+    public let preflightMilliseconds: Double
+    public let signalMilliseconds: Double
+    public let verificationMilliseconds: Double
+    public let totalMilliseconds: Double
+
+    public static let empty = KillExecutionTimeline(
+        preflightMilliseconds: 0,
+        signalMilliseconds: 0,
+        verificationMilliseconds: 0,
+        totalMilliseconds: 0
+    )
+
+    public init(
+        preflightMilliseconds: Double,
+        signalMilliseconds: Double,
+        verificationMilliseconds: Double,
+        totalMilliseconds: Double
+    ) {
+        self.preflightMilliseconds = preflightMilliseconds
+        self.signalMilliseconds = signalMilliseconds
+        self.verificationMilliseconds = verificationMilliseconds
+        self.totalMilliseconds = totalMilliseconds
+    }
+}
+
+public struct KillPerformanceReport: Codable, Equatable, Sendable {
+    public let snapshotMilliseconds: Double
+    public let graphReadCount: Int
+    public let heavyMetricReadCount: Int
+    public let targetConversionCount: Int
+    public let cacheStatus: KillSnapshotCacheStatus
+    public let didHitBudget: Bool
+    public let skippedOptionalWorkCount: Int
+    public let eventCoalescingCount: Int
+    public let arenaStats: KillGraphArenaStats
+    public let watcherHintCount: Int
+    public let earlyGraceExitCount: Int
+    public let targetOnlyVerificationCount: Int
+    public let completeVerificationCount: Int
+    public let eventTriggeredVerificationCount: Int
+
+    public static let empty = KillPerformanceReport(
+        snapshotMilliseconds: 0,
+        graphReadCount: 0,
+        heavyMetricReadCount: 0,
+        targetConversionCount: 0,
+        cacheStatus: .none,
+        didHitBudget: false,
+        skippedOptionalWorkCount: 0,
+        eventCoalescingCount: 0,
+        arenaStats: .empty,
+        watcherHintCount: 0,
+        earlyGraceExitCount: 0,
+        targetOnlyVerificationCount: 0,
+        completeVerificationCount: 0,
+        eventTriggeredVerificationCount: 0
+    )
+
+    public init(
+        snapshotMilliseconds: Double,
+        graphReadCount: Int,
+        heavyMetricReadCount: Int,
+        targetConversionCount: Int,
+        cacheStatus: KillSnapshotCacheStatus,
+        didHitBudget: Bool,
+        skippedOptionalWorkCount: Int = 0,
+        eventCoalescingCount: Int = 0,
+        arenaStats: KillGraphArenaStats = .empty,
+        watcherHintCount: Int = 0,
+        earlyGraceExitCount: Int = 0,
+        targetOnlyVerificationCount: Int = 0,
+        completeVerificationCount: Int = 0,
+        eventTriggeredVerificationCount: Int = 0
+    ) {
+        self.snapshotMilliseconds = snapshotMilliseconds
+        self.graphReadCount = graphReadCount
+        self.heavyMetricReadCount = heavyMetricReadCount
+        self.targetConversionCount = targetConversionCount
+        self.cacheStatus = cacheStatus
+        self.didHitBudget = didHitBudget
+        self.skippedOptionalWorkCount = skippedOptionalWorkCount
+        self.eventCoalescingCount = eventCoalescingCount
+        self.arenaStats = arenaStats
+        self.watcherHintCount = watcherHintCount
+        self.earlyGraceExitCount = earlyGraceExitCount
+        self.targetOnlyVerificationCount = targetOnlyVerificationCount
+        self.completeVerificationCount = completeVerificationCount
+        self.eventTriggeredVerificationCount = eventTriggeredVerificationCount
+    }
+
+    public init(snapshot: KillProcessSnapshot, eventCoalescingCount: Int = 0) {
+        self.init(
+            snapshotMilliseconds: snapshot.elapsedMilliseconds,
+            graphReadCount: snapshot.graphReadCount,
+            heavyMetricReadCount: snapshot.heavyMetricReadCount,
+            targetConversionCount: snapshot.targetConversionCount,
+            cacheStatus: snapshot.cacheStatus,
+            didHitBudget: snapshot.didHitBudget,
+            skippedOptionalWorkCount: snapshot.skippedOptionalWorkCount,
+            eventCoalescingCount: eventCoalescingCount,
+            arenaStats: snapshot.arena?.stats ?? .empty
+        )
+    }
+}
+
+public struct KillOperationRecord: Identifiable, Codable, Equatable, Sendable {
+    public let id: KillOperationID
+    public let signatureID: String?
+    public let displayName: String
+    public let rootPID: Int32
+    public let summary: String
+    public let estimatedMemoryReclaimBytes: UInt64
+    public let realizedMemoryReclaimBytes: UInt64
+    public let gracefulCount: Int
+    public let forcedCount: Int
+    public let survivorCount: Int
+    public let lockedCount: Int
+    public let staleCount: Int
+    public let recycledCount: Int
+    public let durationMilliseconds: Double
+    public let createdAt: Date
+    public let strategy: KillStrategy
+    public let scope: KillScope
+
+    public init(
+        id: KillOperationID,
+        signatureID: String?,
+        displayName: String,
+        rootPID: Int32,
+        summary: String,
+        estimatedMemoryReclaimBytes: UInt64,
+        realizedMemoryReclaimBytes: UInt64,
+        gracefulCount: Int,
+        forcedCount: Int,
+        survivorCount: Int,
+        lockedCount: Int,
+        staleCount: Int,
+        recycledCount: Int,
+        durationMilliseconds: Double,
+        createdAt: Date,
+        strategy: KillStrategy = .standard,
+        scope: KillScope = .ownedFamily
+    ) {
+        self.id = id
+        self.signatureID = signatureID
+        self.displayName = displayName
+        self.rootPID = rootPID
+        self.summary = summary
+        self.estimatedMemoryReclaimBytes = estimatedMemoryReclaimBytes
+        self.realizedMemoryReclaimBytes = realizedMemoryReclaimBytes
+        self.gracefulCount = gracefulCount
+        self.forcedCount = forcedCount
+        self.survivorCount = survivorCount
+        self.lockedCount = lockedCount
+        self.staleCount = staleCount
+        self.recycledCount = recycledCount
+        self.durationMilliseconds = durationMilliseconds
+        self.createdAt = createdAt
+        self.strategy = strategy
+        self.scope = scope
+    }
+
+    public init(report: KillReport, family: ProcessFamily?, createdAt: Date = Date()) {
+        self.init(
+            id: report.operationID,
+            signatureID: family?.signature.id,
+            displayName: report.displayName,
+            rootPID: report.rootPID,
+            summary: report.summary,
+            estimatedMemoryReclaimBytes: report.estimatedMemoryReclaimBytes,
+            realizedMemoryReclaimBytes: report.realizedMemoryReclaimBytes,
+            gracefulCount: report.gracefulPIDs.count,
+            forcedCount: report.forcedPIDs.count,
+            survivorCount: report.survivorPIDs.count,
+            lockedCount: report.deniedPIDs.count,
+            staleCount: report.stalePIDs.count,
+            recycledCount: report.recycledPIDs.count,
+            durationMilliseconds: report.timeline.totalMilliseconds,
+            createdAt: createdAt,
+            strategy: report.strategyUsed,
+            scope: report.scopeUsed
+        )
+    }
+}
