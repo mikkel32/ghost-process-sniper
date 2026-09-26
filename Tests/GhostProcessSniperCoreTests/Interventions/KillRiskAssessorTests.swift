@@ -26,6 +26,13 @@ final class KillRiskAssessorTests: XCTestCase {
         XCTAssertNil(assess(root: helper).appQuitPID)
     }
 
+    func testOnlyTheFrontOfArgvIdentifiesTheWorkload() {
+        let padding = String(repeating: "--flag=value ", count: 60)
+        XCTAssertEqual(assess(root: process(40, "node", command: "node vite --port 5173 " + padding)).kind, .devServer)
+        XCTAssertNotEqual(assess(root: process(41, "node", command: "node " + padding + "vite")).kind, .devServer,
+                          "argv past its first 512 bytes is flags and file lists; scanning it made large families slow")
+    }
+
     func testDatabasesGetLongGraceAndConfirmation() {
         let risk = assess(root: process(20, "postgres", command: "/opt/homebrew/opt/postgresql@16/bin/postgres -D /opt/homebrew/var/postgresql@16"))
         XCTAssertEqual(risk.kind, .dataStore)

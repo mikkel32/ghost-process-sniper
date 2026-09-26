@@ -529,18 +529,17 @@ private struct Fingerprint {
 
 private extension String {
     /// A byte-wise substring test. Foundation's `contains` bridges on every
-    /// call, which made scanning a large family's argv cost milliseconds.
+    /// call, and a hand-written byte loop is slow in unoptimized builds; libc's
+    /// memmem is fast in both.
     func includes(_ needle: String) -> Bool {
         var haystack = self
         var needle = needle
         return haystack.withUTF8 { text in
             needle.withUTF8 { pattern in
-                guard let first = pattern.first else { return true }
-                guard pattern.count <= text.count else { return false }
-                for start in 0...(text.count - pattern.count) where text[start] == first {
-                    if memcmp(text.baseAddress! + start, pattern.baseAddress!, pattern.count) == 0 { return true }
-                }
-                return false
+                guard !pattern.isEmpty else { return true }
+                guard pattern.count <= text.count, let textBase = text.baseAddress,
+                      let patternBase = pattern.baseAddress else { return false }
+                return memmem(textBase, text.count, patternBase, pattern.count) != nil
             }
         }
     }
