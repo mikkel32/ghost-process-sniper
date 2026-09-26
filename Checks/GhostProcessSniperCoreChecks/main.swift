@@ -50,6 +50,7 @@ struct CoreChecks {
         await run("memoryPatternAnalyzerClassifiesShapes") { try memoryPatternAnalyzerClassifiesShapes() }
         await run("riskForecasterTreatsSawtoothAsChurn") { try riskForecasterTreatsSawtoothAsChurn() }
         await run("systemPressureBoostsLargeFamilies") { try systemPressureBoostsLargeFamilies() }
+        await run("systemPressureSamplerFollowsKernelVerdict") { try systemPressureSamplerFollowsKernelVerdict() }
         await run("familyVerdictSynthesizesJudgment") { try familyVerdictSynthesizesJudgment() }
         await run("riskForecasterRequiresSustainedCPUEvidence") { try riskForecasterRequiresSustainedCPUEvidence() }
         await run("startupGraceDelaysLeakCalls") { try startupGraceDelaysLeakCalls() }
@@ -1037,6 +1038,17 @@ private func riskForecasterTreatsSawtoothAsChurn() throws {
     )
     try check(forecast.state == .warming, "sawtooth churn should not be promoted to leaking")
     try check(forecast.whyNow.contains("churn"), "forecast should explain the churn pattern")
+}
+
+// Swap growth may raise the level one step, so only the kernel's bounds are exact.
+private func systemPressureSamplerFollowsKernelVerdict() throws {
+    let pressure = SystemPressureSampler().sample()
+    guard let kernel = pressure.kernelLevel else { return }
+    switch kernel {
+    case 4: try check(pressure.level == .critical, "kernel critical pressure should read critical")
+    case 2: try check(pressure.level == .warning, "kernel warning pressure should read warning")
+    default: try check(pressure.level <= .warning, "kernel normal pressure should never read critical")
+    }
 }
 
 private func systemPressureBoostsLargeFamilies() throws {
