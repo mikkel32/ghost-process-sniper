@@ -75,17 +75,15 @@ actor UserNotificationRadarNotifier: RadarNotifying {
         case .authorized, .provisional, .ephemeral:
             break
         case .notDetermined:
-            // Ask once per launch from the background tick; after that the
-            // popover and Settings offer the prompt.
-            guard !didPromptThisLaunch else {
-                lastDelivered[id] = date
-                return
+            // Ask once per launch when something first deserves an alert, but
+            // never wait for the answer: the prompt can stay up unanswered.
+            // Answering refreshes the cached status, so a later pass delivers;
+            // the popover and Settings offer the prompt again.
+            if !didPromptThisLaunch {
+                didPromptThisLaunch = true
+                Task { _ = await self.requestAuthorization() }
             }
-            didPromptThisLaunch = true
-            guard await requestAuthorization() else {
-                lastDelivered[id] = date
-                return
-            }
+            return
         case .denied:
             // The delivery interval also throttles re-checks for this family.
             lastDelivered[id] = date
