@@ -624,11 +624,10 @@ private func consoleSnapshotPrecomputesStableRows() throws {
     try check(snapshot.detailPanel(for: first.signature.id) != nil, "snapshot should keep signature fallback for compatibility")
     try check(CompactConsoleSnapshot.sidebarSections(from: snapshot.compact.allRows).first?.count == 2, "snapshot should precompute sidebar section counts")
     try check(snapshot.families(query: "node", filter: .attention, sort: .memory).count == 2, "snapshot should filter without remapping process families")
-    try check(snapshot.compact.layoutMode == .compact, "snapshot should build the compact console payload")
     try check(snapshot.compact.allRows.count == 2, "compact snapshot should precompute sidebar rows")
     try check(snapshot.compact.topRiskRows.first?.id == snapshot.families.first?.id, "compact risk queue should match smart-sorted family rows")
     try check(snapshot.compact.commandCenter.statusText == "\(summary.hotCount) to review", "compact command center should show the measured review count instead of a raw forecast label")
-    try check(snapshot.compact.detailModels[first.familyKey] != nil, "compact snapshot should precompute detail panels")
+    try check(snapshot.detailPanels[first.familyKey] != nil, "snapshot should precompute detail panels")
 
     let watch = hotFamily(pid: 142, memory: 300_000_000, cpu: 5, score: GhostScore(value: 42, level: .watch, reasons: ["watch"]))
     let quiet = hotFamily(pid: 143, memory: 100_000_000, cpu: 1, score: GhostScore(value: 8, level: .quiet, reasons: ["quiet"]))
@@ -729,7 +728,7 @@ private func compactDefaultsAndEngineIsolationBehave() throws {
     try check(state.showInspector == false, "compact console should default the inspector closed")
     try check(first.contentRevision == second.contentRevision, "engine-only updates should keep content revision stable")
     try check(first.compact.allRows == second.compact.allRows, "engine-only updates should not rebuild compact family rows")
-    try check(first.compact.detailModels == second.compact.detailModels, "engine-only updates should not rebuild compact detail models")
+    try check(first.detailPanels == second.detailPanels, "engine-only updates should not rebuild detail panels")
     try check(first.compact.engineStatus.processText == "42", "first engine status should carry process count")
     try check(second.compact.engineStatus.processText == "84", "diagnostics-only compact updates should keep lightweight engine text live")
     try check(second.compact.engineStatus.refreshText != first.compact.engineStatus.refreshText || second.compact.engineStatus.backlogText != first.compact.engineStatus.backlogText, "engine status should still update without content invalidation")
@@ -769,7 +768,7 @@ private func consoleSnapshotSurfacesPredictiveQueues() throws {
         generatedAt: Date(timeIntervalSince1970: 12_000)
     )
 
-    try check(snapshot.warmingFamilies.count == 1, "snapshot should expose a warming predictive queue")
+    try check(snapshot.compact.warmingRows.count == 1, "snapshot should expose a warming predictive queue")
     try check(snapshot.families.first?.etaText == forecast.etaText, "triage row should precompute forecast ETA")
     try check(snapshot.detailPanel(for: family.familyKey)?.forecastWhyNow.contains("memory is rising") == true, "detail panel should expose why-now forecast text")
 }
@@ -1487,8 +1486,7 @@ private func radarPublishPayloadSkipsUnchangedContentRebuild() throws {
     try check(second.state.performanceMetrics.diagnosticsOnlyPublishCount == 1, "diagnostics-only publish should be counted")
     try check(second.state.performanceMetrics.uiCacheHitCount == 1, "diagnostics-only publish should count UI reuse")
     try check(second.state.performanceMetrics.uiPublishSkippedCount == 1, "diagnostics-only publish should count skipped UI model work")
-    try check(second.state.viewModel.families.isEmpty, "diagnostics-only payload should not rebuild radar family rows")
-    try check(second.state.detailViewModels.isEmpty, "diagnostics-only payload should not rebuild family detail view models")
+    try check(second.state.consoleSnapshot.detailPanels == first.state.consoleSnapshot.detailPanels, "diagnostics-only payload should reuse detail panels")
 }
 
 private func menuBarStatusPresentationIsIconOnlyAndCompact() throws {
@@ -1597,7 +1595,7 @@ private func radarRefreshWorkerPublishesStableOutcome() async throws {
     try check(outcome.performance.refreshInFlight, "worker metrics should mark the refresh as in-flight until monitor publish")
     try check(outcome.model.families.map(\.familyKey) == outcome.families.map(\.familyKey), "worker model should match outcome families")
     try check(outcome.payload.state.consoleSnapshot.contentRevision == outcome.performance.contentRevision, "worker payload should carry a stable content revision")
-    try check(outcome.payload.state.detailViewModels[outcome.families[0].familyKey] != nil, "worker payload should precompute detail view models off-main")
+    try check(outcome.payload.state.consoleSnapshot.detailPanels[outcome.families[0].familyKey] != nil, "worker payload should precompute detail panels off-main")
     try check(outcome.phaseTrace.totalMilliseconds >= outcome.phaseTrace.sampleMilliseconds, "worker should expose refresh phase trace")
 }
 
@@ -1690,7 +1688,7 @@ private func monitorPublishesRadarSummary() throws {
     try check(monitor.summary.familyCount == 1, "summary should count family")
     try check(monitor.summary.level >= .hot, "summary should reflect hot threshold")
     try check(monitor.triageFamilies.count == 1, "monitor should publish stable triage view models")
-    try check(monitor.detailViewModel(signatureID: monitor.families[0].signature.id) != nil, "monitor should publish family detail view models")
+    try check(monitor.consoleSnapshot.detailPanels[monitor.families[0].familyKey] != nil, "monitor should publish family detail panels")
 }
 
 @MainActor
@@ -1738,13 +1736,13 @@ private func monitorDiagnosticsOnlyPublishKeepsViewModelStable() throws {
     )
 
     monitor.ingest([process], now: Date(timeIntervalSince1970: 3_080))
-    let firstViewModel = monitor.viewModel
+    let firstSnapshot = monitor.consoleSnapshot
     let firstPerformance = monitor.performanceMetrics
     monitor.ingest([process], now: Date(timeIntervalSince1970: 3_081))
 
     try check(monitor.consoleSnapshot.contentRevision == firstPerformance.contentRevision, "same content ingest should stay diagnostics-only")
     try check(monitor.performanceMetrics.diagnosticsOnlyPublishCount > firstPerformance.diagnosticsOnlyPublishCount, "same content ingest should count diagnostics-only publish")
-    try check(monitor.viewModel == firstViewModel, "diagnostics-only monitor publish should avoid viewModel observable churn")
+    try check(monitor.consoleSnapshot == firstSnapshot, "diagnostics-only monitor publish should avoid console snapshot observable churn")
 }
 
 @MainActor
@@ -1822,7 +1820,7 @@ private func radarStorePersistsSettingsRulesAndIncidents() async throws {
         generatedAt: Date(timeIntervalSince1970: 5_000)
     )
 
-    try await store.persist(model: model, settings: settings)
+    try await persistNow(store, model: model, settings: settings)
     let incidents = try await store.recentIncidents()
     try check(incidents.count == 1, "store should create an incident for hot families")
     try check(incidents.first?.familyName == "node", "incident should include family name")
@@ -1843,7 +1841,7 @@ private func radarStoreQueriesIncidentsAndTogglesRules() async throws {
         generatedAt: Date(timeIntervalSince1970: 7_500)
     )
 
-    try await store.persist(model: model, settings: settings)
+    try await persistNow(store, model: model, settings: settings)
     let stored = try await store.recentIncidents()
     let queried = IncidentQuery(text: "node", filter: .active, sort: .severity, limit: 5).apply(to: stored)
     try check(queried.count == 1, "store should query active incidents")
@@ -1892,7 +1890,7 @@ private func radarStorePersistsForecastSnapshots() async throws {
         generatedAt: Date(timeIntervalSince1970: 7_600)
     )
 
-    try await store.persist(model: model, settings: settings)
+    try await persistNow(store, model: model, settings: settings)
     let forecasts = try await store.recentForecasts(limit: 5)
     let alerts = try await store.recentPredictiveAlerts(limit: 5)
     let diagnostics = try await store.exportDiagnosticsReport(settings: settings)
@@ -1935,8 +1933,8 @@ private func radarStoreCoalescesRecommendationHistory() async throws {
         generatedAt: Date(timeIntervalSince1970: 7_700)
     )
 
-    try await store.persist(model: model, settings: settings)
-    try await store.persist(model: model, settings: settings)
+    try await persistNow(store, model: model, settings: settings)
+    try await persistNow(store, model: model, settings: settings)
     let health = await store.storeHealth()
 
     try check(health.coalescingStats.recommendationSkippedCount >= 1, "store should skip duplicate recommendation history inside cooldown")
@@ -2260,7 +2258,7 @@ private func consoleSnapshotContentRevisionAvoidsGeneratedAtInvalidation() throw
     try check(second.generatedAt != first.generatedAt, "snapshot should still update engine/generatedAt diagnostics")
     try check(second.families == first.families, "unchanged content should reuse precomputed family rows")
     try check(second.compact.allRows == first.compact.allRows, "unchanged content should reuse compact family rows")
-    try check(second.compact.detailModels == first.compact.detailModels, "unchanged content should reuse compact detail panels")
+    try check(second.detailPanels == first.detailPanels, "unchanged content should reuse detail panels")
     try check(second.compact.engineStatus.backlogText != first.compact.engineStatus.backlogText, "compact engine status should update independently from compact rows")
 }
 
@@ -2402,11 +2400,10 @@ private func radarPublishPayloadPrecomputesViewState() throws {
 
     try check(payload.state.families.map(\.familyKey) == [family.familyKey], "publish payload should preserve families")
     try check(payload.state.consoleSnapshot.families.map(\.familyKey) == [family.familyKey], "publish payload should precompute console rows")
-    try check(payload.state.detailViewModels[family.familyKey] != nil, "publish payload should precompute detail view models")
+    try check(payload.state.consoleSnapshot.detailPanels[family.familyKey] != nil, "publish payload should precompute detail panels")
     try check(payload.state.performanceMetrics.contentRevision == payload.state.consoleSnapshot.contentRevision, "payload performance should share the snapshot content revision")
     try check(payload.state.engineDiagnostics == payload.state.consoleSnapshot.engine, "payload should publish engine diagnostics separately")
     try check(payload.state.engineStatus == payload.state.consoleSnapshot.compact.engineStatus, "payload should publish lightweight engine status separately")
-    try check(payload.state.consoleSnapshot.compact.detailModels[family.familyKey] != nil, "payload should precompute compact detail models")
 }
 
 private func processKillerTerminatesKillPlanInTreeOrder() async throws {
@@ -3845,6 +3842,11 @@ private func consoleSnapshot(_ families: [ProcessFamily]) -> RadarConsoleSnapsho
 
 private func derivedKey(_ snapshot: RadarConsoleSnapshot, _ state: RadarConsoleState) -> ConsoleDerivedSnapshotKey {
     ConsoleDerivedSnapshotKey(ConsoleProjectionRequest(source: snapshot, incidents: [], state: state))
+}
+
+private func persistNow(_ store: RadarStore, model: RadarModel, settings: ThresholdSettings) async throws {
+    _ = try await store.enqueue(model: model, settings: settings)
+    try await store.flush()
 }
 
 private func temporaryStoreURL() -> URL {

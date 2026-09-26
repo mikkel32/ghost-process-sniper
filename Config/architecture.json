@@ -5,13 +5,13 @@
     "GhostProcessSniperCore": ["Domain", "Configuration", "Monitoring", "Sampling", "Thermals", "Intelligence", "Persistence", "Search", "Presentation", "Diagnostics", "Interventions", "Cleanup"]
   },
   "legacy_line_budgets": {
-    "GhostProcessSniper/Features/Processes/FamilyDetailConsoleView.swift": 777,
+    "GhostProcessSniper/Features/Processes/FamilyDetailConsoleView.swift": 769,
     "GhostProcessSniper/DesignSystem/SharedRadarViews.swift": 701,
     "GhostProcessSniper/Features/Overview/RadarOverviewView.swift": 839,
     "GhostProcessSniper/Features/Interventions/KillPreviewSheet.swift": 635,
     "GhostProcessSniperCore/Sampling/ProcessSampler.swift": 917,
     "GhostProcessSniperCore/Intelligence/ProcessFamilyBuilder.swift": 828,
-    "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 680,
+    "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 656,
     "GhostProcessSniperCore/Domain/ScannerModels.swift": 695,
     "GhostProcessSniperCore/Configuration/SettingsPerformanceModels.swift": 771,
     "GhostProcessSniperCore/Intelligence/ForecastModels.swift": 767,

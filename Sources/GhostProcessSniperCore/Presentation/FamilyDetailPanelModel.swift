@@ -16,6 +16,28 @@ public struct FamilyMetricCard: Identifiable, Equatable, Sendable {
     }
 }
 
+public struct FamilyForensicsSummary: Equatable, Sendable {
+    public let currentDirectory: String
+    public let rootDirectory: String
+    public let openFileText: String
+    public let socketText: String
+    public let portsText: String
+    public let freshnessText: String
+    public let isPartial: Bool
+    public let notes: [String]
+
+    public init(family: ProcessFamily) {
+        currentDirectory = family.forensics.currentDirectory ?? "unavailable"
+        rootDirectory = family.forensics.rootDirectory ?? "unavailable"
+        openFileText = family.forensics.openFileCount.map { "\($0)" } ?? "locked"
+        socketText = family.forensics.socketCount.map { "\($0)" } ?? "locked"
+        portsText = family.forensics.listeningPorts.isEmpty ? "none" : family.forensics.listeningPorts.map(String.init).joined(separator: ", ")
+        freshnessText = family.forensicsFreshness?.formatted(date: .omitted, time: .standard) ?? "deferred"
+        isPartial = family.forensics.isPartial
+        notes = family.forensics.notes
+    }
+}
+
 public struct FamilyChangeSummary: Equatable, Sendable {
     public let memoryDeltaBytes: Int64
     public let cpuDelta: Double

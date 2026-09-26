@@ -15,9 +15,7 @@ struct RadarConsoleDetail: View {
                 if let family = session.monitor.family(signatureID: familyKey) {
                     FamilyDetailConsoleView(
                         family: family,
-                        detail: session.monitor.detailViewModel(signatureID: familyKey),
-                        panel: session.monitor.consoleSnapshot.detailPanel(for: familyKey),
-                        compact: session.selectedCompactDetail,
+                        panel: session.detailPanel(for: family),
                         onSnooze: { minutes in session.snoozeSelected(minutes: minutes) },
                         onIgnore: { session.ignoreSelected() },
                         onKill: { session.prepareKill(family) },
@@ -75,11 +73,7 @@ struct RadarConsoleInspector: View {
 
     var body: some View {
         if let family = session.selectedFamily {
-            FamilyInspectorView(
-                family: family,
-                detail: session.selectedDetail,
-                panel: session.selectedPanel
-            )
+            FamilyInspectorView(family: family, panel: session.detailPanel(for: family))
         } else {
             EngineInspectorView(monitor: session.monitor)
         }

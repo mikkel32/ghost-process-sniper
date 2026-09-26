@@ -319,61 +319,6 @@ public struct RadarModel: Equatable, Sendable {
     )
 }
 
-public struct RadarFamilyViewModel: Identifiable, Equatable, Sendable {
-    public var id: String { familyKey }
-    public let familyKey: String
-    public let signature: ProcessSignature
-    public let displayName: String
-    public let level: GhostLevel
-    public let score: Double
-    public let memoryBytes: UInt64
-    public let cpuPercent: Double
-    public let gpuPercent: Double
-    public let childCount: Int
-    public let metricsVersion: UInt64
-    public let forensicsFreshness: Date?
-
-    public init(family: ProcessFamily) {
-        familyKey = family.familyKey
-        signature = family.signature
-        displayName = family.displayName
-        level = family.score.level
-        score = family.score.value
-        memoryBytes = family.totalPhysicalFootprintBytes
-        cpuPercent = family.totalCPUPercent
-        gpuPercent = family.totalGPUPercent
-        childCount = family.childCount
-        metricsVersion = family.metricsVersion
-        forensicsFreshness = family.forensicsFreshness
-    }
-}
-
-public struct RadarViewModel: Equatable, Sendable {
-    public let summary: RadarSummary
-    public let families: [RadarFamilyViewModel]
-    public let performance: RadarPerformanceMetrics
-    public let generatedAt: Date
-
-    public static let empty = RadarViewModel(
-        summary: .empty,
-        families: [],
-        performance: .empty,
-        generatedAt: Date(timeIntervalSince1970: 0)
-    )
-
-    public init(
-        summary: RadarSummary,
-        families: [RadarFamilyViewModel],
-        performance: RadarPerformanceMetrics,
-        generatedAt: Date
-    ) {
-        self.summary = summary
-        self.families = families
-        self.performance = performance
-        self.generatedAt = generatedAt
-    }
-}
-
 public protocol RadarNotifying: Sendable {
     func process(model: RadarModel) async
 }

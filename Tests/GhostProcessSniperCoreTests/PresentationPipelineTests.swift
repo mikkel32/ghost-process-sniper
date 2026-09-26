@@ -10,7 +10,7 @@ final class PresentationPipelineTests: XCTestCase {
         let requested = families[299].familyKey
         let scoped = payload(families, keys: [requested])
         XCTAssertEqual(scoped.state.consoleSnapshot.families.count, 300)
-        XCTAssertNotNil(scoped.state.detailViewModels[requested])
+        XCTAssertNotNil(scoped.state.consoleSnapshot.detailPanels[requested])
         XCTAssertLessThanOrEqual(scoped.state.consoleSnapshot.detailPanels.count, 30)
         let full = payload(families, keys: nil)
         XCTAssertEqual(full.state.consoleSnapshot.families, scoped.state.consoleSnapshot.families)
@@ -34,13 +34,13 @@ final class PresentationPipelineTests: XCTestCase {
         let next = payload(families, keys: [families[1].familyKey], previous: first.state.consoleSnapshot)
         XCTAssertEqual(first.state.consoleSnapshot.contentRevision, next.state.consoleSnapshot.contentRevision)
         XCTAssertEqual(next.delta.mode, .contentChanged)
-        XCTAssertNotNil(next.state.detailViewModels[families[1].familyKey])
+        XCTAssertNotNil(next.state.consoleSnapshot.detailPanels[families[1].familyKey])
     }
 
     func testRepeatedSignatureDoesNotExpandDetailDemandToAllInstances() {
         let families = (0..<200).map { family($0, sharedSignature: true) }
         let result = payload(families, keys: [families[0].signature.id, families[199].familyKey])
-        XCTAssertNotNil(result.state.detailViewModels[families[199].familyKey])
+        XCTAssertNotNil(result.state.consoleSnapshot.detailPanels[families[199].familyKey])
         XCTAssertLessThanOrEqual(result.state.consoleSnapshot.detailPanels.count, 4)
         XCTAssertEqual(result.state.consoleSnapshot.families.count, 200)
     }

@@ -30,7 +30,8 @@ final class PerformanceAuditTests: XCTestCase {
                 let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
                 XCTAssertEqual(result.families.count, count)
                 XCTAssertEqual(result.payload.state.consoleSnapshot.families.count, count)
-                XCTAssertNotNil(result.payload.state.detailViewModels[ProcessSignature.from(root: processes[0]).id])
+                let focused = try XCTUnwrap(result.families.first { $0.root.pid == processes[0].pid })
+                XCTAssertNotNil(result.payload.state.consoleSnapshot.detailPanels[focused.familyKey])
                 if iteration >= 2 {
                     timings.append(elapsed)
                     detailCounts.append(result.payload.state.consoleSnapshot.detailPanels.count)

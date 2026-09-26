@@ -114,11 +114,6 @@ public actor RadarStore {
         )
     }
 
-    public func persist(model: RadarModel, settings: ThresholdSettings) throws {
-        pendingModels.append((model, settings))
-        try flush()
-    }
-
     public func enqueue(model: RadarModel, settings: ThresholdSettings, now: Date = Date()) throws -> StoreHealth {
         pendingModels.append((model, settings))
         if shouldFlush(now: now, settings: settings) {
@@ -190,11 +185,6 @@ public actor RadarStore {
 
     public func recentIncidents(limit: Int = 80) throws -> [RadarIncident] {
         try incidentLedger.recent(limit: limit)
-    }
-
-    public func recentIncidents(filter: RadarIncidentFilter, limit: Int = 80) throws -> [RadarIncident] {
-        let incidents = try recentIncidents(limit: max(limit * 2, limit))
-        return IncidentQuery(filter: filter, limit: limit).apply(to: incidents)
     }
 
     public func recentForecasts(limit: Int = 80) throws -> [ForecastStoreSnapshot] {

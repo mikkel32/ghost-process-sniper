@@ -12,9 +12,7 @@ public final class ProcessMonitor {
     public private(set) var incidents: [RadarIncident] = []
     public private(set) var rules: [RadarRule] = []
     public private(set) var model: RadarModel = .empty
-    public private(set) var viewModel: RadarViewModel = .empty
     public private(set) var triageFamilies: [FamilyTriageViewModel] = []
-    public private(set) var detailViewModels: [String: FamilyDetailViewModel] = [:]
     public private(set) var consoleSnapshot: RadarConsoleSnapshot = .empty
     public private(set) var engineDiagnostics: EngineDiagnosticsViewModel = .empty
     public private(set) var engineStatus: EngineStatusSnapshot = .empty
@@ -442,16 +440,6 @@ public final class ProcessMonitor {
         families.first { $0.familyKey == signatureID || $0.signature.id == signatureID }
     }
 
-    public func detailViewModel(signatureID: String) -> FamilyDetailViewModel? {
-        if let detail = detailViewModels[signatureID] {
-            return detail
-        }
-        guard let family = family(signatureID: signatureID) else {
-            return nil
-        }
-        return detailViewModels[family.familyKey] ?? FamilyDetailViewModel(family: family)
-    }
-
     public func snooze(signatureID: String, minutes: TimeInterval = 60) async {
         guard let family = family(signatureID: signatureID) else {
             return
@@ -564,17 +552,7 @@ public final class ProcessMonitor {
             rules = state.rules
             incidents = state.incidents
             triageFamilies = state.triageFamilies
-            detailViewModels = state.detailViewModels
             consoleSnapshot = finalConsoleSnapshot
-        }
-
-        if contentChanged {
-            viewModel = RadarViewModel(
-                summary: state.summary,
-                families: state.viewModel.families,
-                performance: performance,
-                generatedAt: payload.generatedAt
-            )
         }
         performanceMetrics = performance
         state = ProcessMonitorPublishedState(
@@ -584,9 +562,7 @@ public final class ProcessMonitor {
             incidents: incidents,
             rules: rules,
             model: model,
-            viewModel: viewModel,
             triageFamilies: triageFamilies,
-            detailViewModels: detailViewModels,
             consoleSnapshot: consoleSnapshot,
             engineDiagnostics: engineDiagnostics,
             engineStatus: engineStatus,

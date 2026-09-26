@@ -5,9 +5,7 @@ import SwiftUI
 
 struct FamilyDetailConsoleView: View {
     let family: ProcessFamily
-    let detail: FamilyDetailViewModel?
-    let panel: FamilyDetailPanelModel?
-    let compact: CompactFamilyDetailModel?
+    let panel: FamilyDetailPanelModel
     let onSnooze: (TimeInterval) -> Void
     let onIgnore: () -> Void
     let onKill: () -> Void
@@ -18,21 +16,13 @@ struct FamilyDetailConsoleView: View {
 
     @State private var selectedTab: FamilyDetailTab = .overview
 
-    private var model: FamilyDetailViewModel {
-        detail ?? FamilyDetailViewModel(family: family)
-    }
-
     private var panelModel: FamilyDetailPanelModel {
-        panel ?? FamilyDetailPanelModel(family: family, previous: nil)
-    }
-
-    private var compactModel: CompactFamilyDetailModel {
-        compact ?? CompactFamilyDetailModel(panel: panelModel)
+        panel
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            FamilyDetailHeader(compact: compactModel, panel: panelModel, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
+            FamilyDetailHeader(panel: panelModel, onSnooze: onSnooze, onIgnore: onIgnore, onKill: onKill)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
 
@@ -129,11 +119,14 @@ private enum FamilyDetailTab: String, CaseIterable, Identifiable {
 }
 
 private struct FamilyDetailHeader: View {
-    let compact: CompactFamilyDetailModel
     let panel: FamilyDetailPanelModel
     let onSnooze: (TimeInterval) -> Void
     let onIgnore: () -> Void
     let onKill: () -> Void
+
+    private var pidText: String {
+        "PID \(panel.rootPID)"
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -141,10 +134,10 @@ private struct FamilyDetailHeader: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
-                    Text(compact.title)
+                    Text(panel.title)
                         .font(.title2.weight(.semibold))
                         .lineLimit(1)
-                    Text(compact.kindText)
+                    Text(panel.kind.label)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
@@ -152,16 +145,16 @@ private struct FamilyDetailHeader: View {
                         .background(.quaternary, in: Capsule())
                 }
 
-                Text(compact.commandLine)
+                Text(panel.commandLine)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
                 HStack(spacing: 8) {
-                    RadarStatusPill(title: compact.statusText, level: compact.level)
+                    RadarStatusPill(title: panel.statusText, level: panel.level)
                     Text(panel.assessment.cause)
-                    Text(compact.pidText)
+                    Text(pidText)
                 }
                 .font(.caption.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -187,19 +180,19 @@ private struct FamilyDetailHeader: View {
 
                     Button {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(compact.commandLine, forType: .string)
+                        NSPasteboard.general.setString(panel.commandLine, forType: .string)
                     } label: {
                         Label("Copy Command Line", systemImage: "terminal")
                     }
                     Button {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(compact.pidText, forType: .string)
+                        NSPasteboard.general.setString(pidText, forType: .string)
                     } label: {
                         Label("Copy PIDs", systemImage: "number")
                     }
                     Button {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(compact.title, forType: .string)
+                        NSPasteboard.general.setString(panel.title, forType: .string)
                     } label: {
                         Label("Copy Name", systemImage: "textformat")
                     }
@@ -708,11 +701,10 @@ private struct MetricCardGrid: View {
 
 struct FamilyInspectorView: View {
     let family: ProcessFamily
-    let detail: FamilyDetailViewModel?
-    let panel: FamilyDetailPanelModel?
+    let panel: FamilyDetailPanelModel
 
     private var panelModel: FamilyDetailPanelModel {
-        panel ?? FamilyDetailPanelModel(family: family, previous: nil)
+        panel
     }
 
     var body: some View {

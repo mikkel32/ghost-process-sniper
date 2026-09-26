@@ -1,9 +1,5 @@
 import Foundation
 
-public enum ConsoleLayoutMode: String, Codable, CaseIterable, Sendable {
-    case compact
-}
-
 public struct EngineStatusSnapshot: Equatable, Sendable {
     public let statusLine: String
     public let refreshText: String
@@ -180,48 +176,6 @@ public struct OverviewCommandCenterModel: Equatable, Sendable {
     }
 }
 
-public struct CompactFamilyDetailModel: Identifiable, Equatable, Sendable {
-    public var id: String { familyKey }
-
-    public let familyKey: String
-    public let title: String
-    public let subtitle: String
-    public let commandLine: String
-    public let kindText: String
-    public let statusText: String
-    public let scoreText: String
-    public let heatText: String
-    public let heatValue: Double
-    public let pidText: String
-    public let forecastText: String
-    public let actionText: String
-    public let level: GhostLevel
-    public let quickCards: [FamilyMetricCard]
-    public let baselineCards: [FamilyMetricCard]
-    public let scoreComponents: [GhostScoreComponent]
-    public let trendPoints: [Double]
-
-    public init(panel: FamilyDetailPanelModel) {
-        familyKey = panel.familyKey
-        title = panel.title
-        subtitle = "\(panel.kind.label) - \(panel.statusText)"
-        commandLine = panel.commandLine
-        kindText = panel.kind.label
-        statusText = panel.statusText
-        scoreText = panel.scoreText
-        heatText = panel.heatText
-        heatValue = panel.heatValue
-        pidText = "PID \(panel.rootPID)"
-        forecastText = "\(panel.forecastStateText) - \(panel.forecastETA) - \(panel.forecastConfidenceText)"
-        actionText = "\(panel.forecastRecommendationTitle): \(panel.forecastRecommendationDetail)"
-        level = panel.level
-        quickCards = Array(panel.summaryCards.prefix(5))
-        baselineCards = Array(panel.baselineCards.prefix(4))
-        scoreComponents = Array(panel.scoreComponents.prefix(6))
-        trendPoints = panel.trendPoints
-    }
-}
-
 public struct RadarIntelligenceBrief: Equatable, Sendable {
     public let eyebrow: String
     public let title: String
@@ -353,46 +307,38 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
 }
 
 public struct CompactConsoleSnapshot: Equatable, Sendable {
-    public let layoutMode: ConsoleLayoutMode
     public let commandCenter: OverviewCommandCenterModel
     public let engineStatus: EngineStatusSnapshot
     public let allRows: [CompactSidebarRowModel]
     public let topRiskRows: [CompactSidebarRowModel]
     public let warmingRows: [CompactSidebarRowModel]
-    public let detailModels: [String: CompactFamilyDetailModel]
     public let duplicateCount: Int
     public let intelligenceBrief: RadarIntelligenceBrief
 
     public static let empty = CompactConsoleSnapshot(
-        layoutMode: .compact,
         commandCenter: .empty,
         engineStatus: .empty,
         allRows: [],
         topRiskRows: [],
         warmingRows: [],
-        detailModels: [:],
         duplicateCount: 0,
         intelligenceBrief: .empty
     )
 
     public init(
-        layoutMode: ConsoleLayoutMode,
         commandCenter: OverviewCommandCenterModel,
         engineStatus: EngineStatusSnapshot,
         allRows: [CompactSidebarRowModel],
         topRiskRows: [CompactSidebarRowModel],
         warmingRows: [CompactSidebarRowModel],
-        detailModels: [String: CompactFamilyDetailModel],
         duplicateCount: Int = 0,
         intelligenceBrief: RadarIntelligenceBrief = .empty
     ) {
-        self.layoutMode = layoutMode
         self.commandCenter = commandCenter
         self.engineStatus = engineStatus
         self.allRows = allRows
         self.topRiskRows = topRiskRows
         self.warmingRows = warmingRows
-        self.detailModels = detailModels
         self.duplicateCount = duplicateCount
         self.intelligenceBrief = intelligenceBrief
     }
@@ -408,11 +354,6 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
         let priorities = priorityRows(from: rows)
         let topRiskRows = priorities.risk
         let warmingRows = priorities.warming
-        let detailModels = Dictionary(
-            uniqueKeysWithValues: detailPanels.map { key, panel in
-                (key, CompactFamilyDetailModel(panel: panel))
-            }
-        )
         let intelligenceBrief = RadarIntelligenceBrief.build(
             summary: summary,
             topRiskRows: topRiskRows,
@@ -420,13 +361,11 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
             detailPanels: detailPanels
         )
         return CompactConsoleSnapshot(
-            layoutMode: .compact,
             commandCenter: OverviewCommandCenterModel(summary: summary, engineStatus: engineStatus, duplicateCount: duplicateCount),
             engineStatus: engineStatus,
             allRows: rows,
             topRiskRows: Array(topRiskRows.prefix(8)),
             warmingRows: Array(warmingRows.prefix(6)),
-            detailModels: detailModels,
             duplicateCount: duplicateCount,
             intelligenceBrief: intelligenceBrief
         )
@@ -456,13 +395,11 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
 
     public func updatingEngineStatus(_ engineStatus: EngineStatusSnapshot, summary: RadarSummary) -> CompactConsoleSnapshot {
         CompactConsoleSnapshot(
-            layoutMode: layoutMode,
             commandCenter: OverviewCommandCenterModel(summary: summary, engineStatus: engineStatus, duplicateCount: duplicateCount),
             engineStatus: engineStatus,
             allRows: allRows,
             topRiskRows: topRiskRows,
             warmingRows: warmingRows,
-            detailModels: detailModels,
             duplicateCount: duplicateCount,
             intelligenceBrief: intelligenceBrief
         )

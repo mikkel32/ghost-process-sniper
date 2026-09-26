@@ -8,10 +8,7 @@ public enum ConsoleSidebarSectionKind: String, Codable, Sendable {
 public struct RadarConsoleSnapshot: Equatable, Sendable {
     public let summary: RadarSummary
     public let families: [FamilyTriageViewModel]
-    public let topRiskFamilies: [FamilyTriageViewModel]
-    public let warmingFamilies: [FamilyTriageViewModel]
     public let detailPanels: [String: FamilyDetailPanelModel]
-    public let incidentRows: [IncidentRowViewModel]
     public let ruleRows: [RuleRowViewModel]
     public let rulePreviews: [RuleMatchPreview]
     public let duplicateClusters: [DuplicateProcessCluster]
@@ -24,10 +21,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
     public static let empty = RadarConsoleSnapshot(
         summary: .empty,
         families: [],
-        topRiskFamilies: [],
-        warmingFamilies: [],
         detailPanels: [:],
-        incidentRows: [],
         ruleRows: [],
         rulePreviews: [],
         duplicateClusters: [],
@@ -41,10 +35,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
     public init(
         summary: RadarSummary,
         families: [FamilyTriageViewModel],
-        topRiskFamilies: [FamilyTriageViewModel],
-        warmingFamilies: [FamilyTriageViewModel],
         detailPanels: [String: FamilyDetailPanelModel],
-        incidentRows: [IncidentRowViewModel],
         ruleRows: [RuleRowViewModel],
         rulePreviews: [RuleMatchPreview],
         duplicateClusters: [DuplicateProcessCluster] = [],
@@ -56,10 +47,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
     ) {
         self.summary = summary
         self.families = families
-        self.topRiskFamilies = topRiskFamilies
-        self.warmingFamilies = warmingFamilies
         self.detailPanels = detailPanels
-        self.incidentRows = incidentRows
         self.ruleRows = ruleRows
         self.rulePreviews = rulePreviews
         self.duplicateClusters = duplicateClusters
@@ -158,10 +146,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
         return RadarConsoleSnapshot(
             summary: summary,
             families: triage,
-            topRiskFamilies: Array(triage.prefix(8)),
-            warmingFamilies: Array(triage.filter { $0.forecastState >= .warming && $0.forecastState < .leaking }.prefix(6)),
             detailPanels: detailPanels,
-            incidentRows: incidents.map(IncidentRowViewModel.init(incident:)),
             ruleRows: rules.map { RuleRowViewModel(rule: $0, matchCount: matchCounts[$0.id, default: 0]) },
             rulePreviews: previews,
             duplicateClusters: duplicateClusters,
@@ -193,10 +178,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
         return RadarConsoleSnapshot(
             summary: summary,
             families: families,
-            topRiskFamilies: topRiskFamilies,
-            warmingFamilies: warmingFamilies,
             detailPanels: detailPanels,
-            incidentRows: incidentRows,
             ruleRows: ruleRows,
             rulePreviews: rulePreviews,
             duplicateClusters: duplicateClusters,

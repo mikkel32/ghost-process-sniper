@@ -38,19 +38,13 @@ final class RadarConsoleSession {
         commands.selectedFamily(selection: state.focusedSelection, families: monitor.families)
     }
 
-    var selectedDetail: FamilyDetailViewModel? {
-        guard let familyKey = state.focusedSelection.familyKey else {
-            return nil
-        }
-        return monitor.detailViewModel(signatureID: familyKey)
-    }
-
     var selectedPanel: FamilyDetailPanelModel? {
         state.focusedSelection.familyKey.flatMap { monitor.consoleSnapshot.detailPanel(for: $0) }
     }
 
-    var selectedCompactDetail: CompactFamilyDetailModel? {
-        selectedPanel.map(CompactFamilyDetailModel.init(panel:))
+    /// Resolve once per body: the fallback build is not free for large trees.
+    func detailPanel(for family: ProcessFamily) -> FamilyDetailPanelModel {
+        monitor.consoleSnapshot.detailPanel(for: family.familyKey) ?? FamilyDetailPanelModel(family: family, previous: nil)
     }
 
     var familyItems: [FamilyTriageViewModel] {
@@ -334,14 +328,14 @@ final class RadarConsoleSession {
     }
 
     func snoozeSelected(minutes: TimeInterval = 60) {
-        guard let signatureID = selectedFamily?.signature.id ?? state.focusedSelection.signatureID else {
+        guard let signatureID = selectedFamily?.signature.id ?? state.focusedSelection.familyKey else {
             return
         }
         snooze(familyKey: signatureID, name: selectedFamily?.displayName, minutes: minutes)
     }
 
     func ignoreSelected() {
-        guard let signatureID = selectedFamily?.signature.id ?? state.focusedSelection.signatureID else {
+        guard let signatureID = selectedFamily?.signature.id ?? state.focusedSelection.familyKey else {
             return
         }
         ignore(familyKey: signatureID, name: selectedFamily?.displayName)

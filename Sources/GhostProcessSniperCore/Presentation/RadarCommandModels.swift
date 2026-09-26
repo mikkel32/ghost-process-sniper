@@ -9,10 +9,6 @@ public enum RadarFocusedSelection: Hashable, Sendable {
     case rules
     case engine
 
-    public var signatureID: String? {
-        familyKey
-    }
-
     public var familyKey: String? {
         if case let .family(familyKey) = self {
             return familyKey
@@ -118,10 +114,6 @@ public struct IncidentQuery: Equatable, Sendable {
         self.filter = filter
         self.sort = sort
         self.limit = limit
-    }
-
-    public func matches(_ incident: RadarIncident) -> Bool {
-        matches(incident, query: ProcessSearchQuery(text))
     }
 
     private func matches(_ incident: RadarIncident, query: ProcessSearchQuery) -> Bool {
