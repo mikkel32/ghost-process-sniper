@@ -54,7 +54,7 @@ struct ThermalContributorDetailView: View {
                         }
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Why this app appears").font(.headline)
-                            Text("\(contributor.processCount) sampled \(contributor.processCount == 1 ? "process" : "processes") belong to this app or service.")
+                            Text(contributor.workloadExplanation)
                                 .font(.callout).foregroundStyle(.secondary)
                             ViewThatFits(in: .horizontal) {
                                 HStack(spacing: 8) { metricTiles(at: now) }

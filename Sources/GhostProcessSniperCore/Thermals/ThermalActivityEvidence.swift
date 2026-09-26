@@ -77,12 +77,38 @@ public extension ThermalContributor {
     }
 
     func suggestedAction(at now: Date) -> String {
+        if let knownSource { return knownSource.advice }
         if isSystemProcess {
             return "This is a macOS service. Review related app activity first; this panel does not recommend stopping system services."
+        }
+        if kind == .job {
+            let origin = hostAppName.map { " in \($0)" } ?? ""
+            return "This is a command-line job\(origin) with \(processCount) sampled \(processCount == 1 ? "process" : "processes"). Check whether it is work you expect; let it finish, or stop it where it was started if it can wait, then compare the next readings."
         }
         if let gpu = gpuActivityPercent(at: now), gpu > (cpuCapacityPercent(at: now) ?? 0), gpu >= 5 {
             return "Check for rendering, video, games, or other graphics work in this app. Pause an optional task and compare the next readings."
         }
         return "Check whether this app is doing work you expect. Pause an optional task or close an unused window, then compare the next readings."
+    }
+
+    /// A short line describing what the row groups.
+    var workloadSummary: String {
+        if let knownSource {
+            let parts = knownSource.label.components(separatedBy: " — ")
+            return parts.count > 1 ? parts[1] : "macOS background work"
+        }
+        if isSystemProcess { return "macOS service" }
+        let count = "\(processCount) \(processCount == 1 ? "process" : "processes")"
+        guard kind == .job else { return count }
+        return hostAppName.map { "Command-line job in \($0) · \(count)" } ?? "Command-line job · \(count)"
+    }
+
+    /// Why these processes were grouped together.
+    var workloadExplanation: String {
+        if let knownSource { return knownSource.cause }
+        let count = "\(processCount) sampled \(processCount == 1 ? "process" : "processes")"
+        guard kind == .job else { return "\(count) \(processCount == 1 ? "belongs" : "belong") to this app or service." }
+        let origin = hostAppName.map { " started in \($0)" } ?? ""
+        return "\(count) \(processCount == 1 ? "belongs" : "belong") to this command-line job\(origin), grouped under the process that started it."
     }
 }
