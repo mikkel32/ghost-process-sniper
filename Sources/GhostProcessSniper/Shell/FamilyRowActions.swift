@@ -26,7 +26,8 @@ private struct FamilyRowActionsModifier: ViewModifier {
     let session: RadarConsoleSession
 
     func body(content: Content) -> some View {
-        content.contextMenu {
+        let quickStop = session.quickStops.actions[row.id]
+        return content.contextMenu {
             Button {
                 session.focus(.family(row.id))
             } label: {
@@ -50,10 +51,15 @@ private struct FamilyRowActionsModifier: ViewModifier {
             Divider()
 
             Button(role: .destructive) {
-                session.prepareKill(familyKey: row.id)
+                if let quickStop, quickStop.isAvailable {
+                    session.quickStop(quickStop)
+                } else {
+                    session.prepareKill(familyKey: row.id, name: row.title)
+                }
             } label: {
-                Label("Kill Preview…", systemImage: "scope")
+                Label(quickStop?.title ?? "Stop…", systemImage: quickStop?.systemImage ?? "scope")
             }
+            .disabled(quickStop?.isAvailable == false)
 
             Divider()
 

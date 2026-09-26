@@ -18,6 +18,15 @@ struct RadarConsoleToolbar: ToolbarContent {
         session.state.focusedSelection.familyKey != nil
     }
 
+    private func stopHelp(_ action: QuickStopAction?) -> String {
+        guard session.canStopSelection else { return "No live processes owned by you to target" }
+        guard let action else {
+            return "Preview stopping the selected family — nothing runs without confirmation (⇧⌘⌫)"
+        }
+        let detail = action.detail.map { " \($0)." } ?? ""
+        return "\(action.title) opens a preview first; nothing runs without confirmation (⇧⌘⌫).\(detail)"
+    }
+
     var body: some ToolbarContent {
         ToolbarItemGroup {
             Button {
@@ -81,17 +90,16 @@ struct RadarConsoleToolbar: ToolbarContent {
                 .help("Toggle the inspector panel (⌥⌘I)")
 
                 // ⇧⌘⌫ comes from the Radar menu's Stop… item.
+                let quickStop = session.selectedQuickStop
                 Button(role: .destructive) {
-                    session.prepareKillSelected()
+                    session.stopSelected()
                 } label: {
-                    Label("Stop…", systemImage: "scope")
+                    Label(quickStop?.shortTitle ?? "Stop…", systemImage: quickStop?.systemImage ?? "scope")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
-                .disabled(!session.canStopSelection)
-                .help(session.canStopSelection
-                    ? "Preview stopping the selected family — nothing runs without confirmation (⇧⌘⌫)"
-                    : "No live processes owned by you to target")
+                .disabled(!session.canStopSelection || session.preparingStop != nil)
+                .help(stopHelp(quickStop))
             }
 
             Menu {

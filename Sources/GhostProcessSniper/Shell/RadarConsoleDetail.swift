@@ -33,8 +33,10 @@ struct RadarConsoleDetail: View {
                     } description: {
                         Text("This family has left the current scan. Browse running processes or check its history in Incidents.")
                     } actions: {
-                        Button("Browse Processes") { session.browseFamilies() }
+                        Button("Back") { session.goBackOrOverview() }
                             .buttonStyle(.borderedProminent)
+                            .help("Back (⌘[)")
+                        Button("Browse Processes") { session.browseFamilies() }
                         Button("View Incidents") { session.focus(.incidents) }
                     }
                 }

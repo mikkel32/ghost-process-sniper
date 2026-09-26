@@ -8,6 +8,7 @@ import Observation
 final class RadarConsoleSession {
     let monitor: ProcessMonitor
     let killer: ProcessKiller
+    let quickStops: QuickStopAdvisor
     let openSettings: () -> Void
     let queries = ConsoleQueryStore()
     private(set) var navigationSubtitle = "Monitoring"
@@ -25,6 +26,14 @@ final class RadarConsoleSession {
     private(set) var refreshCostHistory: [RefreshCostSample] = []
     private(set) var memoryPulse: [MemoryPulseSample] = []
     private(set) var thermalHistory = ThermalTraceHistory()
+    /// Set from the moment a stop is requested until its preview is ready.
+    var preparingStop: PreparingStop?
+    /// Changes only when the thermal panel should move on the Overview.
+    var overviewThermalBand: OverviewThermalBand = .normal
+    var history = NavigationHistory()
+    @ObservationIgnored var thermalBandTracker = OverviewThermalBandTracker()
+    /// The last confirmed stop, so closing its sheet can return the user.
+    @ObservationIgnored var lastStopResult: (pendingID: UUID, report: KillReport)?
 
     @ObservationIgnored private let commands = RadarCommandCoordinator()
     @ObservationIgnored private var presentationObserverID: UUID?
@@ -36,12 +45,19 @@ final class RadarConsoleSession {
     @ObservationIgnored private var familyIndex: [String: Int] = [:]
     @ObservationIgnored private var familyIndexRevision: UInt64 = .max
 
-    init(monitor: ProcessMonitor, killer: ProcessKiller, openSettings: @escaping () -> Void = {}) {
+    init(
+        monitor: ProcessMonitor,
+        killer: ProcessKiller,
+        quickStops: QuickStopAdvisor,
+        openSettings: @escaping () -> Void = {}
+    ) {
         self.monitor = monitor
         self.killer = killer
+        self.quickStops = quickStops
         self.openSettings = openSettings
         state.familySort = ConsolePreferences.familySort
         state.familyFilter = ConsolePreferences.familyFilter
+        history.visit(state.focusedSelection)
     }
 
     var selectedFamily: ProcessFamily? {
@@ -228,11 +244,12 @@ final class RadarConsoleSession {
         let title = monitor.consoleSnapshot.compact.commandCenter.statusText
         if navigationSubtitle != title { navigationSubtitle = title }
         recordEngineSample()
+        updateOverviewThermalBand()
         scheduleQueryUpdate()
         updateCanStopSelection()
     }
 
-    private func updateCanStopSelection() {
+    func updateCanStopSelection() {
         canStopSelection = selectedFamily.map { !$0.ownedIdentities.isEmpty } ?? false
     }
 
@@ -283,12 +300,14 @@ final class RadarConsoleSession {
             orderedFamilyKeys: compactFamilyItems.map(\.familyKey),
             direction: direction
         )
+        recordVisit(state.focusedSelection)
         updateFocusedFamilies()
         updateCanStopSelection()
     }
 
     func focus(_ selection: RadarFocusedSelection) {
         state.focusedSelection = selection
+        recordVisit(selection)
         updateFocusedFamilies()
         updateCanStopSelection()
     }
@@ -425,11 +444,13 @@ final class RadarConsoleSession {
         prepareKill(family)
     }
 
-    func prepareKill(familyKey: String) {
+    /// - Parameter name: shown when the family exited before the stop began.
+    func prepareKill(familyKey: String, name: String? = nil, redirectedFrom: String? = nil) {
         guard let family = self.family(forKey: familyKey) else {
+            showToast("\(name ?? "That process") is no longer running", systemImage: "info.circle")
             return
         }
-        prepareKill(family)
+        prepareKill(family, redirectedFrom: redirectedFrom)
     }
 
     static func durationText(minutes: TimeInterval) -> String {
@@ -440,13 +461,16 @@ final class RadarConsoleSession {
         return hours == hours.rounded() ? "\(Int(hours)) h" : String(format: "%.1f h", hours)
     }
 
-    private(set) var isPreparingIntervention = false
+    var isPreparingIntervention: Bool { preparingStop != nil }
 
-    func prepareKill(_ family: ProcessFamily, member: ProcessIdentity? = nil) {
-        guard !isPreparingIntervention, pendingKill == nil else { return }
-        isPreparingIntervention = true
+    func prepareKill(_ family: ProcessFamily, member: ProcessIdentity? = nil, redirectedFrom: String? = nil) {
+        guard preparingStop == nil, pendingKill == nil else { return }
+        let stop = PreparingStop(name: family.displayName)
+        preparingStop = stop
+        let returnTo = returnSelection(afterStopping: family)
+        expirePreparation(stop)
         Task {
-            defer { isPreparingIntervention = false }
+            defer { if preparingStop?.id == stop.id { preparingStop = nil } }
             var plan = await monitor.killPlan(for: family)
             if let member {
                 guard family.ownedIdentities.contains(member),
@@ -459,13 +483,17 @@ final class RadarConsoleSession {
             }
             let delay = monitor.settings.forceKillDelay
             let preview = await killer.preview(plan: plan, forceKillDelay: delay)
+            // After the timeout the user was told to try again; a late sheet would surprise them.
+            guard preparingStop?.id == stop.id else { return }
             let expiresAt = Date().addingTimeInterval(60)
             pendingKill = PendingKill(
                 family: family,
                 preview: preview,
                 plan: plan.binding(to: preview.targetIdentities, expiresAt: expiresAt, strategy: preview.strategyRecommendation.strategy),
                 forceKillDelay: delay,
-                expiresAt: expiresAt
+                expiresAt: expiresAt,
+                redirectedFrom: redirectedFrom,
+                returnSelection: returnTo
             )
         }
     }
@@ -476,7 +504,7 @@ final class RadarConsoleSession {
         control: KillOperationControl? = nil,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
     ) async -> KillReport {
-        await monitor.confirmKill(
+        let report = await monitor.confirmKill(
             family: pending.family,
             killer: killer,
             approvedPlan: pending.plan,
@@ -485,6 +513,8 @@ final class RadarConsoleSession {
             control: control,
             eventSink: eventSink
         )
+        lastStopResult = (pending.id, report)
+        return report
     }
 }
 
@@ -526,6 +556,15 @@ struct PendingKill: Identifiable {
     let plan: KillPlan
     let forceKillDelay: TimeInterval
     let expiresAt: Date
+    /// The family the user asked to stop when the target is its supervisor.
+    var redirectedFrom: String?
+    /// Where to take the user after a clean stop: where they came from.
+    var returnSelection: RadarFocusedSelection?
+}
+
+struct PreparingStop: Equatable {
+    let id = UUID()
+    let name: String
 }
 
 struct RadarToast: Identifiable, Equatable {

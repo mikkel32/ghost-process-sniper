@@ -39,6 +39,8 @@ struct RadarConsoleView: View {
                 if let toast = session.toast {
                     RadarToastView(toast: toast)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    PreparingStopBanner(session: session)
                 }
             }
             .animation(reduceMotion ? nil : .spring(duration: 0.32), value: session.toast)
@@ -69,6 +71,8 @@ struct RadarConsoleView: View {
             }
         }
         .onChange(of: session.state.focusedSelection) { _, selection in
+            // Sidebar and search moves land in Back/Forward too; a repeat is ignored.
+            session.recordVisit(selection)
             Task { @MainActor in
                 await Task.yield()
                 guard session.state.focusedSelection == selection else {
@@ -144,22 +148,27 @@ struct RadarConsoleView: View {
     var body: some View {
         persistedConsole
         .sheet(item: $session.pendingKill) { pending in
-            KillPreviewSheet(
-                family: pending.family,
-                preview: pending.preview,
-                approvalExpiresAt: pending.expiresAt,
-                confirm: { skipForce, control, eventSink in
-                    await session.confirmKill(
-                        pending,
-                        skipForce: skipForce,
-                        control: control,
-                        eventSink: eventSink
-                    )
-                },
-                close: {
-                    session.pendingKill = nil
+            VStack(spacing: 0) {
+                if let redirectedFrom = pending.redirectedFrom {
+                    StopRedirectHeader(target: pending.family.displayName, redirectedFrom: redirectedFrom)
                 }
-            )
+                KillPreviewSheet(
+                    family: pending.family,
+                    preview: pending.preview,
+                    approvalExpiresAt: pending.expiresAt,
+                    confirm: { skipForce, control, eventSink in
+                        await session.confirmKill(
+                            pending,
+                            skipForce: skipForce,
+                            control: control,
+                            eventSink: eventSink
+                        )
+                    },
+                    close: {
+                        session.closeStopSheet()
+                    }
+                )
+            }
         }
         .sheet(isPresented: $session.showQuickGuide) {
             RadarQuickGuideView()
@@ -211,6 +220,54 @@ struct RadarConsoleView: View {
             true
         case .incidents, .rules, .engine:
             false
+        }
+    }
+}
+
+/// Says why the preview targets another family than the one clicked.
+private struct StopRedirectHeader: View {
+    let target: String
+    let redirectedFrom: String
+
+    var body: some View {
+        Label("Stopping \(target), which keeps restarting \(redirectedFrom)", systemImage: "arrow.triangle.2.circlepath")
+            .font(.callout.weight(.medium))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(Color.orange.opacity(0.12))
+    }
+}
+
+/// Appears only when a stop preview takes 2 s or more; quicker previews
+/// open the sheet with no flash of progress in between.
+private struct PreparingStopBanner: View {
+    let session: RadarConsoleSession
+
+    @State private var visibleStop: PreparingStop?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            if let stop = visibleStop {
+                RadarWaitLabel("Checking what \(stop.name) is running…", orbDelay: .zero)
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(RadarTheme.elevatedPanel, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.16), lineWidth: 0.75))
+                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+                    .padding(.bottom, 16)
+                    .transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: visibleStop)
+        .task(id: session.preparingStop?.id) {
+            visibleStop = nil
+            guard let stop = session.preparingStop else { return }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, session.preparingStop?.id == stop.id else { return }
+            visibleStop = stop
         }
     }
 }

@@ -11,6 +11,8 @@ struct PopoverView: View {
     let notifier: UserNotificationRadarNotifier
     let onOpenConsole: () -> Void
     let onOpenFamily: (String) -> Void
+    let quickStops: QuickStopAdvisor
+    let onStop: (QuickStopAction) -> Void
     let onOpenSettings: () -> Void
     let onQuit: () -> Void
     var refreshesOnAppear = true
@@ -19,7 +21,7 @@ struct PopoverView: View {
         VStack(spacing: 12) {
             PopoverVerdictBar(monitor: monitor)
             PopoverStoreWarning(monitor: monitor)
-            PopoverCulprits(monitor: monitor, onOpenFamily: onOpenFamily)
+            PopoverCulprits(monitor: monitor, quickStops: quickStops, onOpenFamily: onOpenFamily, onStop: onStop)
             PopoverVitals(monitor: monitor)
             PopoverFooter(
                 notifier: notifier,
@@ -138,11 +140,14 @@ private struct PopoverStoreWarningRow: View {
     }
 }
 
-/// Reads only the content-gated console snapshot, so rows and their context
-/// menus rebuild when the findings change, not on every sample.
+/// Reads only the content-gated console snapshot and Quick Stop actions, so
+/// rows and their context menus rebuild when the findings change, not on
+/// every sample.
 private struct PopoverCulprits: View {
     let monitor: ProcessMonitor
+    let quickStops: QuickStopAdvisor
     let onOpenFamily: (String) -> Void
+    let onStop: (QuickStopAction) -> Void
 
     var body: some View {
         let compact = monitor.consoleSnapshot.compact
@@ -150,14 +155,15 @@ private struct PopoverCulprits: View {
         let warnings = Array(compact.warmingRows.prefix(2))
         VStack(alignment: .leading, spacing: 6) {
             if !risk.isEmpty {
-                rows(risk)
+                rows(risk, showsStopButton: true)
             } else if !warnings.isEmpty {
                 Text("EARLY WARNINGS")
                     .font(.caption2.weight(.bold))
                     .tracking(0.6)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 5)
-                rows(warnings)
+                // Early warnings are not stop-worthy yet: the action lives in the menu.
+                rows(warnings, showsStopButton: false)
             } else {
                 PopoverQuietState(familyCount: compact.allRows.count)
             }
@@ -167,15 +173,23 @@ private struct PopoverCulprits: View {
         .radarSurface(tint: RadarTheme.accent(for: compact.commandCenter.level), cornerRadius: 14)
     }
 
-    private func rows(_ rows: [CompactSidebarRowModel]) -> some View {
+    private func rows(_ rows: [CompactSidebarRowModel], showsStopButton: Bool) -> some View {
         VStack(spacing: 4) {
             ForEach(rows) { row in
-                Button {
-                    onOpenFamily(row.id)
-                } label: {
-                    PopoverCulpritRow(row: row)
+                let quickStop = quickStops.actions[row.id].flatMap { $0.isAvailable ? $0 : nil }
+                HStack(spacing: 6) {
+                    Button {
+                        onOpenFamily(row.id)
+                    } label: {
+                        PopoverCulpritRow(row: row)
+                    }
+                    .buttonStyle(.plain)
+                    if showsStopButton, let quickStop {
+                        QuickStopButton(action: quickStop) { onStop(quickStop) }
+                            .labelStyle(.titleOnly)
+                            .controlSize(.small)
+                    }
                 }
-                .buttonStyle(.plain)
                 .contextMenu {
                     Button {
                         onOpenFamily(row.id)
@@ -194,6 +208,14 @@ private struct PopoverCulprits: View {
                     } label: {
                         Label("Ignore Family", systemImage: "eye.slash")
                     }
+                    if let quickStop {
+                        Divider()
+                        Button(role: .destructive) {
+                            onStop(quickStop)
+                        } label: {
+                            Label(quickStop.title, systemImage: quickStop.systemImage)
+                        }
+                    }
                 }
                 if row.id != rows.last?.id {
                     Divider()
@@ -208,14 +230,21 @@ private struct PopoverQuietState: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "checkmark.seal.fill")
-                .font(.title3)
-                .foregroundStyle(.green.gradient)
-                .accessibilityHidden(true)
-            Text(familyCount == 0 ? "Starting the first scan" : "\(familyCount) families watched, nothing misbehaving")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // No green seal before the first scan: nothing is known to be quiet yet.
+            if familyCount == 0 {
+                RadarWaitLabel("Scanning your processes…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.title3)
+                    .foregroundStyle(.green.gradient)
+                    .accessibilityHidden(true)
+                Text("\(familyCount) families watched, nothing misbehaving")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Spacer(minLength: 0)
         }
         .padding(8)
@@ -398,11 +427,16 @@ struct PopoverView_Previews: PreviewProvider {
 
     @MainActor
     private static func popover(_ scenario: Scenario) -> some View {
-        PopoverView(
-            monitor: monitor(scenario),
+        let fixture = monitor(scenario)
+        let quickStops = QuickStopAdvisor(monitor: fixture)
+        quickStops.update()
+        return PopoverView(
+            monitor: fixture,
             notifier: UserNotificationRadarNotifier(),
             onOpenConsole: {},
             onOpenFamily: { _ in },
+            quickStops: quickStops,
+            onStop: { _ in },
             onOpenSettings: {},
             onQuit: {},
             refreshesOnAppear: false

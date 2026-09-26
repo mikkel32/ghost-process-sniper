@@ -36,6 +36,7 @@ struct RadarQuickGuideView: View {
                     shortcut("Overview · All Processes", keys: "⌘1 · ⌘2")
                     shortcut("Duplicates · Incidents", keys: "⌘3 · ⌘4")
                     shortcut("Rules · Engine", keys: "⌘5 · ⌘6")
+                    shortcut("Back · Forward", keys: "⌘[ · ⌘]")
                     shortcut("Settings", keys: "⌘,")
                 }
                 VStack(alignment: .leading, spacing: 12) {

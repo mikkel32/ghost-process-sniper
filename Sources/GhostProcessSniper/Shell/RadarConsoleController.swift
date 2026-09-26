@@ -10,7 +10,12 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
     private var session: RadarConsoleSession?
     private var monitor: ProcessMonitor?
 
-    func show(monitor: ProcessMonitor, killer: ProcessKiller, openSettings: @escaping () -> Void) {
+    func show(
+        monitor: ProcessMonitor,
+        killer: ProcessKiller,
+        quickStops: QuickStopAdvisor,
+        openSettings: @escaping () -> Void
+    ) {
         self.monitor = monitor
         if let window {
             window.makeKeyAndOrderFront(nil)
@@ -19,7 +24,9 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
             return
         }
 
-        let session = self.session ?? RadarConsoleSession(monitor: monitor, killer: killer, openSettings: openSettings)
+        let session = self.session ?? RadarConsoleSession(
+            monitor: monitor, killer: killer, quickStops: quickStops, openSettings: openSettings
+        )
         if let key = session.state.focusedSelection.familyKey, session.family(forKey: key) == nil {
             session.state.focusedSelection = .overview
         }
@@ -139,9 +146,32 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         session?.prepareKill(familyKey: familyKey)
     }
 
+    func stopFamily(_ action: QuickStopAction) {
+        showIfNeeded()
+        session?.quickStop(action)
+    }
+
+    var canGoBack: Bool {
+        window != nil && session?.history.canGoBack == true
+    }
+
+    var canGoForward: Bool {
+        window != nil && session?.history.canGoForward == true
+    }
+
+    func goBack() {
+        showIfNeeded()
+        session?.goBack()
+    }
+
+    func goForward() {
+        showIfNeeded()
+        session?.goForward()
+    }
+
     func prepareKillSelected() {
         showIfNeeded()
-        session?.prepareKillSelected()
+        session?.stopSelected()
     }
 
     // A minimized or fully covered console is not a visible surface: the
