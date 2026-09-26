@@ -115,6 +115,27 @@ final class RadarSchedulerTests: XCTestCase {
                        "a family that cooled starts its five minutes again")
     }
 
+    func testBriefHysteresisHoldKeepsTheHotClockRunning() {
+        var scheduler = RadarScheduler(pressureProvider: { .nominal })
+        var hysteresis = RadarHysteresis()
+        let now = RefreshPerformanceFixture.now
+        let root = RefreshPerformanceFixture.process(1)
+        func tick(_ level: GhostLevel, at seconds: TimeInterval) -> Bool {
+            let family = RefreshPerformanceFixture.family(root, level: level)
+                .enriched(alertState: AlertState(kind: .recurring, message: "2x recurring incident", since: now))
+            let at = now.addingTimeInterval(seconds)
+            return scheduler.noteHotFamilies(hysteresis.apply(to: [family], now: at), now: at)
+        }
+        for seconds in stride(from: 0.0, through: 290, by: 10) {
+            let burst: GhostLevel = Int(seconds) % 20 == 0 ? .hot : .quiet
+            XCTAssertFalse(tick(burst, at: seconds), "t0+\(seconds)")
+        }
+        XCTAssertTrue(tick(.hot, at: 301), "a build hot in bursts still settles after five minutes")
+
+        XCTAssertFalse(tick(.quiet, at: 330), "past the hold the family really cooled")
+        XCTAssertFalse(tick(.hot, at: 331), "so its five minutes start again")
+    }
+
     func testPowerContextIsCachedForThirtySeconds() {
         let reads = LockedCounter()
         var reader = PowerContextReader(source: {

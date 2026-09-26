@@ -214,19 +214,28 @@ public struct RadarScheduler: Sendable {
     }
 
     /// Tracks how long each family has been hot and reports whether every
-    /// hot family is a settled, already-alerted one.
+    /// hot family is a settled, already-alerted one. A family the hysteresis
+    /// is holding keeps its clock, so a build that runs hot in bursts can
+    /// still settle.
     public mutating func noteHotFamilies(_ families: [ProcessFamily], now: Date) -> Bool {
         var next: [String: Date] = [:]
+        var anyHot = false
         var allSettled = true
-        for family in families where family.score.level >= .hot {
-            let since = hotSince[family.familyKey] ?? now
-            next[family.familyKey] = since
-            if family.alertState.kind == .new || now.timeIntervalSince(since) <= Self.settledHotDuration {
-                allSettled = false
+        for family in families {
+            let key = family.familyKey
+            if family.score.level >= .hot {
+                let since = hotSince[key] ?? now
+                next[key] = since
+                anyHot = true
+                if family.alertState.kind == .new || now.timeIntervalSince(since) <= Self.settledHotDuration {
+                    allSettled = false
+                }
+            } else if let since = hotSince[key], family.score.reasons.contains(RadarHysteresis.holdReason) {
+                next[key] = since
             }
         }
         hotSince = next
-        return !next.isEmpty && allSettled
+        return anyHot && allSettled
     }
 
     public var currentPower: PowerContext {

@@ -193,6 +193,7 @@ public struct RadarPipeline: Sendable {
 /// `holdDuration` after it was last actually hot, so a bursty runaway keeps
 /// its rich sampling and its row does not flicker hot → quiet → hot.
 struct RadarHysteresis: Sendable {
+    static let holdReason = "held briefly to avoid flicker"
     private var lastHotAt: [String: Date] = [:]
     let holdDuration: TimeInterval = 20
 
@@ -222,7 +223,7 @@ struct RadarHysteresis: Sendable {
             let score = GhostScore(
                 value: family.score.value,
                 level: level,
-                reasons: family.score.reasons + ["held briefly to avoid flicker"],
+                reasons: family.score.reasons + [Self.holdReason],
                 components: family.score.components,
                 heat: GhostHeat(
                     value: family.score.heat.value,
