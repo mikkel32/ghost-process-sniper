@@ -294,7 +294,8 @@ struct FamilyOverviewChips: View, Equatable {
     let level: GhostLevel
 
     var body: some View {
-XX, RadarFormat.bytes(memoryBytes), "memorychip", level >= .hot ? level : .quiet)
+        HStack(spacing: 8) {
+            chip("Memory", RadarFormat.bytes(memoryBytes), "memorychip", level >= .hot ? level : .quiet)
             chip("CPU", RadarFormat.percent(cpuPercent), "cpu", cpuPercent >= 80 ? .hot : .quiet)
             chip("Leak", RadarFormat.leak(velocity), "chart.line.uptrend.xyaxis", velocity > 0 ? .watch : .quiet)
             chip("vs Normal", baselineText, "ruler", .quiet)
