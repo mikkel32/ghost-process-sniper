@@ -69,24 +69,32 @@ enum StatusIconRenderer {
 
     nonisolated private static func drawCriticalDisc() {
         let color = NSColor.systemRed
+        let discRect = NSRect(x: 2.4, y: 2.4, width: 13.2, height: 13.2)
 
+        // The glow is clipped to outside the disc so it cannot tint the
+        // knocked-out ring.
         NSGraphicsContext.saveGraphicsState()
+        let outside = NSBezierPath(rect: NSRect(x: 0, y: 0, width: 18, height: 18))
+        outside.append(NSBezierPath(ovalIn: discRect))
+        outside.windingRule = .evenOdd
+        outside.addClip()
         let shadow = NSShadow()
         shadow.shadowColor = color.withAlphaComponent(0.65)
         shadow.shadowBlurRadius = 5
         shadow.shadowOffset = .zero
         shadow.set()
         color.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 2.4, y: 2.4, width: 13.2, height: 13.2)).fill()
+        NSBezierPath(ovalIn: discRect).fill()
         NSGraphicsContext.restoreGraphicsState()
 
-        // Knock the scope ring out of the disc so it still reads as the same mark.
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current?.compositingOperation = .destinationOut
-        NSColor.black.setStroke()
-        let ring = NSBezierPath(ovalIn: NSRect(x: 5.4, y: 5.4, width: 7.2, height: 7.2))
-        ring.lineWidth = 1.4
-        ring.stroke()
-        NSGraphicsContext.restoreGraphicsState()
+        // The scope ring is cut out of the disc by even-odd filling rather than
+        // destination compositing, which would also erase the menu bar behind it
+        // whenever AppKit draws the handler straight into its own context.
+        let disc = NSBezierPath(ovalIn: discRect)
+        disc.append(NSBezierPath(ovalIn: NSRect(x: 4.7, y: 4.7, width: 8.6, height: 8.6)))
+        disc.append(NSBezierPath(ovalIn: NSRect(x: 6.1, y: 6.1, width: 5.8, height: 5.8)))
+        disc.windingRule = .evenOdd
+        color.setFill()
+        disc.fill()
     }
 }
