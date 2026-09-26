@@ -70,13 +70,13 @@ The fakes model cause and effect rather than returning scripted answers:
 - **Migration tests** (`Persistence/MigrationTests`) build a store at each older schema version — an unversioned file, then `migrate(migrations.filter { $0.version <= N })` — seed rows, open it with `RadarStore`, and check that rows survive and that an upgraded store ends with exactly the schema of a fresh one.
 - **Goldens.** `PipelineGoldenTests` pins digests of signature ids, membership and score-component text over the fixtures, so pipeline optimizations cannot silently change results.
 
-A few native smoke tests (a real shell tree forced by the kill engine, CPU-time conversion against the POSIX clock) run only on macOS. Ordinary tests make no timing claims; benchmarks are opt-in (see [Performance](Performance.md)).
+A few native smoke tests (a real shell tree forced by the kill engine, CPU-time conversion against the POSIX clock) run only on macOS. Ordinary tests make no tight timing claims: benchmarks are opt-in, and the few loose or release-only time budgets are listed in [Performance](Performance.md).
 
 `Checks/GhostProcessSniperCoreChecks` is an executable of hand-registered checks run by `swift run GhostProcessSniperCoreChecks` and by `Scripts/verify.sh`. Keep it green; change a check only when a behavior change intentionally alters its expectation.
 
 ## Vendored packages
 
-`Packages/ThinkingOrbsKit` is the SwiftUI edition of the [Libraries.dev](https://libraries.dev) thinking orbs (MIT, see its `LICENSE`), vendored as a local SwiftPM package and linked only into the app target. It is pure SwiftUI (`Canvas` and `TimelineView`, no Metal) with no dependencies. The app uses it only for waits of two seconds or more — the stop sheet's clean-exit wait and `RadarWaitLabel` — never for short waits, where an orb would read as a flicker. Its own tests run with `swift test --package-path Packages/ThinkingOrbsKit`. Keep local changes minimal and note them in its README.
+`Packages/ThinkingOrbsKit` is the SwiftUI edition of the [Libraries.dev](https://libraries.dev) thinking orbs (MIT, see its `LICENSE`), vendored as a local SwiftPM package and linked only into the app target. It is pure SwiftUI (`Canvas` and `TimelineView`, no Metal) with no dependencies. The app uses it only for waits of two seconds or more — the stop sheet's clean-exit wait, the "Stop the extras" sheet while each copy waits out its grace (`DuplicateCullSheet`), and `RadarWaitLabel` — never for short waits, where an orb would read as a flicker. Its own tests run with `swift test --package-path Packages/ThinkingOrbsKit`. Keep local changes minimal and note them in its README.
 
 ## Build infrastructure
 

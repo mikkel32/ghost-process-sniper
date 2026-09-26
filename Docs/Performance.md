@@ -1,6 +1,6 @@
 # Performance measurements
 
-Debug test runs and the core checks make no timing claims: wall-clock budgets in debug builds on shared runners were noise, so every benchmark is opt-in, runs a release build on synthetic input, and never samples or signals a live process. The one exception is `testPipelineTickCostOnADeveloperMac`, which asserts a budget only in release builds. None of them measures frame rate, energy use or real sensors.
+The core checks make no timing claims, and ordinary tests make no tight ones: wall-clock budgets in debug builds on shared runners were noise, so every benchmark is opt-in, runs a release build on synthetic input, and never samples or signals a live process. Three tests assert a time budget: `testPipelineTickCostOnADeveloperMac` (a 25 ms median tick, release builds only), `MemberTrendStoreTests`' scale test (5 ms per tick, release builds only) and `StopRiskMemoTests.testLongArgvAssessmentStaysCheap` (a loose 25 ms per assessment in every build, which only a full-argv scan would miss). `ProcessMonitorWakeTests` also checks that showing a surface wakes the hidden sleep within 0.5 s. None of them measures frame rate, energy use or real sensors.
 
 ## Running the benchmarks
 
