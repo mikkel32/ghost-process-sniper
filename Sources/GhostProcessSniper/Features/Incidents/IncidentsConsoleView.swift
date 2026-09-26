@@ -1,4 +1,3 @@
-import AppKit
 import GhostProcessSniperCore
 import SwiftUI
 
@@ -7,21 +6,38 @@ struct IncidentsConsoleView: View {
     @SceneStorage("GhostProcessSniper.Console.selectedIncident") private var storedIncidentID = ""
     @State private var tableSelection: IncidentRowViewModel.ID?
 
-    private var selectedIncident: RadarIncident? {
-        guard let tableSelection else {
+    /// The displayed row, then the full incident behind it for the timeline.
+    private var selection: (row: IncidentRowViewModel, incident: RadarIncident)? {
+        guard let tableSelection, let row = session.incidentRows.first(where: { $0.id == tableSelection }),
+              let incident = session.monitor.incidents.first(where: { $0.id == row.id }) else {
             return nil
         }
-        return session.monitor.incidents.first { $0.id == tableSelection }
+        return (row, incident)
+    }
+
+    private var hasQuery: Bool {
+        !session.state.incidentQuery.text.isEmpty || session.state.incidentQuery.filter != .all
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            HSplitView {
-                incidentTable
-                    .frame(minWidth: 350)
-                incidentDetail
-                    .frame(minWidth: 220, idealWidth: 340)
+            if session.incidentRows.isEmpty {
+                ContentUnavailableView(
+                    hasQuery ? "No Matching Incidents" : "No Incidents",
+                    systemImage: hasQuery ? "magnifyingglass" : "checkmark.circle",
+                    description: Text(hasQuery
+                        ? "Nothing logged matches this search or filter."
+                        : "Pressure spikes get logged here with their evidence and timeline.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                HSplitView {
+                    incidentTable
+                        .frame(minWidth: 350)
+                    incidentDetail
+                        .frame(minWidth: 220, idealWidth: 340)
+                }
             }
         }
         .onAppear {
@@ -50,7 +66,7 @@ struct IncidentsConsoleView: View {
                 InfoTip(tip: RadarTip(
                     title: "Incidents",
                     message: "The radar's memory: every time a family crosses into hot, an incident is recorded with its peak score, metrics, evidence, and timeline. Active incidents are still misbehaving; resolved ones calmed down on their own or after intervention.",
-                    shortcut: "⌘3"
+                    shortcut: "⌘4"
                 ))
                 Button {
                     session.copyReport()
@@ -71,13 +87,6 @@ struct IncidentsConsoleView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
-                Picker("Sort", selection: $session.state.incidentQuery.sort) {
-                    ForEach(RadarIncidentSort.allCases, id: \.self) { sort in
-                        Text(sort.label).tag(sort)
-                    }
-                }
-                .labelsHidden()
-                .fixedSize()
                 Spacer()
             }
         }
@@ -86,29 +95,39 @@ struct IncidentsConsoleView: View {
     }
 
     private var incidentTable: some View {
-        Table(session.incidentRows, selection: $tableSelection) {
-            TableColumn("Family") { row in
-                Label(row.familyName, systemImage: RadarStyle.icon(for: row.level))
-                    .foregroundStyle(RadarStyle.color(for: row.level))
-                    .lineLimit(1)
-                    .help("\(row.leakText)\n\(row.timeRangeText)")
+        Table(session.incidentRows, selection: $tableSelection, sortOrder: sortOrder) {
+            TableColumn("Family", value: \.familyName) { row in
+                HStack(spacing: 6) {
+                    Label(row.familyName, systemImage: RadarStyle.icon(for: row.level))
+                        .foregroundStyle(RadarStyle.color(for: row.level))
+                        .lineLimit(1)
+                    if row.liveFamilyKey != nil {
+                        Text("Running")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.green)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Color.green.opacity(0.12), in: Capsule())
+                    }
+                }
+                .help("\(row.leakText)\n\(row.timeRangeText)")
             }
             .width(min: 160, ideal: 220)
 
             TableColumn("State") { row in
                 Text(row.stateText)
-                    .foregroundStyle(row.stateText == "Active" ? RadarStyle.color(for: row.level) : .secondary)
+                    .foregroundStyle(row.isActive ? RadarStyle.color(for: row.level) : .secondary)
             }
             .width(min: 56, ideal: 70)
 
-            TableColumn("Score") { row in
+            TableColumn("Score", value: \.score) { row in
                 Text(row.scoreText)
                     .font(.body.monospacedDigit().weight(.semibold))
             }
             .width(min: 44, ideal: 52)
             .alignment(.trailing)
 
-            TableColumn("Memory") { row in
+            TableColumn("Memory", value: \.memoryBytes) { row in
                 Text(row.memoryText)
                     .font(.body.monospacedDigit())
             }
@@ -122,7 +141,7 @@ struct IncidentsConsoleView: View {
             .width(min: 44, ideal: 52)
             .alignment(.trailing)
 
-            TableColumn("Hits") { row in
+            TableColumn("Hits", value: \.occurrenceCount) { row in
                 Text(row.occurrenceText)
                     .font(.body.monospacedDigit())
             }
@@ -130,37 +149,59 @@ struct IncidentsConsoleView: View {
             .alignment(.trailing)
         }
         .tableStyle(.inset)
-        .overlay {
-            if session.incidentRows.isEmpty {
-                ContentUnavailableView(
-                    "No Incidents",
-                    systemImage: "checkmark.circle",
-                    description: Text("Pressure spikes get logged here with their evidence and timeline.")
-                )
+    }
+
+    /// Column headers drive the incident query; most recent first has no column.
+    private var sortOrder: Binding<[KeyPathComparator<IncidentRowViewModel>]> {
+        let state = session.state
+        return Binding(
+            get: {
+                let order: SortOrder = state.incidentQuery.ascending ? .forward : .reverse
+                switch state.incidentQuery.sort {
+                case .name: return [KeyPathComparator(\IncidentRowViewModel.familyName, order: order)]
+                case .severity: return [KeyPathComparator(\IncidentRowViewModel.score, order: order)]
+                case .memory: return [KeyPathComparator(\IncidentRowViewModel.memoryBytes, order: order)]
+                case .recurrence: return [KeyPathComparator(\IncidentRowViewModel.occurrenceCount, order: order)]
+                case .recent: return []
+                }
+            },
+            set: { comparators in
+                let first = comparators.first
+                state.incidentQuery.ascending = first?.order == .forward
+                state.incidentQuery.sort = RadarIncidentSort(incidentColumn: first?.keyPath)
+                session.scheduleQueryUpdate()
             }
-        }
+        )
     }
 
     @ViewBuilder
     private var incidentDetail: some View {
-        if let incident = selectedIncident {
+        if let selected = selection {
+            let row = selected.row
+            let incident = selected.incident
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    RadarSection(title: incident.familyName, subtitle: incident.resolvedAt == nil ? "Active" : "Resolved") {
+                    RadarSection(title: incident.familyName, subtitle: row.liveFamilyKey == nil ? "\(row.stateText) · exited" : "\(row.stateText) · running") {
                         HStack(spacing: 8) {
-                            Button {
-                                session.focus(.family(incident.signature.id))
-                            } label: {
-                                Label("Open Family", systemImage: "arrow.up.right.square")
+                            if let liveKey = row.liveFamilyKey {
+                                Button("Open Family", systemImage: "arrow.up.right.square") {
+                                    session.focus(.family(liveKey))
+                                }
+                                .buttonStyle(.borderedProminent)
+                                if row.isActive {
+                                    Button("Stop\u{2026}", systemImage: "stop.circle", role: .destructive) {
+                                        session.prepareKill(familyKey: liveKey)
+                                    }
+                                }
+                            } else {
+                                Button("Search for It", systemImage: "magnifyingglass") {
+                                    session.addSearchToken(incident.familyName)
+                                }
+                                .help("The family has exited; search for a new copy of it")
                             }
-                            .buttonStyle(.borderedProminent)
 
-                            Button {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(incidentSummary(incident), forType: .string)
-                                session.showToast("Incident copied", systemImage: "doc.on.clipboard")
-                            } label: {
-                                Label("Copy", systemImage: "doc.on.clipboard")
+                            Button("Copy", systemImage: "doc.on.clipboard") {
+                                session.copyToPasteboard(incidentSummary(incident), toast: "Incident copied")
                             }
                             Spacer()
                         }
@@ -173,7 +214,7 @@ struct IncidentsConsoleView: View {
 
                     RadarSection(title: "Metrics") {
                         HStack(spacing: 8) {
-                            RadarChip(title: "Memory", value: RadarBytes.string(incident.memoryBytes), systemImage: "memorychip", level: incident.level)
+                            RadarChip(title: "Memory", value: RadarFormat.bytes(incident.memoryBytes), systemImage: "memorychip", level: incident.level)
                             RadarChip(title: "CPU", value: "\(Int(incident.cpuPercent.rounded()))%", systemImage: "cpu", level: incident.level)
                             RadarChip(title: "Leak", value: "\(Int(incident.leakVelocityMegabytesPerMinute.rounded())) MB/min", systemImage: "chart.line.uptrend.xyaxis", level: incident.leakVelocityMegabytesPerMinute > 0 ? .watch : .quiet)
                         }

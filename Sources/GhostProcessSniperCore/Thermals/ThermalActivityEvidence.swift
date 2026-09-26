@@ -9,7 +9,7 @@ public enum ThermalActivitySort: String, CaseIterable, Identifiable, Sendable {
 }
 
 public enum ThermalActivityCoverage: Equatable, Sendable {
-    case monitoredFamilies
+    /// Every sampled process is projected, independent of radar family filters.
     case processInventory
 }
 
@@ -36,9 +36,19 @@ public struct ThermalRecentContributor: Identifiable, Equatable, Sendable {
     public let lastActiveAt: Date
     public let activeSampleCount: Int
     public let isSystemProcess: Bool
+    /// Decayed accumulated activity (CPU capacity or reported GPU, whichever is higher)
+    /// as of `sustainedLoadAt`. Recent readings weigh more, like chip temperature does.
+    public let sustainedLoadPercent: Double
+    public let sustainedLoadAt: Date
 
     public var activeSpanSeconds: TimeInterval {
         max(0, lastActiveAt.timeIntervalSince(firstActiveAt))
+    }
+
+    /// The load keeps decaying between readings; it never grows without a new one.
+    public func sustainedLoad(at now: Date) -> Double {
+        guard (0...ThermalActivityHistory.maximumAge).contains(now.timeIntervalSince(lastActiveAt)) else { return 0 }
+        return sustainedLoadPercent * exp(-max(0, now.timeIntervalSince(sustainedLoadAt)) / ThermalActivityHistory.loadTimeConstant)
     }
 }
 
@@ -66,22 +76,18 @@ public extension ThermalContributor {
         return max(cpu ?? 0, gpu ?? 0)
     }
 
+    /// Every later instant at which one of this group's readings stops counting as current.
+    func expiryDates(after now: Date) -> [Date] {
+        var dates = [cpuMeasuredAt, gpuMeasuredAt, measuredAt]
+        for process in processes { dates += [process.cpuMeasuredAt, process.gpuMeasuredAt] }
+        return Set(dates.compactMap { $0?.addingTimeInterval(ThermalActivitySummary.maximumAge) }.filter { $0 > now })
+            .sorted()
+    }
+
     func isSubstantial(at now: Date) -> Bool {
         let cpu = cpuCapacityPercent(at: now)
         let gpu = gpuActivityPercent(at: now)
         return (cpu != nil && (cpuPercent >= 80 || (cpu ?? 0) >= 10)) || (gpu ?? 0) >= 15
-    }
-
-    var activityLabel: String {
-        activityLabel(at: measuredAt)
-    }
-
-    func activityLabel(at now: Date) -> String {
-        let cpu = cpuCapacityPercent(at: now) ?? 0
-        let gpu = gpuActivityPercent(at: now) ?? 0
-        if cpu >= 15 && gpu >= 15 { return "CPU and GPU active" }
-        if gpu > cpu && gpu >= 5 { return "Graphics activity" }
-        return cpu >= 15 ? "High CPU activity" : "CPU activity"
     }
 
     var suggestedAction: String {
@@ -89,12 +95,38 @@ public extension ThermalContributor {
     }
 
     func suggestedAction(at now: Date) -> String {
+        if let knownSource { return knownSource.advice }
         if isSystemProcess {
             return "This is a macOS service. Review related app activity first; this panel does not recommend stopping system services."
+        }
+        if kind == .job {
+            let origin = hostAppName.map { " in \($0)" } ?? ""
+            return "This is a command-line job\(origin) with \(processCount) sampled \(processCount == 1 ? "process" : "processes"). Check whether it is work you expect; let it finish, or stop it where it was started if it can wait, then compare the next readings."
         }
         if let gpu = gpuActivityPercent(at: now), gpu > (cpuCapacityPercent(at: now) ?? 0), gpu >= 5 {
             return "Check for rendering, video, games, or other graphics work in this app. Pause an optional task and compare the next readings."
         }
         return "Check whether this app is doing work you expect. Pause an optional task or close an unused window, then compare the next readings."
+    }
+
+    /// A short line describing what the row groups.
+    var workloadSummary: String {
+        if let knownSource {
+            let parts = knownSource.label.components(separatedBy: " — ")
+            return parts.count > 1 ? parts[1] : "macOS background work"
+        }
+        if isSystemProcess { return "macOS service" }
+        let count = "\(processCount) \(processCount == 1 ? "process" : "processes")"
+        guard kind == .job else { return count }
+        return hostAppName.map { "Command-line job in \($0) · \(count)" } ?? "Command-line job · \(count)"
+    }
+
+    /// Why these processes were grouped together.
+    var workloadExplanation: String {
+        if let knownSource { return knownSource.cause }
+        let count = "\(processCount) sampled \(processCount == 1 ? "process" : "processes")"
+        guard kind == .job else { return "\(count) \(processCount == 1 ? "belongs" : "belong") to this app or service." }
+        let origin = hostAppName.map { " started in \($0)" } ?? ""
+        return "\(count) \(processCount == 1 ? "belongs" : "belong") to this command-line job\(origin), grouped under the process that started it."
     }
 }

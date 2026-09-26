@@ -114,17 +114,54 @@ final class PrecisionTelemetryTests: XCTestCase {
         """
         XCTAssertEqual(sqlite3_exec(handle, sql, nil, nil, nil), SQLITE_OK)
         sqlite3_close(handle)
-        let store = try RadarStore(url: url)
+        let store = RadarStore(url: url)
         let f = family(root: process())
         let initial = try await store.context(for: [f], settings: .smart, now: now)
         XCTAssertEqual(initial.baselines[f.signature.id]?.measurementVersion, 0)
         XCTAssertEqual(initial.baselines[f.signature.id]?.sampleCount, 999)
         let model = RadarModel(families: [f], summary: .empty, incidents: [], rules: [], health: .starting, generatedAt: now)
-        try await store.persist(model: model, settings: .smart)
-        let reopened = try RadarStore(url: url)
+        _ = try await store.enqueue(model: model, settings: .smart)
+        try await store.flush()
+        // Baselines are written behind; closing persists what was learned.
+        await store.close()
+        let reopened = RadarStore(url: url)
         let loaded = try await reopened.context(for: [f], settings: .smart, now: now)
-        XCTAssertEqual(loaded.baselines[f.signature.id]?.measurementVersion, 1)
+        XCTAssertEqual(loaded.baselines[f.signature.id]?.measurementVersion, FamilyBaseline.currentMeasurementVersion)
         XCTAssertEqual(loaded.baselines[f.signature.id]?.sampleCount, 1)
+        XCTAssertEqual(loaded.baselines[f.signature.id]?.observedSeconds, 0)
+        XCTAssertEqual(loaded.baselines[f.signature.id]?.sessionCount, 1)
+    }
+
+    func testBaselineVarianceAndObservedTimeRoundTrip() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("radar-baseline-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = RadarStore(url: url)
+        var expected: FamilyBaseline?
+        var last = family(root: process())
+        for step in 0..<3 {
+            let date = now.addingTimeInterval(Double(step) * 10)
+            last = family(root: process(bytes: UInt64(100 + step * 20) * mib, cpu: Double(step * 4), date: date))
+            expected = FamilyBaselineLearner().updated(existing: expected, family: last, now: date)
+            let model = RadarModel(families: [last], summary: .empty, incidents: [], rules: [], health: .starting, generatedAt: date)
+            _ = try await store.enqueue(model: model, settings: .smart, now: date)
+            try await store.flush(now: date)
+        }
+        // Baselines are written behind; closing persists what was learned.
+        await store.close()
+        let learned = try XCTUnwrap(expected)
+        XCTAssertGreaterThan(learned.memoryVariance, 0)
+        XCTAssertGreaterThan(learned.cpuVariance, 0)
+        XCTAssertEqual(learned.observedSeconds, 20)
+
+        let reopened = RadarStore(url: url)
+        let context = try await reopened.context(for: [last], settings: .smart, now: now)
+        let loaded = try XCTUnwrap(context.baselines[last.signature.id])
+        XCTAssertEqual(loaded.measurementVersion, FamilyBaseline.currentMeasurementVersion)
+        XCTAssertEqual(loaded.sampleCount, learned.sampleCount)
+        XCTAssertEqual(loaded.memoryVariance, learned.memoryVariance, accuracy: 1)
+        XCTAssertEqual(loaded.cpuVariance, learned.cpuVariance, accuracy: 0.001)
+        XCTAssertEqual(loaded.observedSeconds, learned.observedSeconds, accuracy: 0.001)
+        XCTAssertEqual(loaded.sessionCount, learned.sessionCount)
     }
 
     func testRecurringHistoryAloneDoesNotMakeQuietActivityUrgent() {
@@ -141,7 +178,7 @@ final class PrecisionTelemetryTests: XCTestCase {
         let trend = TrendMetrics(memoryVelocityMegabytesPerMinute: 6_000, cpuSlopePerMinute: 0,
             memoryPoints: samples.map { Double($0.memoryBytes) }, memoryFitQuality: 1, samples: samples)
         XCTAssertFalse(trend.hasSustainedHistory)
-        let heat = GhostHeatModel.initial(memoryRatio: 0.4, cpuRatio: 0, gpuRatio: 0, leakRatio: 60, trend: trend, hardwareLevel: .quiet)
+        let heat = GhostHeatModel.initial(memoryRatio: 0.4, cpuRatio: 0, cpuThreshold: 90, gpuRatio: 0, leakRatio: 60, trend: trend, hardwareLevel: .quiet)
         XCTAssertEqual(heat.sustainedSignalCount, 0)
         XCTAssertNotEqual(heat.level, .critical)
     }
@@ -170,7 +207,7 @@ final class PrecisionTelemetryTests: XCTestCase {
         let child = process(pid: 92_012, parent: 92_011)
         let world = PrecisionWorld([root, child])
         let killer = ProcessKiller(lookup: world, signaler: world, currentUserID: 501, sleeper: { _ in })
-        let plan = family(root: root).killPlan().binding(to: [root.identity], expiresAt: Date().addingTimeInterval(60), strategy: .standard)
+        let plan = family(root: root).killPlan().binding(to: [root.identity], expiresAt: Date().addingTimeInterval(60), profile: .standard)
         let preview = await killer.preview(plan: plan)
         XCTAssertEqual(preview.targetIdentities, [root.identity])
         XCTAssertTrue(preview.lockedTargets.contains { $0.identity == child.identity })
@@ -238,7 +275,9 @@ final class PrecisionTelemetryTests: XCTestCase {
         let updated = try XCTUnwrap(builder.buildFamilies(from: [refreshedRoot, child], settings: settings,
             trendWindow: &window, now: now.addingTimeInterval(5)).first { $0.root.pid == root.pid })
         XCTAssertEqual(updated.members.count, 2)
-        XCTAssertEqual(updated.trend.sampleCount, 1)
+        // One continuous series: the child's arrival restates history
+        // instead of starting over or reading as 300 MB of growth.
+        XCTAssertEqual(updated.trend.sampleCount, 2)
         XCTAssertEqual(updated.trend.memoryVelocityMegabytesPerMinute, 0)
     }
 

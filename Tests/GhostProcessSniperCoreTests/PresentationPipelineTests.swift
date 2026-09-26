@@ -10,7 +10,7 @@ final class PresentationPipelineTests: XCTestCase {
         let requested = families[299].familyKey
         let scoped = payload(families, keys: [requested])
         XCTAssertEqual(scoped.state.consoleSnapshot.families.count, 300)
-        XCTAssertNotNil(scoped.state.detailViewModels[requested])
+        XCTAssertNotNil(scoped.state.consoleSnapshot.detailPanels[requested])
         XCTAssertLessThanOrEqual(scoped.state.consoleSnapshot.detailPanels.count, 30)
         let full = payload(families, keys: nil)
         XCTAssertEqual(full.state.consoleSnapshot.families, scoped.state.consoleSnapshot.families)
@@ -34,24 +34,24 @@ final class PresentationPipelineTests: XCTestCase {
         let next = payload(families, keys: [families[1].familyKey], previous: first.state.consoleSnapshot)
         XCTAssertEqual(first.state.consoleSnapshot.contentRevision, next.state.consoleSnapshot.contentRevision)
         XCTAssertEqual(next.delta.mode, .contentChanged)
-        XCTAssertNotNil(next.state.detailViewModels[families[1].familyKey])
+        XCTAssertNotNil(next.state.consoleSnapshot.detailPanels[families[1].familyKey])
     }
 
     func testRepeatedSignatureDoesNotExpandDetailDemandToAllInstances() {
         let families = (0..<200).map { family($0, sharedSignature: true) }
         let result = payload(families, keys: [families[0].signature.id, families[199].familyKey])
-        XCTAssertNotNil(result.state.detailViewModels[families[199].familyKey])
+        XCTAssertNotNil(result.state.consoleSnapshot.detailPanels[families[199].familyKey])
         XCTAssertLessThanOrEqual(result.state.consoleSnapshot.detailPanels.count, 4)
         XCTAssertEqual(result.state.consoleSnapshot.families.count, 200)
     }
 
-    func testUnchangedRenderingStillPublishesFreshRawMeasurements() {
+    func testUnchangedRenderingStillPublishesFreshRawMeasurements() async {
         let first = family(0)
         let monitor = ProcessMonitor(builder: ProcessFamilyBuilder(currentUserID: 501), store: nil)
-        monitor.ingest([first.root], now: first.root.sampledAt)
+        await monitor.ingest([first.root], now: first.root.sampledAt)
         let revision = monitor.consoleSnapshot.contentRevision
         let fresh = family(0, at: first.root.sampledAt.addingTimeInterval(1))
-        monitor.ingest([fresh.root], now: fresh.root.sampledAt)
+        await monitor.ingest([fresh.root], now: fresh.root.sampledAt)
         XCTAssertEqual(monitor.consoleSnapshot.contentRevision, revision)
         XCTAssertEqual(monitor.families.first?.root.sampledAt, fresh.root.sampledAt)
     }
@@ -116,21 +116,21 @@ final class PresentationPipelineTests: XCTestCase {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(":memory:", &db), SQLITE_OK)
         defer { sqlite3_close(db) }
-        for sql in RadarStoreSchema.migrationStatements { XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK) }
-        for (id, time) in [(1, 99), (2, 100), (3, 101)] {
-            let sql = "INSERT INTO incidents VALUES('\(id)', 'test', 'worker', '/test', 'hash', 'worker', 'Watch', 0, 0, 0, 0, '[]', \(time), \(time), NULL, 1)"
+        for sql in RadarStoreSchema.migrations.flatMap(\.statements) { XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK) }
+        for (id, time, resolved) in [(1, 99, "99.5"), (2, 100, "100.5"), (3, 101, "NULL")] {
+            let sql = "INSERT INTO incidents VALUES('\(id)', 'test', 'worker', '/test', 'hash', 'worker', 'Watch', 0, 0, 0, 0, '[]', \(time), \(time), \(resolved), 1)"
             XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
         }
-        let sql = "SELECT signature_id, COUNT(*) FROM incidents WHERE signature_id IN ('test') AND started_at >= 100 GROUP BY signature_id"
+        let sql = "SELECT signature_id, COUNT(*) FROM incidents WHERE signature_id IN ('test') AND started_at >= 100 AND resolved_at IS NOT NULL GROUP BY signature_id"
         var statement: OpaquePointer?
         XCTAssertEqual(sqlite3_prepare_v2(db, sql, -1, &statement, nil), SQLITE_OK)
         XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
-        XCTAssertEqual(sqlite3_column_int(statement, 1), 2)
+        XCTAssertEqual(sqlite3_column_int(statement, 1), 1)
         sqlite3_finalize(statement)
         XCTAssertEqual(sqlite3_prepare_v2(db, "EXPLAIN QUERY PLAN " + sql, -1, &statement, nil), SQLITE_OK)
         XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
         let text = try XCTUnwrap(sqlite3_column_text(statement, 3))
-        XCTAssertTrue(String(cString: text).contains("COVERING INDEX incidents_signature_started"))
+        XCTAssertTrue(String(cString: text).contains("COVERING INDEX incidents_signature_started_resolved"))
         sqlite3_finalize(statement)
     }
 
@@ -182,6 +182,10 @@ private actor ControlledProjector: ConsoleProjecting {
         }
         // Deliberately ignores cancellation to exercise publication safeguards.
         return ConsoleDerivedSnapshot.build(snapshot: request.source, incidents: request.incidents, state: request.state)
+    }
+
+    func panel(familyKey: String, request: ConsoleProjectionRequest) async throws -> FamilyDetailPanelModel? {
+        request.source.detailPanel(for: familyKey)
     }
 
     func releaseOld() { continuation?.resume(); continuation = nil }

@@ -1,10 +1,11 @@
+import Foundation
 import XCTest
 import GhostProcessSniperCore
 
 final class ConsoleNavigationTests: XCTestCase {
     func testDestinationsRoundTripWithoutLosingFamilyKeys() {
         let destinations: [RadarFocusedSelection] = [
-            .overview, .processes, .duplicates, .incidents, .rules, .engine,
+            .overview, .processes, .duplicates, .incidents, .rules,
             .family("/usr/local/bin/node|project with spaces|ø")
         ]
         for destination in destinations {
@@ -18,13 +19,23 @@ final class ConsoleNavigationTests: XCTestCase {
         }
     }
 
-    func testExplicitEngineDestinationRemainsEngine() {
-        XCTAssertEqual(RadarFocusedSelection(storageValue: "engine"), .engine)
+    func testRetiredEngineDestinationLandsOnOverview() {
+        XCTAssertEqual(RadarFocusedSelection(storageValue: "engine"), .overview)
+        XCTAssertEqual(RadarConsoleState.default.focusedSelection, .overview)
+    }
+
+    func testSignatureSelectionIsRewrittenToTheLiveFamilyKey() {
+        let family = makeFamily(pid: 42)
+        let router = RadarCommandRouter()
+
+        XCTAssertEqual(router.canonicalSelection(.family(family.signature.id), families: [family]), .family(family.familyKey))
+        XCTAssertEqual(router.canonicalSelection(.family(family.familyKey), families: [family]), .family(family.familyKey))
+        XCTAssertEqual(router.canonicalSelection(.family("exited"), families: [family]), .family("exited"))
+        XCTAssertEqual(router.canonicalSelection(.incidents, families: [family]), .incidents)
     }
 
     func testBrowserDoesNotImplyASelectedProcess() {
         XCTAssertNil(RadarFocusedSelection.processes.familyKey)
-        XCTAssertNil(RadarFocusedSelection.processes.signatureID)
         XCTAssertEqual(RadarFocusedSelection.family("example").familyKey, "example")
     }
 
@@ -51,5 +62,85 @@ final class ConsoleNavigationTests: XCTestCase {
     func testNavigationNormalizesLargeNegativeSteps() {
         let coordinator = RadarCommandCoordinator()
         XCTAssertEqual(coordinator.selection(after: .family("a"), orderedFamilyKeys: ["a", "b", "c"], direction: -4), .family("c"))
+    }
+
+    func testHistoryStepsBackAndForward() {
+        var history = NavigationHistory()
+        history.visit(.overview)
+        history.visit(.family("a"))
+        history.visit(.incidents)
+        XCTAssertTrue(history.canGoBack)
+        XCTAssertFalse(history.canGoForward)
+        XCTAssertEqual(history.goBack(), .family("a"))
+        XCTAssertEqual(history.goBack(), .overview)
+        XCTAssertNil(history.goBack())
+        XCTAssertEqual(history.goForward(), .family("a"))
+        XCTAssertEqual(history.current, .family("a"))
+        XCTAssertEqual(history.previous, .overview)
+    }
+
+    func testHistoryCollapsesRepeatsAndDropsTheForwardTrailOnANewVisit() {
+        var history = NavigationHistory()
+        history.visit(.overview)
+        history.visit(.overview)
+        history.visit(.processes)
+        history.visit(.processes)
+        XCTAssertEqual(history.entries, [.overview, .processes])
+        _ = history.goBack()
+        history.visit(.rules)
+        XCTAssertEqual(history.entries, [.overview, .rules])
+        XCTAssertFalse(history.canGoForward)
+    }
+
+    func testHistoryKeepsOnlyTheMostRecentSteps() {
+        var history = NavigationHistory()
+        for index in 0..<(NavigationHistory.capacity + 5) {
+            history.visit(.family("f\(index)"))
+        }
+        XCTAssertEqual(history.entries.count, NavigationHistory.capacity)
+        XCTAssertEqual(history.entries.first, .family("f5"))
+        XCTAssertEqual(history.current, .family("f\(NavigationHistory.capacity + 4)"))
+    }
+
+    func testPruneDropsExitedFamiliesButKeepsThePageOnScreen() {
+        var history = NavigationHistory()
+        history.visit(.overview)
+        history.visit(.family("gone"))
+        history.visit(.overview)
+        history.visit(.family("live"))
+        history.visit(.family("stopped"))
+        history.prune(liveFamilyKeys: ["live"])
+        XCTAssertEqual(history.entries, [.overview, .family("live"), .family("stopped")], "repeated Overview entries collapse")
+        XCTAssertEqual(history.current, .family("stopped"))
+        XCTAssertEqual(history.goBack(), .family("live"))
+        XCTAssertEqual(history.goBack(), .overview)
+    }
+
+    func testPruneKeepsTheIndexOnTheSamePage() {
+        var history = NavigationHistory()
+        history.visit(.family("gone"))
+        history.visit(.processes)
+        history.visit(.family("gone-too"))
+        _ = history.goBack()
+        history.prune(liveFamilyKeys: [])
+        XCTAssertEqual(history.entries, [.processes])
+        XCTAssertEqual(history.current, .processes)
+        XCTAssertFalse(history.canGoBack)
+        XCTAssertFalse(history.canGoForward)
+    }
+
+    private func makeFamily(pid: Int32) -> ProcessFamily {
+        let root = ProcessMetrics(
+            identity: ProcessIdentity(pid: pid, startTimeSeconds: 100, startTimeMicroseconds: 0),
+            parentPID: 1, userID: 501, ownerName: "me", name: "node", executablePath: "/usr/local/bin/node",
+            commandLine: "node dev", residentMemoryBytes: 1, physicalFootprintBytes: 1, virtualMemoryBytes: 1,
+            cpuPercent: 0, totalProcessorSeconds: 0, threadCount: 1, isSystemProcess: false,
+            sampledAt: Date(timeIntervalSince1970: 1_000)
+        )
+        return ProcessFamily(
+            root: root, members: [root], totalResidentMemoryBytes: 1, totalPhysicalFootprintBytes: 1,
+            totalCPUPercent: 0, devConfidence: 0.5, commandHints: [], trend: .empty,
+            score: GhostScore(value: 0, level: .quiet, reasons: []), ownedIdentities: [root.identity], protectedPIDs: []
+        )
     }
 }

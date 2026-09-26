@@ -1,24 +1,14 @@
 {
   "default_max_lines": 600,
   "targets": {
-    "GhostProcessSniper": ["Application", "MenuBar", "Shell", "DesignSystem", "Features/Overview", "Features/Thermals", "Features/Processes", "Features/Interventions", "Features/Incidents", "Features/Duplicates", "Features/Rules", "Features/Engine", "Features/Settings"],
+    "GhostProcessSniper": ["Application", "MenuBar", "Shell", "DesignSystem", "Features/Overview", "Features/Thermals", "Features/Processes", "Features/Interventions", "Features/Incidents", "Features/Duplicates", "Features/Rules", "Features/Settings"],
     "GhostProcessSniperCore": ["Domain", "Configuration", "Monitoring", "Sampling", "Thermals", "Intelligence", "Persistence", "Search", "Presentation", "Diagnostics", "Interventions", "Cleanup"]
   },
-  "legacy_line_budgets": {
-    "GhostProcessSniper/Features/Processes/FamilyDetailConsoleView.swift": 777,
-    "GhostProcessSniper/DesignSystem/SharedRadarViews.swift": 701,
-    "GhostProcessSniper/Features/Overview/RadarOverviewView.swift": 839,
-    "GhostProcessSniper/Features/Interventions/KillPreviewSheet.swift": 635,
-    "GhostProcessSniperCore/Persistence/RadarStore.swift": 1582,
-    "GhostProcessSniperCore/Interventions/ProcessKiller.swift": 1305,
-    "GhostProcessSniperCore/Interventions/KillModels.swift": 1018,
-    "GhostProcessSniperCore/Sampling/ProcessSampler.swift": 917,
-    "GhostProcessSniperCore/Interventions/KillInterventionModels.swift": 1004,
-    "GhostProcessSniperCore/Intelligence/ProcessFamilyBuilder.swift": 828,
-    "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 680,
-    "GhostProcessSniperCore/Domain/ScannerModels.swift": 695,
-    "GhostProcessSniperCore/Configuration/SettingsPerformanceModels.swift": 771,
-    "GhostProcessSniperCore/Intelligence/ForecastModels.swift": 767,
-    "GhostProcessSniperCore/Monitoring/RadarEngine.swift": 605
+  "legacy_line_budgets": {},
+  "test_roots": {
+    "roots": ["Tests/GhostProcessSniperCoreTests", "Checks/GhostProcessSniperCoreChecks"],
+    "legacy_line_budgets": {
+      "Checks/GhostProcessSniperCoreChecks/main.swift": 3876
+    }
   }
 }

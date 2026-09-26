@@ -33,15 +33,22 @@ struct RadarQuickGuideView: View {
                     shortcut("Find processes", keys: "⌘F")
                     shortcut("Open best match", keys: "↩")
                     shortcut("Scan now", keys: "⌘R")
-                    shortcut("Overview", keys: "⌘1")
-                }
-                VStack(alignment: .leading, spacing: 12) {
-                    shortcut("Next / previous family", keys: "⌘↓ / ⌘↑")
-                    shortcut("Toggle inspector", keys: "⌥⌘I")
+                    shortcut("Overview · All Processes", keys: "⌘1 · ⌘2")
+                    shortcut("Duplicates · Incidents", keys: "⌘3 · ⌘4")
+                    shortcut("Rules", keys: "⌘5")
+                    shortcut("Back · Forward", keys: "⌘[ · ⌘]")
                     shortcut("Settings", keys: "⌘,")
                 }
+                VStack(alignment: .leading, spacing: 12) {
+                    shortcut("Next / previous family", keys: "⌘↓ / ⌘↑ or ↓ / ↑")
+                    shortcut("Stop…", keys: "⇧⌘⌫")
+                    shortcut("Snooze family", keys: "⇧⌘S")
+                    shortcut("Ignore family", keys: "⇧⌘E")
+                    shortcut("Toggle inspector", keys: "⌥⌘I")
+                    shortcut("Copy diagnostics", keys: "⇧⌘D")
+                }
             }
-            Text("Celsius readings are hardware temperatures, not per-process scores. Action labels explain urgency. Use Precision targets to preview one process; the family preview covers the wider tree. Previews expire after 60 seconds.")
+            Text("Celsius readings are hardware temperatures, not per-process scores. Action labels explain urgency. Right-click a process on a family's Processes tab to stop just that one; the family stop covers the wider tree. Previews expire after 60 seconds.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

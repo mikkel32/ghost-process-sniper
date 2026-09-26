@@ -14,41 +14,69 @@ Scripts/dev.sh logs               # Read process logs without rebuilding
 Scripts/dev.sh telemetry          # Read subsystem logs without rebuilding
 ```
 
-`script/build_and_run.sh` remains a compatibility wrapper and accepts the old `--` forms. `verify` now validates the project rather than starting an application just to check its PID. Invalid modes are rejected before building or interacting with a process.
+`script/build_and_run.sh` remains a compatibility wrapper and accepts the old `--` forms. `verify` validates the project rather than starting an application just to check its PID. Invalid modes are rejected before building or interacting with a process.
 
 ## Where code belongs
 
 | App folder | Ownership |
 | --- | --- |
-| `Application` | App entry, login integration, notifications, MetricKit |
-| `MenuBar` | Status item, icon rendering, popover |
-| `Shell` | Window coordination, navigation, selection, toolbar and sidebar |
-| `DesignSystem` | Shared surfaces, controls, motion and radar primitives |
-| `Features/<feature>` | Feature-specific views and their local UI state |
+| `Application` | App entry, login item, notifications and their actions |
+| `MenuBar` | Status item and icon, status menu, the single main-menu definition, popover |
+| `Shell` | Console window and session: navigation and Back/Forward, selection, stops, toasts, toolbar, sidebar, Quick Stop, Settings window |
+| `DesignSystem` | Theme, shared surfaces and controls, layouts, tips, motion, shared row actions, the wait label |
+| `Features/<feature>` | Feature-specific views and their local UI state: Overview, Processes, Duplicates, Incidents, Rules, Interventions (the stop sheet), Thermals, Settings |
 
 | Core folder | Ownership |
 | --- | --- |
-| `Domain` | Process identities, measurements, signatures, families and shared values |
+| `Domain` | Process identities, measurements, sessions, signatures, families and shared values |
 | `Configuration` | User settings, performance policy and adaptive configuration |
-| `Monitoring` | Refresh lifecycle, worker orchestration and the observable facade |
-| `Sampling` | Native process/CPU/GPU sampling and sampling support |
-| `Thermals` | Hardware sensors and the separate app-activity projection |
-| `Intelligence` | Classification, family building, scoring, forecasts and patterns |
-| `Persistence` | SQLite connection, schema, persistence and query ownership |
+| `Monitoring` | Refresh loop and scheduling, the refresh worker and pipeline, stop-risk memo, the observable facade |
+| `Sampling` | Native process, CPU, GPU and listening-port sampling behind `ProcessProbeSource` |
+| `Thermals` | Hardware sensors, the sensor catalog and the separate app-activity projection |
+| `Intelligence` | Workload catalog, family building, trends, baselines, CPU behavior, forgotten-process evidence, pressure attribution, scoring and forecasts |
+| `Persistence` | SQLite connection, versioned schema, the store and its collaborators |
 | `Search` | Process search: text folding, query language, scoring and the per-identity search index |
 | `Presentation` | Immutable display models, snapshots, formatting and asynchronous queries |
 | `Diagnostics` | Logging, self-usage accounting and responsiveness instrumentation |
-| `Interventions` | Preview, authorization identity, execution, escalation and results |
+| `Interventions` | Stop plans, risk, protection, preview, execution, launchd, outcome verification and learning |
+| `Cleanup` | Staged file-cleanup core with no UI yet (see [Cleanup](Cleanup-2026-09-15.md)) |
 
-These remain the existing two production SwiftPM targets. Folder organization does not by itself enforce every dependency inside the core target. In particular, the existing family-to-intervention-plan API remains intact.
+These are the two production SwiftPM targets. Folder organization does not by itself enforce every dependency inside the core target.
 
 ## Guardrails
 
-`python3 Scripts/check_architecture.py` verifies declared source ownership, prevents SwiftUI/app imports in core, keeps SQLite access in Persistence, and enforces line budgets. New files have a 600-line ceiling. Existing larger files have explicit current-size ceilings in `Config/architecture.json`; those exceptions are visible debt, not permission to grow indefinitely. A deleted or moved exception must be updated rather than left silently stale.
+`python3 Scripts/check_architecture.py` enforces:
 
-Put new behavior in an existing responsibility or extract a coherent component. Avoid catch-all `Utils` files, parallel copies of application settings, and direct persistence or signal calls from a view. Prefer a pure value projection plus a narrow actor or service for asynchronous work. Keep measurement freshness separate from display invalidation, and keep process inspection separate from intervention approval.
+- **Ownership.** Every source file sits in a folder its target declares in `Config/architecture.json`.
+- **The core/UI boundary.** `GhostProcessSniperCore` never imports SwiftUI or the app.
+- **SQLite isolation.** SQLite calls live only in `Core/Persistence`.
+- **Line budgets.** New files have a 600-line ceiling. A larger legacy file has an explicit budget, and that budget must *equal* the file's current length: shrink the file and the check asks you to lower the budget (or to remove the entry once the file is at 600 lines or fewer), so budgets only ratchet down and any growth shows up as an `architecture.json` edit in review. A budget for a file that no longer exists fails too. Every source file is under 600 lines today; the only legacy budget left is the checks' `main.swift`.
+- **Test roots.** `test_roots` gives `Tests/GhostProcessSniperCoreTests` and `Checks/GhostProcessSniperCoreChecks` the same line budgets, without folder rules.
+- **No silent increases.** `--base <git-ref>` additionally fails when any budget is higher than in that ref (for example `--base origin/main`); it is skipped when git or the ref is unavailable.
 
-The large store, sampler, monitor, and intervention implementations remain candidates for subsequent, independently tested decomposition. This pass preserves their established behavior rather than claiming every large implementation was rewritten.
+Put new behavior in an existing responsibility or extract a coherent component. Avoid catch-all `Utils` files, parallel copies of application settings, and direct persistence or signal calls from a view. Prefer a pure value projection plus a narrow actor or service for asynchronous work. Keep measurement freshness separate from display invalidation, and keep process inspection separate from stop approval: anything that can stop a process goes through a previewed, identity-bound `KillPlan` and the user's confirmation.
+
+To change the database schema, append a `SQLiteMigration` to `RadarStoreSchema.migrations` with the next version and add a case to `MigrationTests`; never edit a version that has shipped.
+
+## Tests
+
+`Tests/GhostProcessSniperCoreTests` mirrors the core folders (`Configuration`, `Domain`, `Intelligence`, `Interventions`, `Monitoring`, `Performance`, `Persistence`, `Presentation`, `Search`, `Thermals`), with cross-cutting suites at its root. Tests use `@testable import GhostProcessSniperCore`; the app target has no unit tests and is covered by the macOS build.
+
+The fakes model cause and effect rather than returning scripted answers:
+
+- **`FakeProcessTable`** (`Interventions/Support/`) is both the kill engine's snapshot provider and its signaler. Its processes react to what the engine does — exit N ticks after a signal, ignore it, fork a child, respawn under a supervisor, refuse every signal with EPERM, quit on request like an app, hold signals while stopped until `SIGCONT`, linger as zombies until their parent exits, or follow their parent out. Each call to its `sleeper` advances one tick and moves its virtual `now`, which the fixtures pass to the engine as its clock, so grace waits run against the table instead of the wall clock. `KillEngineScenarioTests` shows the pattern; most intervention suites (force hold, tree sweep, launchd, outcome verification, protection, the target advisor) build on it, with `KillFixtures`, `LaunchdFixtures`, `PolicyFixture` and `FakeListeningPortProbe` beside it.
+- **`FakeProbeSource`** (`Monitoring/`) scripts the whole kernel side of `NativeProcessSampler` — process table, uptime clock, usage, paths, argv, sessions and ports — so sampler tests drive real ticks without touching the host.
+- **Fixtures** in `Support/`: `DevWorkstationFixture` is a deterministic developer Mac (editors with language servers, dev servers, a build, a test-worker pool, duplicate servers, databases, system daemons) whose `tick` advances time and grows families; `IntelligenceFixture` and `RefreshPerformanceFixture` build families and synthetic refreshes.
+- **Migration tests** (`Persistence/MigrationTests`) build a store at each older schema version — an unversioned file, then `migrate(migrations.filter { $0.version <= N })` — seed rows, open it with `RadarStore`, and check that rows survive and that an upgraded store ends with exactly the schema of a fresh one.
+- **Goldens.** `PipelineGoldenTests` pins digests of signature ids, membership and score-component text over the fixtures, so pipeline optimizations cannot silently change results.
+
+A few native smoke tests (a real shell tree forced by the kill engine, CPU-time conversion against the POSIX clock) run only on macOS. Ordinary tests make no tight timing claims: benchmarks are opt-in, and the few loose or release-only time budgets are listed in [Performance](Performance.md).
+
+`Checks/GhostProcessSniperCoreChecks` is an executable of hand-registered checks run by `swift run GhostProcessSniperCoreChecks` and by `Scripts/verify.sh`. Keep it green; change a check only when a behavior change intentionally alters its expectation.
+
+## Vendored packages
+
+`Packages/ThinkingOrbsKit` is the SwiftUI edition of the [Libraries.dev](https://libraries.dev) thinking orbs (MIT, see its `LICENSE`), vendored as a local SwiftPM package and linked only into the app target. It is pure SwiftUI (`Canvas` and `TimelineView`, no Metal) with no dependencies. The app uses it only for waits of two seconds or more — the stop sheet's clean-exit wait, the "Stop the extras" sheet while each copy waits out its grace (`DuplicateCullSheet`), and `RadarWaitLabel` — never for short waits, where an orb would read as a flicker. Its own tests run with `swift test --package-path Packages/ThinkingOrbsKit`. Keep local changes minimal and note them in its README.
 
 ## Build infrastructure
 
@@ -56,7 +84,7 @@ The large store, sampler, monitor, and intervention implementations remain candi
 
 Packaging stages, validates the plist, signs, and verifies the new bundle before replacing the old bundle. An unsuccessful replacement rolls back. A failure during rollback retains the previous bundle and prints its location instead of deleting it. No script silently force-kills the app. `restart` is explicit and uses a normal termination signal after the build succeeds.
 
-The regression tests under `Tests/InfrastructureTests` use temporary fixture bundles. They exercise failure before packaging, failure during replacement, a successful signed replacement, lock contention and release, and invalid command handling. Swift tests under `Monitoring` and `Thermals` cover settings cancellation and the app-activity projection. Existing tests and the core check executable remain part of verification.
+The regression tests under `Tests/InfrastructureTests` use temporary fixture bundles. They exercise failure before packaging, failure during replacement, a successful signed replacement, lock contention and release, and invalid command handling; `test_architecture.py` covers the architecture checker itself.
 
 ## Packaging and releases
 
@@ -76,31 +104,31 @@ Bundles are staged and signed in `$TMPDIR`, then moved into place. iCloud Drive 
 
 If a build fails with `module … is defined in both …` after the repository folder was moved or renamed, SwiftPM's module cache still points at the old path. Remove `.build` (it only contains build products) and build again.
 
-## Refresh projections
+## Stop strategy test bench
 
-The refresh path has independently testable, sample-local projections:
-
-- `Intelligence/DuplicateFamilyResolver.swift` indexes exact process identities once, then resolves duplicate ownership through that index. It supports overlapping families without counting repeated members twice. The index is discarded after each projection, so recycled PIDs and exited families cannot leave stale ownership behind.
-- `Monitoring/FamilySamplingDemand.swift` derives sampling priorities in one pass. A runtime family key requests the selected instance; a logical signature requests matching instances. The scheduler still owns cadence, pressure gates, and sampling budgets.
-- `Thermals/ThermalActivityAnalyzer.swift` projects the raw process batch into app activity. Filtered families supply optional inspector navigation but never decide which sampled apps can appear. `RefreshOutcome` carries the bounded evidence and precomputed sort orders to the observable monitor, including refreshes whose display revision is otherwise unchanged. Opening the thermal dashboard does not schedule a second projection task.
-
-`ThermalDiagnosis` is a pure explanation layer over thermal state, measurement freshness, and activity coverage. SwiftUI components render status, bounded app rows, cached app icons, and an inspection sheet. Hardware readings, activity estimates, and process-stop authorization remain separate. Icon caching is limited to 96 entries; per-app inspection retains at most six process records while aggregate totals include every usable sampled process.
-
-`Sampling/ProcessProbeReader.swift` owns native BSD and task-info probes. `RichProbeSelector.swift` rotates bounded discovery cohorts so stable process-list positions and developer hints cannot permanently starve ordinary apps of activity measurements. Explicit focus/alert demand has priority, deadlines and pressure gates remain in force, and the sampler divides the total rich-read budget across workers. Failed enrichment retains a basic process record.
-
-Duplicate ownership updates retain the cluster's existing immutable measurement projection. They do not sort its members or rebuild its command/path hints. Family enrichment also retains its existing ordering because ownership resolution changes none of the sort keys.
-
-`DuplicateFamilyResolverTests` compares the indexed result against the previous algorithm, including overlap, missing membership, repeated identities, and PID reuse. `FamilySamplingDemandTests` covers exact selection, logical signatures, empty snapshots, and the actual scheduler plan. These checks are included in `Scripts/verify.sh`.
-
-For paired release timings, create an output directory and run:
+`Scripts/dev-hog-fixture.sh` starts disposable processes that exercise each stop strategy. Every fixture has `ghost-fixture:<kind>` in its argv and leads its own process group; `stop` signals only groups that still carry the marker, sends SIGTERM, waits up to 3 s, then sends SIGKILL.
 
 ```sh
-mkdir -p .build/performance-audit
-RADAR_INDEX_BENCHMARK_REPORT="$PWD/.build/performance-audit/duplicate-index.json" \
-  swift test -c release --filter DuplicateIndexPerformanceTests
+Scripts/dev-hog-fixture.sh start                    # every kind
+Scripts/dev-hog-fixture.sh start dev-server slow-db # just these
+Scripts/dev-hog-fixture.sh status
+Scripts/dev-hog-fixture.sh stop
 ```
 
-This benchmark alternates the old and indexed implementations on the same synthetic input, verifies identical results, and discards two warm-up rounds. It measures duplicate resolution, not full application frame rate. The legacy implementation exists only in test support.
+`start` refuses while fixtures from an earlier start are still running. The dev server listens on `127.0.0.1:${GHOST_FIXTURE_PORT:-51730}`, away from Vite's usual 5173.
+
+Manual checklist on macOS. Open the family, preview the stop, run it, then read the result.
+
+| Kind | What it does | Expect in the stop sheet and result |
+| --- | --- | --- |
+| `leak` | Touches 16 MiB every 0.25 s, plateaus at 1.5 GiB | A growing Python family; SIGTERM ends it in the first phase and the memory is freed |
+| `cpu` | Burns one core | Shows as a heat leader on the Overview; SIGTERM ends it in the first phase |
+| `ignore-term` | Ignores SIGTERM and SIGINT, burns one core | Every polite step is ignored; the result shows the same-identity survivor frozen and forced with SIGKILL |
+| `dev-server` | argv0 `vite`, serves the port, exits 0 on SIGINT, ignores SIGTERM | "Interrupts the dev server like Ctrl-C and frees port 51730"; the result ends after SIGINT with the port chip "51730 free" |
+| `supervisor` | A "nodemon" parent that restarts its `node` child within 1 s | Stop only the `node` child (Stop This Process… on the Processes tab): "Restarts on your next save", and the result notes that nodemon starts it again on the next save. The fixture restarts at once, like pm2 rather than nodemon, and Ghost does not probe for a restart after a file-watcher stop. Stopping the whole family takes the supervisor down too |
+| `slow-db` | argv0 `postgres`, exits 4 s after SIGTERM | Careful shutdown: "Database writes", 12 s to flush and Never force-stop on. Ghost sends Postgres's fast-shutdown SIGINT to the root alone; this fixture only delays SIGTERM, so it exits at once on SIGINT |
+
+Run `stop` afterwards; it also cleans up anything a test left behind.
 
 ## Scope of verification
 

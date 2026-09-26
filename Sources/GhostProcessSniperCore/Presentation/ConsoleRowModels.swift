@@ -12,12 +12,29 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
     public let occurrenceText: String
     public let timeRangeText: String
     public let reasons: [String]
+    public let isActive: Bool
+    /// Sort keys for table columns.
+    public let score: Double
+    public let memoryBytes: UInt64
+    public let occurrenceCount: Int
+    /// The concrete family key of a running family with this incident's
+    /// signature; nil once it has exited.
+    public let liveFamilyKey: String?
 
     public init(incident: RadarIncident) {
+        self.init(incident: incident, liveFamilyKey: nil)
+    }
+
+    public init(incident: RadarIncident, liveFamilyKey: String?) {
         id = incident.id
         familyName = incident.familyName
-        stateText = incident.resolvedAt == nil ? "Active" : "Resolved"
+        isActive = incident.resolvedAt == nil
+        stateText = isActive ? "Active" : "Resolved"
         level = incident.level
+        score = incident.maxScore
+        memoryBytes = incident.memoryBytes
+        occurrenceCount = incident.occurrenceCount
+        self.liveFamilyKey = liveFamilyKey
         scoreText = "\(Int(incident.maxScore.rounded()))"
         memoryText = RadarFormat.bytes(incident.memoryBytes)
         cpuText = RadarFormat.percent(incident.cpuPercent)
@@ -29,10 +46,21 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
 }
 
 public struct RuleRowViewModel: Identifiable, Equatable, Sendable {
+    /// Which Rules section a rule belongs to: the user's own snoozes and
+    /// ignores come first so undoing one is easy to find.
+    public enum Kind: Equatable, Sendable {
+        case snooze
+        case ignore
+        case custom
+        case builtIn
+    }
+
     public let id: UUID
     public let name: String
     public let isEnabled: Bool
     public let isBuiltIn: Bool
+    public let kind: Kind
+    public let expiresAt: Date?
     public let actionText: String
     public let matchText: String
     public let matchCount: Int
@@ -42,6 +70,20 @@ public struct RuleRowViewModel: Identifiable, Equatable, Sendable {
         name = rule.name
         isEnabled = rule.isEnabled
         isBuiltIn = rule.isBuiltIn
+        // Only a family's own snooze or ignore can be undone by deleting it;
+        // a composed rule that snoozes by command stays a toggleable custom rule.
+        kind = if rule.isBuiltIn {
+            .builtIn
+        } else if rule.match.signatureID == nil {
+            .custom
+        } else {
+            switch rule.action {
+            case .snooze: .snooze
+            case .ignore: .ignore
+            default: .custom
+            }
+        }
+        expiresAt = rule.expiresAt
         actionText = rule.isBuiltIn ? "Built-in" : rule.action.label
         self.matchCount = matchCount
 
@@ -80,7 +122,6 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
     public let storeBacklogText: String
     public let storeCoalescingText: String
     public let pressureText: String
-    public let diagnosticsReport: String
 
     public static let empty = EngineDiagnosticsViewModel(
         statusLine: "Warming up",
@@ -95,9 +136,8 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         smoothnessText: "0 ms publish / 0 coalesced / 0 UI hits",
         expensiveCallText: "0",
         storeBacklogText: "0",
-        storeCoalescingText: "0/0 forecasts, 0 rec skipped",
-        pressureText: "Nominal",
-        diagnosticsReport: "Ghost Process Sniper Diagnostics\nWarming up."
+        storeCoalescingText: "0 baseline writes, 0 deferred, 0 flushes skipped",
+        pressureText: "Nominal"
     )
 
     public init(
@@ -114,8 +154,7 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         expensiveCallText: String,
         storeBacklogText: String,
         storeCoalescingText: String,
-        pressureText: String,
-        diagnosticsReport: String
+        pressureText: String
     ) {
         self.statusLine = statusLine
         self.refreshCostText = refreshCostText
@@ -131,7 +170,6 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         self.storeBacklogText = storeBacklogText
         self.storeCoalescingText = storeCoalescingText
         self.pressureText = pressureText
-        self.diagnosticsReport = diagnosticsReport
     }
 
     public init(
@@ -142,11 +180,14 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         summary: RadarSummary,
         generatedAt: Date
     ) {
-        statusLine = storeError ?? health.errorMessage ?? "\(summary.statusText) - \(health.processCount) processes sampled"
+        // The refresh's own store error, else the store's open or corruption
+        // error, like ProcessMonitor.storeError: a failing store never reads as fine.
+        statusLine = storeError ?? storeHealth.errorMessage ?? health.errorMessage
+            ?? "\(summary.statusText) - \(health.processCount) processes sampled"
         // Bucketed to 5 ms: the exact per-tick jitter (9 → 12 → 8 ms) is
         // noise, and every distinct string invalidates console layout.
-        refreshCostText = "\(max(5, Int((metrics.lastRefresh.totalMilliseconds / 5).rounded() * 5))) ms"
-        averageCostText = "\(Int(metrics.averageRefreshMilliseconds.rounded())) ms"
+        refreshCostText = "\(max(5, Self.fiveMillisecondBucket(metrics.lastRefresh.totalMilliseconds))) ms"
+        averageCostText = "\(max(5, Self.fiveMillisecondBucket(metrics.averageRefreshMilliseconds))) ms"
         nextRefreshText = String(format: "%.1fs", metrics.nextRefreshInterval)
         forensicsText = "\(metrics.forensicsRefreshCount) refreshed / \(metrics.forensicsDeferredCount) deferred"
         scannerLaneText = ScanLane.allCases
@@ -157,36 +198,18 @@ public struct EngineDiagnosticsViewModel: Equatable, Sendable {
         deadlineText = metrics.scannerHealth.didHitDeadline ? "Deadline hit" : "Within budget"
         cacheText = "\(metrics.commandCacheHitCount) command, \(metrics.reusedProcessRecordCount) reused, \(metrics.scannerHealth.forensicsNegativeCacheHitCount) negative"
         let ledger = metrics.scannerHealth.costLedger
-        scannerCostText = "\(ledger.cheapProbeCount) cheap / \(ledger.richMetricCount) rich / \(ledger.taskInfoReadCount) task-info / \(ledger.reusedRecordCount) reused / \(ledger.workerCount) workers / \(ledger.scannerTaskCount) tasks / \(ledger.pidBufferCopyCount) pid copies / \(ledger.skippedCount) skipped / \(metrics.hardwareOffenderCount) hardware"
-        let hitchText = metrics.hitchCount > 0 ? " / \(metrics.hitchCount) hitches, worst \(Int(metrics.worstHitchMilliseconds.rounded())) ms \(metrics.latestSpikePhase)" : ""
-        smoothnessText = "\(Int(metrics.mainActorPublishMilliseconds.rounded())) ms publish / \(metrics.coalescedRefreshCount) coalesced / \(metrics.diagnosticsOnlyPublishCount) diag-only / \(metrics.contentPublishSkippedCount) content skips / \(metrics.uiCacheHitCount) UI hits / \(metrics.uiPublishSkippedCount) UI skips\(hitchText)"
+        scannerCostText = "\(ledger.cheapProbeCount) cheap / \(ledger.richMetricCount) rich / \(ledger.taskInfoReadCount) task-info / \(ledger.reusedRecordCount) reused / \(ledger.scannerTaskCount) tasks / \(ledger.skippedCount) skipped / \(metrics.hardwareOffenderCount) hardware / \(ledger.usageReadCount) measured / \(ledger.usageFailedCount) unmeasured / \(ledger.bsdDeniedCount) hidden (other users) / \(ledger.portCensusCount) port census"
+        let hitchText = metrics.hitchCount > 0 ? " / \(metrics.hitchCount) hitches, worst \(Self.fiveMillisecondBucket(metrics.worstHitchMilliseconds)) ms \(metrics.latestSpikePhase)" : ""
+        smoothnessText = "\(Self.fiveMillisecondBucket(metrics.mainActorPublishMilliseconds)) ms publish / \(metrics.coalescedRefreshCount) coalesced / \(metrics.diagnosticsOnlyPublishCount) diag-only / \(metrics.contentPublishSkippedCount) content skips / \(metrics.uiCacheHitCount) UI hits / \(metrics.uiPublishSkippedCount) UI skips\(hitchText)"
         expensiveCallText = "\(metrics.scannerHealth.expensiveCallCount)"
         storeBacklogText = "\(storeHealth.backlogCount + storeHealth.pendingActionCount)"
-        storeCoalescingText = "\(storeHealth.coalescingStats.forecastWrites)/\(storeHealth.coalescingStats.forecastCandidates) forecasts, \(storeHealth.coalescingStats.recommendationSkippedCount) rec skipped, \(storeHealth.rulesCacheHitCount) rule hits"
+        let writes = storeHealth.writeStats
+        storeCoalescingText = "\(writes.baselineWrites) baseline writes, \(writes.baselinesDeferred) deferred, \(writes.transactionsSkipped) flushes skipped, \(storeHealth.rulesCacheHitCount) rule hits"
         pressureText = metrics.pressureLevel.rawValue.capitalized
-        let optimization = RadarOptimizationReport(scannerHealth: metrics.scannerHealth, metrics: metrics)
-        diagnosticsReport = [
-            "Ghost Process Sniper Diagnostics",
-            "Generated: \(generatedAt.formatted())",
-            "State: \(summary.statusText)",
-            "Families: \(summary.familyCount), hot: \(summary.hotCount), leaks: \(summary.leakingCount)",
-            "Duplicates: \(metrics.duplicateClusterCount) clusters, \(metrics.promotedDuplicateCandidateCount) promoted candidates, detector \(Int(metrics.duplicateDetectorMilliseconds.rounded()))ms",
-            "Hardware offenders: \(metrics.hardwareOffenderCount), detector \(Int(metrics.hardwareDetectorMilliseconds.rounded()))ms",
-            "Processes: \(health.processCount)",
-            "Refresh: \(refreshCostText), average: \(averageCostText), next: \(nextRefreshText)",
-            "Forensics: \(forensicsText)",
-            "Scanner: \(deadlineText), lanes: \(scannerLaneText)",
-            "Probe cost: \(scannerCostText)",
-            "Smoothness: \(smoothnessText), in flight: \(metrics.refreshInFlight), skipped optional: \(metrics.skippedOptionalWorkCount), status update: \(Int(metrics.statusUpdateMilliseconds.rounded())) ms, content rev: \(metrics.contentRevision.rawValue)",
-            "Scanner tasks: \(metrics.scannerTaskCount), tiny sequential queues: \(metrics.tinyQueueSequentialCount), task-info reads: \(metrics.taskInfoReadCount), reused records: \(metrics.reusedProcessRecordCount), scratch reuse: \(metrics.samplerAllocationReuseCount)",
-            "Recent spikes: \(metrics.smoothnessReport.recentSpikes.isEmpty ? "none" : metrics.smoothnessReport.recentSpikes.joined(separator: " | "))",
-            "Cache: \(cacheText), expensive calls: \(expensiveCallText)",
-            optimization.text,
-            "Store backlog: \(storeBacklogText)",
-            "Store coalescing: \(storeCoalescingText)",
-            "Pressure: \(pressureText)",
-            "Health: \(statusLine)"
-        ].joined(separator: "\n")
+    }
+
+    static func fiveMillisecondBucket(_ milliseconds: Double) -> Int {
+        Int((milliseconds / 5).rounded() * 5)
     }
 }
 
@@ -197,41 +220,27 @@ public struct RuleMatchPreview: Identifiable, Equatable, Sendable {
     public let matchedFamilyKeys: [String]
     public let matchedFamilyNames: [String]
 
-    public init(rule: RadarRule, families: [ProcessFamily]) {
+    public init(rule: RadarRule, families: [ProcessFamily], now: Date = Date()) {
         id = rule.id
         ruleName = rule.name
-        let matched = families.filter { RadarRuleMatcher.matches(rule: rule, family: $0) }
+        let engine = RadarRuleEngine()
+        let matched = families.filter { engine.matches(rule: rule, family: $0, now: now) }
         matchCount = matched.count
         matchedFamilyKeys = matched.map(\.familyKey)
         matchedFamilyNames = matched.map(\.displayName)
     }
 }
 
-private enum RadarRuleMatcher {
-    static func matches(rule: RadarRule, family: ProcessFamily) -> Bool {
-        guard rule.isEnabled else {
-            return false
+extension RadarIncidentSort {
+    /// The sort an Incidents table column header selects; anything else
+    /// (a cleared header) is most recent first.
+    public init(incidentColumn keyPath: PartialKeyPath<IncidentRowViewModel>?) {
+        self = switch keyPath {
+        case \IncidentRowViewModel.familyName: .name
+        case \IncidentRowViewModel.score: .severity
+        case \IncidentRowViewModel.memoryBytes: .memory
+        case \IncidentRowViewModel.occurrenceCount: .recurrence
+        default: .recent
         }
-        if let signatureID = rule.match.signatureID, signatureID != family.signature.id {
-            return false
-        }
-        let command = family.root.commandLine.lowercased()
-        let path = family.root.executablePath.lowercased()
-        if let contains = rule.match.commandContains?.lowercased(), !command.contains(contains) {
-            return false
-        }
-        if let contains = rule.match.pathContains?.lowercased(), !path.contains(contains) {
-            return false
-        }
-        if family.score.level < rule.match.minimumLevel || family.score.value < rule.match.minimumScore {
-            return false
-        }
-        if let leak = rule.match.minimumLeakVelocity, family.trend.memoryVelocityMegabytesPerMinute < leak {
-            return false
-        }
-        if let count = rule.match.minimumIncidentCount, family.recentIncidentCount < count {
-            return false
-        }
-        return true
     }
 }

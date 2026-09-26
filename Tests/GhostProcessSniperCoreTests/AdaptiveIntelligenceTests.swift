@@ -79,56 +79,27 @@ final class AdaptiveIntelligenceTests: XCTestCase {
 
     func testAdaptivePerformanceUsesIntentAndPressureInsteadOfManualKnobs() {
         var settings = ThresholdSettings.smart
+        func mode(_ level: GhostLevel, visible: Bool, pressure: SystemPressureLevel = .nominal) -> RadarPerformanceMode {
+            settings.resolvedPerformanceMode(RadarSchedulingContext(
+                uiVisible: visible, thermalPressure: pressure, summaryLevel: level))
+        }
 
-        XCTAssertEqual(
-            settings.resolvedPerformanceMode(
-                summaryLevel: .quiet,
-                popoverVisible: false,
-                systemPressure: .nominal
-            ),
-            .balanced
-        )
-        XCTAssertEqual(
-            settings.resolvedPerformanceMode(
-                summaryLevel: .quiet,
-                popoverVisible: true,
-                systemPressure: .nominal
-            ),
-            .realtime
-        )
-        XCTAssertEqual(
-            settings.resolvedPerformanceMode(
-                summaryLevel: .quiet,
-                popoverVisible: false,
-                systemPressure: .serious
-            ),
-            .batterySaver
-        )
-        XCTAssertEqual(
-            settings.resolvedPerformanceMode(
-                summaryLevel: .hot,
-                popoverVisible: false,
-                systemPressure: .nominal
-            ),
-            .realtime
-        )
+        XCTAssertEqual(mode(.quiet, visible: false), .balanced)
+        XCTAssertEqual(mode(.quiet, visible: true), .realtime)
+        XCTAssertEqual(mode(.quiet, visible: false, pressure: .serious), .batterySaver)
+        // Nobody is watching, so a hot family alone no longer buys realtime budgets.
+        XCTAssertEqual(mode(.hot, visible: false), .balanced)
 
         settings.adaptivePerformance = false
         settings.performanceMode = .batterySaver
-        XCTAssertEqual(
-            settings.resolvedPerformanceMode(
-                summaryLevel: .critical,
-                popoverVisible: true,
-                systemPressure: .nominal
-            ),
-            .batterySaver
-        )
+        XCTAssertEqual(mode(.critical, visible: true), .batterySaver)
     }
 
     func testExtremeEvidenceScoreDoesNotAutomaticallyMeanCriticalHeat() {
         let heat = GhostHeatModel.initial(
             memoryRatio: 1.7,
             cpuRatio: 0.15,
+            cpuThreshold: 90,
             gpuRatio: 0,
             leakRatio: 0,
             trend: TrendMetrics(
@@ -171,6 +142,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
         let heat = GhostHeatModel.initial(
             memoryRatio: 1.25,
             cpuRatio: 1.55,
+            cpuThreshold: 80,
             gpuRatio: 0.2,
             leakRatio: 1.8,
             trend: TrendMetrics(
@@ -191,7 +163,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
     }
 
     @MainActor
-    func testIdenticalIngestKeepsContentRevisionStable() {
+    func testIdenticalIngestKeepsContentRevisionStable() async {
         var settings = ThresholdSettings.aggressive
         settings.memoryBytes = 100_000_000
         let sampledAt = Date(timeIntervalSince1970: 3_080)
@@ -207,10 +179,10 @@ final class AdaptiveIntelligenceTests: XCTestCase {
             store: nil
         )
 
-        monitor.ingest([process], now: sampledAt)
+        await monitor.ingest([process], now: sampledAt)
         let firstRevision = monitor.consoleSnapshot.contentRevision
         let firstHeat = monitor.families.first?.score.heat
-        monitor.ingest([process], now: sampledAt.addingTimeInterval(1))
+        await monitor.ingest([process], now: sampledAt.addingTimeInterval(1))
         let secondRevision = monitor.consoleSnapshot.contentRevision
         let secondHeat = monitor.families.first?.score.heat
 
@@ -361,7 +333,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
         XCTAssertEqual(legacy.headline, unlearned.headline)
 
         let trustedBaseline = FamilyBaseline(
-            signature: family.signature, sampleCount: 4, meanMemoryBytes: Double(128 * mebibyte),
+            signature: family.signature, sampleCount: 40, meanMemoryBytes: Double(128 * mebibyte),
             peakMemoryBytes: 128 * mebibyte, meanCPUPercent: 4, peakCPUPercent: 4,
             meanLeakVelocityMegabytesPerMinute: 0, incidentCount: 0,
             firstSeenAt: now, lastSeenAt: now
@@ -525,7 +497,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
             lastScoredAt: now
         )
         let triage = [FamilyTriageViewModel(family: family)]
-        let panel = FamilyDetailPanelModel(family: family, previous: nil)
+        let panel = FamilyDetailPanelModel(family: family)
         let summary = RadarSummary(
             statusText: "1 hot",
             level: .hot,
@@ -552,7 +524,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
         XCTAssertEqual(compact.intelligenceBrief.confidenceText, "Building history")
         XCTAssertTrue(compact.intelligenceBrief.title.contains("node"))
         XCTAssertFalse(compact.intelligenceBrief.confidenceText.contains("Heat"))
-        XCTAssertTrue(compact.intelligenceBrief.recommendation.contains("Kill Preview"))
+        XCTAssertTrue(compact.intelligenceBrief.recommendation.contains("use Stop…"))
     }
 
     private func makeNodeProcess(

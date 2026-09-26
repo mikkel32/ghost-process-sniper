@@ -1,5 +1,4 @@
 import Foundation
-import IOKit
 
 public struct ThermalSnapshot: Equatable, Sendable {
     public let sampledAt: Date
@@ -9,12 +8,21 @@ public struct ThermalSnapshot: Equatable, Sendable {
     public let sensorKeys: [String]
     public let systemState: String
     public let unavailableReason: String?
+    /// The sensor that produced the reported maximum; it rotates between cores under load.
     public let cpuSensorKey: String?
     public let gpuSensorKey: String?
+    /// Identifies the set of sensors behind the maximum, so a trend survives the
+    /// hottest core moving and resets only when the readable set itself changes.
+    public let cpuSeriesID: String?
+    public let gpuSeriesID: String?
+    /// Where the sensor key map came from; nil when this Mac has none.
+    public let mappingSource: SMCSensorMapping.Source?
 
     public init(sampledAt: Date, cpuCelsius: Double?, gpuCelsius: Double?, sensorCount: Int,
                 sensorKeys: [String], systemState: String, unavailableReason: String?,
-                cpuSensorKey: String? = nil, gpuSensorKey: String? = nil) {
+                cpuSensorKey: String? = nil, gpuSensorKey: String? = nil,
+                cpuSeriesID: String? = nil, gpuSeriesID: String? = nil,
+                mappingSource: SMCSensorMapping.Source? = nil) {
         self.sampledAt = sampledAt
         self.cpuCelsius = cpuCelsius
         self.gpuCelsius = gpuCelsius
@@ -24,7 +32,25 @@ public struct ThermalSnapshot: Equatable, Sendable {
         self.unavailableReason = unavailableReason
         self.cpuSensorKey = cpuSensorKey
         self.gpuSensorKey = gpuSensorKey
+        self.cpuSeriesID = cpuSeriesID
+        self.gpuSeriesID = gpuSeriesID
+        self.mappingSource = mappingSource
     }
+
+    /// A caveat for key maps not yet confirmed on real hardware of this chip family.
+    public var mappingNote: String? {
+        switch mappingSource {
+        case .catalog: "Sensor map from the chip catalog; not yet verified on this model"
+        case .discovered: "Sensors found automatically on this Mac; readings are best effort"
+        case .verified, nil: nil
+        }
+    }
+
+    /// After this instant the readings no longer count as current.
+    public var expiresAt: Date { sampledAt.addingTimeInterval(15) }
+
+    var cpuSeries: String? { cpuSeriesID ?? cpuSensorKey }
+    var gpuSeries: String? { gpuSeriesID ?? gpuSensorKey }
 
     public static let unknown = ThermalSnapshot(sampledAt: .distantPast, cpuCelsius: nil, gpuCelsius: nil, sensorCount: 0, sensorKeys: [], systemState: "Waiting", unavailableReason: "Waiting for hardware sensors")
 
@@ -68,56 +94,40 @@ enum SMCTemperatureCodec {
 /// The SMC wire ABI and model-specific key map are not a public Apple API;
 /// unsupported hardware fails to an explicit unavailable state.
 public actor ThermalSampler {
-    private var connection: io_connect_t = 0
+    private let brand: String
+    private let makeTransport: @Sendable () -> (any SMCTransport)?
+    private var reader: SMCKeyReader?
+    private var mapping: SMCSensorMapping?
+    private var discoveryAttempted = false
     private var lastAttempt = Date.distantPast
     private var snapshot = ThermalSnapshot.unknown
-    private var metadata: [String: (size: Int, type: String)] = [:]
-    private var unsupportedKeys: Set<String> = []
-    private let cpuKeys: [String]
-    private let gpuKeys: [String]
 
     public init() {
-        var size = 0
-        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
-        var bytes = [CChar](repeating: 0, count: max(size, 1))
-        sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0)
-        let brand = String(decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        if brand.contains("Apple M1") {
-            cpuKeys = ["Tp09", "Tp0T", "Tp01", "Tp05", "Tp0D", "Tp0H", "Tp0L", "Tp0P", "Tp0X", "Tp0b"]
-            gpuKeys = ["Tg05", "Tg0D", "Tg0L", "Tg0T"]
-        } else if brand.contains("Apple M2") {
-            cpuKeys = ["Tp1h", "Tp1t", "Tp1p", "Tp1l", "Tp01", "Tp05", "Tp09", "Tp0D", "Tp0X", "Tp0b", "Tp0f", "Tp0j"]
-            gpuKeys = ["Tg0f", "Tg0j"]
-        } else if brand.contains("Intel") {
-            cpuKeys = ["TC0D", "TC0P"]
-            gpuKeys = ["TG0D", "TG0P"]
-        } else {
-            // A key reused on another chip can represent a different sensor.
-            cpuKeys = []
-            gpuKeys = []
-        }
+        self.init(brand: Self.processorBrand(), makeTransport: { IOKitSMCTransport.open() })
     }
 
-    deinit {
-        if connection != 0 { IOServiceClose(connection) }
+    init(brand: String, makeTransport: @escaping @Sendable () -> (any SMCTransport)?) {
+        self.brand = brand
+        self.makeTransport = makeTransport
+        mapping = SMCSensorCatalog.mapping(forBrand: brand)
     }
 
     public func sample(now: Date = Date()) -> ThermalSnapshot {
         let elapsed = now.timeIntervalSince(lastAttempt)
         if elapsed >= 0 && elapsed < 3 { return snapshot }
         lastAttempt = now
-        if connection == 0 { openConnection() }
-        let cpu = readings(cpuKeys)
-        let gpu = readings(gpuKeys)
-        let keys = (cpu + gpu).map(\.0)
-        let state: String
-        switch ProcessInfo.processInfo.thermalState {
-        case .nominal: state = "Nominal"
-        case .fair: state = "Elevated"
-        case .serious: state = "Serious"
-        case .critical: state = "Critical"
-        @unknown default: state = "Unknown"
+        let isAppleSilicon = SMCSensorCatalog.generation(fromBrand: brand) != nil
+        if reader == nil, mapping != nil || isAppleSilicon, let transport = makeTransport() {
+            reader = SMCKeyReader(transport: transport)
         }
+        if mapping == nil, isAppleSilicon, !discoveryAttempted, reader != nil {
+            // Enumerating the SMC costs a few thousand calls, so it runs once per launch.
+            discoveryAttempted = true
+            mapping = reader?.discoverMapping()
+        }
+        let cpu = readings(mapping?.cpuKeys ?? [])
+        let gpu = readings(mapping?.gpuKeys ?? [])
+        let keys = (cpu + gpu).map(\.0)
         let hottestCPU = cpu.max { $0.1 < $1.1 }
         let hottestGPU = gpu.max { $0.1 < $1.1 }
         snapshot = ThermalSnapshot(
@@ -126,59 +136,37 @@ public actor ThermalSampler {
             gpuCelsius: hottestGPU?.1,
             sensorCount: keys.count,
             sensorKeys: keys,
-            systemState: state,
-            unavailableReason: keys.isEmpty ? (cpuKeys.isEmpty ? "Sensor mapping is not verified for this Mac" : "Hardware sensors could not be read") : nil,
+            systemState: ThermalPressureReading.current(at: now).systemStateLabel,
+            unavailableReason: keys.isEmpty ? unavailableReason(isAppleSilicon: isAppleSilicon) : nil,
             cpuSensorKey: hottestCPU?.0,
-            gpuSensorKey: hottestGPU?.0
+            gpuSensorKey: hottestGPU?.0,
+            cpuSeriesID: Self.seriesID("cpu", cpu),
+            gpuSeriesID: Self.seriesID("gpu", gpu),
+            mappingSource: mapping?.source
         )
         return snapshot
     }
 
-    private func openConnection() {
-        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
-        guard service != 0 else { return }
-        defer { IOObjectRelease(service) }
-        if IOServiceOpen(service, mach_task_self_, 0, &connection) != kIOReturnSuccess { connection = 0 }
+    private func unavailableReason(isAppleSilicon: Bool) -> String {
+        if mapping != nil || (isAppleSilicon && reader == nil) { return "Hardware sensors could not be read" }
+        return discoveryAttempted ? "No readable temperature sensors were found on this Mac"
+            : "Sensor mapping is not verified for this Mac"
     }
 
     private func readings(_ keys: [String]) -> [(String, Double)] {
-        guard connection != 0 else { return [] }
-        return keys.compactMap { key in readTemperature(key).map { (key, $0) } }
+        guard reader != nil else { return [] }
+        return keys.compactMap { key in reader?.temperature(key).map { (key, $0) } }
     }
 
-    private func readTemperature(_ key: String) -> Double? {
-        guard !unsupportedKeys.contains(key) else { return nil }
-        if metadata[key] == nil {
-            guard let info = transact(key: key, command: 9, size: 0) else { return nil }
-            let size = Int(SMCTemperatureCodec.word(info, at: 28))
-            let code = SMCTemperatureCodec.word(info, at: 32)
-            let typeBytes = (0..<4).map { UInt8(truncatingIfNeeded: code >> ((3 - $0) * 8)) }
-            let type = String(decoding: typeBytes, as: UTF8.self)
-            guard (type == "flt " && size == 4) || (type == "sp78" && size == 2) else {
-                unsupportedKeys.insert(key)
-                return nil
-            }
-            metadata[key] = (size, type)
-        }
-        guard let info = metadata[key], let output = transact(key: key, command: 5, size: info.size) else { return nil }
-        return SMCTemperatureCodec.decode(type: info.type, bytes: Array(output[48..<(48 + info.size)]))
+    private static func seriesID(_ component: String, _ readings: [(String, Double)]) -> String? {
+        readings.isEmpty ? nil : component + ":" + readings.map(\.0).sorted().joined(separator: ",")
     }
 
-    private func transact(key: String, command: UInt8, size: Int) -> [UInt8]? {
-        guard key.utf8.count == 4, command == 5 || command == 9 else { return nil }
-        // SMCKeyData ABI: key=0, keyInfo=28, result=40, data8=42, bytes=48.
-        var input = [UInt8](repeating: 0, count: 80)
-        var output = input
-        SMCTemperatureCodec.put(SMCTemperatureCodec.fourCC(key), into: &input, at: 0)
-        SMCTemperatureCodec.put(UInt32(size), into: &input, at: 28)
-        input[42] = command
-        var outputSize = 80
-        let result = input.withUnsafeBytes { source in
-            output.withUnsafeMutableBytes { destination in
-                IOConnectCallStructMethod(connection, 2, source.baseAddress, 80, destination.baseAddress, &outputSize)
-            }
-        }
-        guard result == kIOReturnSuccess, outputSize == 80, output[40] == 0 else { return nil }
-        return output
+    private static func processorBrand() -> String {
+        var size = 0
+        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
+        var bytes = [CChar](repeating: 0, count: max(size, 1))
+        sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0)
+        return String(decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 }

@@ -7,12 +7,54 @@ public struct FamilyMetricCard: Identifiable, Equatable, Sendable {
     public let value: String
     public let systemImage: String
     public let level: GhostLevel
+    /// Where the Overview card leads; nil for cards that only display a value.
+    public let destination: OverviewMetricDestination?
+    public let actionTitle: String?
 
-    public init(title: String, value: String, systemImage: String, level: GhostLevel = .quiet) {
+    public init(
+        title: String,
+        value: String,
+        systemImage: String,
+        level: GhostLevel = .quiet,
+        destination: OverviewMetricDestination? = nil,
+        actionTitle: String? = nil
+    ) {
         self.title = title
         self.value = value
         self.systemImage = systemImage
         self.level = level
+        self.destination = destination
+        self.actionTitle = actionTitle
+    }
+}
+
+public enum OverviewMetricDestination: Sendable, Equatable {
+    case families, attention, leaking, duplicates, memory
+}
+
+public struct FamilyForensicsSummary: Equatable, Sendable {
+    public let currentDirectory: String
+    public let rootDirectory: String
+    public let openFileText: String
+    public let socketText: String
+    public let portsText: String
+    public let freshnessText: String
+    public let isPartial: Bool
+    public let notes: [String]
+
+    public init(family: ProcessFamily) {
+        currentDirectory = family.forensics.currentDirectory ?? "unavailable"
+        rootDirectory = family.forensics.rootDirectory ?? "unavailable"
+        openFileText = family.forensics.openFileCount.map { "\($0)" } ?? "locked"
+        socketText = family.forensics.socketCount.map { "\($0)" } ?? "locked"
+        portsText = family.forensics.listeningPorts.isEmpty ? "none" : family.forensics.listeningPorts.map(String.init).joined(separator: ", ")
+        freshnessText = Self.freshnessText(family.forensicsFreshness)
+        isPartial = family.forensics.isPartial
+        notes = family.forensics.notes
+    }
+
+    public static func freshnessText(_ date: Date?) -> String {
+        date?.formatted(date: .omitted, time: .standard) ?? "deferred"
     }
 }
 
@@ -84,16 +126,47 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
     public let trendVelocityMegabytesPerMinute: Double
     public let memoryPattern: MemoryPatternAnalysis
     public let verdict: FamilyVerdict
+    public let brief: FamilyDecisionBrief
+    public let processTree: [FamilyProcessTreeRow]
     public let forecastETASeconds: TimeInterval?
     public let scoreValue: Double
     public let isKillable: Bool
     public let hasOwnedTargets: Bool
     public let protectedPIDs: [Int32]
     public let lastScoredText: String
+    /// What stopping this family would do. Nil when the panel was built
+    /// without a process sample, which the supervisor lookup needs.
+    public let stopRisk: KillRiskAssessment?
+    /// Why the family's root can never be stopped, such as Ghost running
+    /// inside it. Looked up from the same sample as `stopRisk`, and only
+    /// meaningful when that is set.
+    public let stopBlockedReason: String?
+    /// Identifies the stop set `stopRisk` assessed, the same way the
+    /// monitor's memo does, so a panel reuses it only while that set is
+    /// unchanged. Nil when the panel has no assessment.
+    let workloadKey: Int?
 
+    /// Panels are stateless, so a panel built for one refresh can be reused
+    /// by any later one with the same content.
     public init(
         family: ProcessFamily,
-        previous: FamilyDetailPanelModel?,
+        sampleIndex: KillSampleIndex? = nil,
+        classifier: DevProcessClassifier = DevProcessClassifier(),
+        classification: DevClassification? = nil,
+        culprit: CulpritAnalysis? = nil
+    ) {
+        self.init(
+            family: family,
+            stop: sampleIndex.map { StopFacts(family: family, index: $0) },
+            classifier: classifier,
+            classification: classification,
+            culprit: culprit
+        )
+    }
+
+    init(
+        family: ProcessFamily,
+        stop: StopFacts?,
         classifier: DevProcessClassifier = DevProcessClassifier(),
         classification providedClassification: DevClassification? = nil,
         culprit providedCulprit: CulpritAnalysis? = nil
@@ -142,7 +215,7 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         forecastRecommendationTitle = family.forecast.recommendedAction.title
         forecastRecommendationDetail = family.forecast.recommendedAction.detail
         forecastCards = Self.forecastCards(for: family)
-        change = Self.change(current: family, previous: previous)
+        change = Self.change(trend: family.trend.samples)
         scoreComponents = family.score.components.sorted { $0.impact > $1.impact }
         culprit = providedCulprit ?? CulpritAnalysis(family: family, classifier: classifier, classification: classification)
         suggestions = family.suggestions
@@ -152,18 +225,53 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         trendSamples = family.trend.samples
         trendFitQuality = family.trend.memoryFitQuality
         trendVelocityMegabytesPerMinute = family.trend.memoryVelocityMegabytesPerMinute
-        let patternAnalysis = MemoryPatternAnalysis.analyze(
-            points: family.trend.memoryPoints,
-            fitQuality: family.trend.memoryFitQuality
-        )
+        let patternAnalysis = family.trend.resolvedPattern
         memoryPattern = patternAnalysis
         verdict = FamilyVerdict.synthesize(family: family, pattern: patternAnalysis)
+        brief = FamilyDecisionBrief(family: family, verdict: verdict, assessment: assessment, pattern: patternAnalysis, culprit: culprit)
+        processTree = FamilyProcessTreeRow.build(members: family.members, root: family.root, ownedIdentities: family.ownedIdentities)
         forecastETASeconds = family.forecast.etaSeconds
         scoreValue = family.score.value
         isKillable = family.isKillable
         hasOwnedTargets = !family.ownedIdentities.isEmpty
         protectedPIDs = family.protectedPIDs
-        lastScoredText = family.lastScoredAt?.formatted(date: .omitted, time: .standard) ?? "warming"
+        lastScoredText = Self.lastScoredText(family.lastScoredAt)
+        stopRisk = stop?.risk
+        stopBlockedReason = stop?.blockedReason
+        workloadKey = stop?.key
+    }
+
+    /// Views format live dates with these, because a reused panel's strings
+    /// freeze at the time it was built.
+    public static func lastScoredText(_ date: Date?) -> String {
+        date?.formatted(date: .omitted, time: .standard) ?? "warming"
+    }
+
+    /// What stopping the family would do, from one sample. The stop set is
+    /// every same-user descendant of the root, including processes of other
+    /// families, so it is keyed like `StopRiskCache` and the family page
+    /// agrees with the stop preview. A prepared panel is rebuilt only when the
+    /// snapshot's content revision changes, which does not hash listening
+    /// ports or Ghost's own parent chain, so a change in only those shows on
+    /// the page one content change late; the stop preview always assesses
+    /// the live sample.
+    struct StopFacts {
+        let risk: KillRiskAssessment
+        let blockedReason: String?
+        let key: Int
+
+        /// Reuses `previous`'s assessment when it covered the same stop set;
+        /// the protection floor is looked up on every sample.
+        init(family: ProcessFamily, index: KillSampleIndex, reusing previous: FamilyDetailPanelModel? = nil) {
+            let stopSet = KillWorkloadProfile.stopSet(root: family.root, index: index, family: family)
+            key = StopRiskCache.key(root: family.root, stopSet: stopSet)
+            if let previous, previous.workloadKey == key, let reused = previous.stopRisk {
+                risk = reused
+            } else {
+                risk = KillRiskAssessor().assess(KillWorkloadProfile(root: family.root, stopSet: stopSet, index: index))
+            }
+            blockedReason = KillProtectionPolicy().neverReason(forRoot: family.root) { index.byPID[$0]?.parentPID }
+        }
     }
 
     private static func baselineCards(for family: ProcessFamily) -> [FamilyMetricCard] {
@@ -194,40 +302,50 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         ]
     }
 
-    private static func change(current: ProcessFamily, previous: FamilyDetailPanelModel?) -> FamilyChangeSummary {
-        guard let previous else {
+    /// Compares the newest trend sample with the newest one at least
+    /// `changeWindow` older, so the delta means the same on every panel,
+    /// however recently the panel was built.
+    static let changeWindow: TimeInterval = 30
+
+    static func change(trend samples: [TrendSample]) -> FamilyChangeSummary {
+        guard samples.count >= 2, let latest = samples.last else {
             return .warming
         }
-        let memoryDelta = Int64(clamping: current.totalPhysicalFootprintBytes) - Int64(clamping: previous.memoryBytes)
-        let cpuDelta = current.totalCPUPercent - previous.cpuPercent
-        let childDelta = current.childCount - previous.childCount
+        let reference = samples.last { latest.date.timeIntervalSince($0.date) >= changeWindow } ?? samples[0]
+        let memoryDelta = Int64(clamping: latest.memoryBytes) - Int64(clamping: reference.memoryBytes)
+        let cpuDelta = latest.cpuPercent - reference.cpuPercent
         let level: GhostLevel
-        if memoryDelta > 256 * 1_048_576 || cpuDelta > 25 || childDelta >= 4 {
+        if memoryDelta > 256 * 1_048_576 || cpuDelta > 25 {
             level = .hot
-        } else if memoryDelta > 64 * 1_048_576 || cpuDelta > 8 || childDelta > 0 {
+        } else if memoryDelta > 64 * 1_048_576 || cpuDelta > 8 {
             level = .watch
         } else {
             level = .quiet
         }
 
         var parts: [String] = []
-        if memoryDelta != 0 {
+        if abs(memoryDelta) >= 1_048_576 {
             parts.append("memory \(RadarFormat.signedBytes(memoryDelta))")
         }
         if abs(cpuDelta) >= 1 {
             parts.append("CPU \(RadarFormat.signedPercent(cpuDelta))")
         }
-        if childDelta != 0 {
-            parts.append("children \(childDelta > 0 ? "+" : "")\(childDelta)")
-        }
-        let summary = parts.isEmpty ? "No material change since last refresh" : parts.joined(separator: ", ")
+        let window = windowText(latest.date.timeIntervalSince(reference.date))
+        let summary = parts.isEmpty
+            ? "No material change in the last \(window)"
+            : "\(parts.joined(separator: ", ")) in the last \(window)"
         return FamilyChangeSummary(
             memoryDeltaBytes: memoryDelta,
             cpuDelta: cpuDelta,
-            childDelta: childDelta,
+            childDelta: 0,
             summary: summary,
             level: level
         )
+    }
+
+    private static func windowText(_ seconds: TimeInterval) -> String {
+        let rounded = max(1, Int(seconds.rounded()))
+        return rounded < 90 ? "\(rounded) s" : "\(Int((seconds / 60).rounded())) min"
     }
 }
 

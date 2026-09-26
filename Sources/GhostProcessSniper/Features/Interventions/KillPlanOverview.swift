@@ -5,11 +5,20 @@ import SwiftUI
 /// what could go wrong, and what the Mac gets back.
 struct KillPlanOverview: View {
     let preview: KillPreview
+    /// The sheet's live hold-force switch, so the force step says whether
+    /// it will run.
+    var forceHeld = false
+    var isPreparing = false
+    /// Opens a fresh preview of a better stop the advisor found.
+    var chooseAlternative: ((KillAlternative) -> Void)?
 
     private var risk: KillRiskAssessment { preview.riskAssessment }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if let chooseAlternative, !preview.alternatives.isEmpty {
+                KillAlternativesPanel(alternatives: preview.alternatives, isPreparing: isPreparing, choose: chooseAlternative)
+            }
             plan
             if !risk.hazards.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
@@ -46,7 +55,7 @@ struct KillPlanOverview: View {
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(preview.strategyProfile.phases) { phase in
-                        KillPhaseRow(phase: phase, forceNeedsConfirmation: risk.forceNeedsConfirmation)
+                        KillPhaseRow(phase: phase, forceHeld: forceHeld)
                     }
                 }
             }
@@ -81,7 +90,7 @@ struct KillPlanOverview: View {
 
 private struct KillPhaseRow: View {
     let phase: KillSignalPhase
-    let forceNeedsConfirmation: Bool
+    let forceHeld: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -106,9 +115,56 @@ private struct KillPhaseRow: View {
     }
 
     private var detail: String {
-        if phase.isForce, forceNeedsConfirmation { return "only if you allow it" }
+        if phase.isForce, forceHeld { return "only if you allow it" }
         guard phase.waitAfterSeconds >= 0.5 else { return "" }
         return "waits up to \(RadarFormat.seconds(phase.waitAfterSeconds))"
+    }
+}
+
+/// Better stops than the one previewed: the recommended one first and
+/// prominent, the others as plain choices.
+private struct KillAlternativesPanel: View {
+    let alternatives: [KillAlternative]
+    let isPreparing: Bool
+    let choose: (KillAlternative) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(ordered) { alternative in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: alternative.kind == .stopSupervisor ? "arrow.uturn.up.circle" : "scope")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(alternative.isRecommended ? RadarTheme.brand : .secondary)
+                        .frame(width: 22)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(alternative.isRecommended ? "Better: \(alternative.title)" : alternative.title)
+                            .font(.callout.weight(.semibold))
+                        Text(alternative.isPreselected ? "Last time it came back. \(alternative.detail)" : alternative.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    if alternative.isRecommended {
+                        Button("Preview\u{2026}") { choose(alternative) }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isPreparing)
+                    } else {
+                        Button("Preview\u{2026}") { choose(alternative) }
+                            .disabled(isPreparing)
+                    }
+                }
+                .padding(10)
+                .background((alternative.isRecommended ? RadarTheme.brand : Color.secondary).opacity(0.08),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+        .controlSize(.small)
+    }
+
+    private var ordered: [KillAlternative] {
+        alternatives.filter(\.isRecommended) + alternatives.filter { !$0.isRecommended }
     }
 }
 
@@ -158,6 +214,7 @@ struct KillRiskCard: View {
         case .partialInstall: "arrow.down.circle"
         case .interruptedBuild: "hammer"
         case .respawn: "arrow.clockwise"
+        case .stopsSiblings: "stop.circle"
         case .unloadsModels: "cpu"
         case .freesPorts: "network"
         case .orphaned: "checkmark.circle"

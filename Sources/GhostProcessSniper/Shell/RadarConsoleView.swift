@@ -4,21 +4,18 @@ import SwiftUI
 struct RadarConsoleView: View {
     @Bindable var session: RadarConsoleSession
 
-    @SceneStorage("GhostProcessSniper.Console.selection") private var storedSelection = "overview"
-    @SceneStorage("GhostProcessSniper.Console.searchText") private var storedSearchText = ""
-    @SceneStorage("GhostProcessSniper.Console.familyFilter") private var storedFamilyFilter = RadarFilter.all.rawValue
-    @SceneStorage("GhostProcessSniper.Console.familySort") private var storedFamilySort = RadarSort.smart.rawValue
-    @SceneStorage("GhostProcessSniper.Console.incidentText") private var storedIncidentText = ""
-    @SceneStorage("GhostProcessSniper.Console.incidentFilter") private var storedIncidentFilter = RadarIncidentFilter.all.rawValue
-    @SceneStorage("GhostProcessSniper.Console.incidentSort") private var storedIncidentSort = RadarIncidentSort.recent.rawValue
-    @SceneStorage("GhostProcessSniper.Console.showInspector") private var storedShowInspector = false
-    @State private var searchDraft = ""
+    @State private var searchDraft: String
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var handledSearchFocusToken = 0
-    @State private var restoredSceneState = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var searchFocused: Bool
+
+    init(session: RadarConsoleSession) {
+        self.session = session
+        // The session outlives the window, so a reopened console resumes its query.
+        _searchDraft = State(initialValue: session.state.searchText)
+    }
 
     private var decoratedConsole: some View {
         // Keep a single structural identity for the split view. Toggling the
@@ -36,24 +33,20 @@ struct RadarConsoleView: View {
             RadarConsoleToolbar(session: session)
         }
         .overlay(alignment: .bottom) {
-            if let toast = session.toast {
-                RadarToastView(toast: toast)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-        .animation(reduceMotion ? nil : .spring(duration: 0.32), value: session.toast)
-        .onChange(of: session.toast) { _, toast in
-            toastDismissTask?.cancel()
-            guard toast != nil else {
-                return
-            }
-            toastDismissTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 2_600_000_000)
-                guard !Task.isCancelled else {
-                    return
+            // Animate only the toast; list and selection changes in the same
+            // transaction must not pick up the spring.
+            ZStack {
+                if let toast = session.toast {
+                    RadarToastView(toast: toast)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    PreparingStopBanner(session: session)
                 }
-                session.toast = nil
             }
+            .animation(reduceMotion ? nil : .spring(duration: 0.32), value: session.toast)
+        }
+        .onChange(of: session.toast) { _, _ in
+            scheduleToastDismiss()
         }
     }
 
@@ -66,14 +59,10 @@ struct RadarConsoleView: View {
             }
         }
         .onAppear {
-            if !restoredSceneState {
-                restoreSceneState()
-                searchDraft = session.state.searchText
-                restoredSceneState = true
-            }
-            session.startPresentation()
-            session.updateFocusedFamilies()
-            session.refresh()
+            // Showing the window already starts a fresh sample (setConsoleVisible).
+            session.setVisible(true)
+            // A toast raised while the window was closed has no dismiss timer yet.
+            scheduleToastDismiss()
             // ⌘F can fire before this view attaches (window just created):
             // catch any focus request we missed.
             if showsGlobalSearch, session.searchFocusToken != handledSearchFocusToken {
@@ -82,17 +71,24 @@ struct RadarConsoleView: View {
             }
         }
         .onChange(of: session.state.focusedSelection) { _, selection in
-            storedSelection = selection.storageValue
+            // Sidebar and search moves land in Back/Forward too; a repeat is ignored.
+            session.recordVisit(selection)
             Task { @MainActor in
                 await Task.yield()
                 guard session.state.focusedSelection == selection else {
                     return
                 }
-                if selection.familyKey == nil {
-                    session.state.showInspector = false
-                }
+                // The inspector belongs to family pages; it reopens with the
+                // user's last explicit choice.
+                session.state.showInspector = selection.familyKey != nil && ConsolePreferences.showInspector
                 session.updateFocusedFamilies()
             }
+        }
+        .onChange(of: session.state.showInspector) { _, shown in
+            // Remember how the user left the inspector on a family page, however
+            // it was dismissed; other pages close it automatically.
+            guard session.isVisible, session.state.focusedSelection.familyKey != nil else { return }
+            ConsolePreferences.showInspector = shown
         }
         .onChange(of: searchDraft) { _, value in
             // Results live on the process list (Duplicates filters in place).
@@ -101,7 +97,6 @@ struct RadarConsoleView: View {
                session.state.focusedSelection != .processes, session.state.focusedSelection != .duplicates {
                 session.focus(.processes)
             }
-            storedSearchText = value
             searchDebounceTask?.cancel()
             searchDebounceTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 140_000_000)
@@ -113,6 +108,7 @@ struct RadarConsoleView: View {
             }
         }
         .onChange(of: session.state.searchText) { _, value in
+            session.requestPortCensusIfNeeded(for: value)
             guard value != searchDraft else { return }
             searchDebounceTask?.cancel()
             searchDraft = value
@@ -121,7 +117,6 @@ struct RadarConsoleView: View {
             // Invalidate a pending keystroke even when the committed query is already empty.
             searchDebounceTask?.cancel()
             searchDraft = ""
-            storedSearchText = ""
         }
         .task(id: showsGlobalSearch) {
             if showsGlobalSearch, session.searchFocusToken > 0 {
@@ -133,55 +128,57 @@ struct RadarConsoleView: View {
     private var persistedConsole: some View {
         searchedConsole
         .onChange(of: session.state.familyFilter) { _, value in
-            storedFamilyFilter = value.rawValue
+            ConsolePreferences.familyFilter = value
             session.updateFocusedFamilies()
         }
         .onChange(of: session.state.familySort) { _, value in
-            storedFamilySort = value.rawValue
+            ConsolePreferences.familySort = value
             session.updateFocusedFamilies()
         }
-        .onChange(of: session.state.incidentQuery.filter) { _, value in
-            storedIncidentFilter = value.rawValue
+        .onChange(of: session.state.familySortAscending) { _, _ in
             session.scheduleQueryUpdate()
         }
-        .onChange(of: session.state.incidentQuery.text) { _, value in
-            storedIncidentText = value
+        .onChange(of: session.state.incidentQuery.filter) { _, _ in
             session.scheduleQueryUpdate()
         }
-        .onChange(of: session.state.incidentQuery.sort) { _, value in
-            storedIncidentSort = value.rawValue
+        .onChange(of: session.state.incidentQuery.text) { _, _ in
             session.scheduleQueryUpdate()
         }
-        .onChange(of: session.state.showInspector) { _, value in
-            storedShowInspector = value
+        .onChange(of: session.state.incidentQuery.sort) { _, _ in
+            session.scheduleQueryUpdate()
         }
     }
 
     var body: some View {
         persistedConsole
         .sheet(item: $session.pendingKill) { pending in
-            KillPreviewSheet(
-                family: pending.family,
-                preview: pending.preview,
-                approvalExpiresAt: pending.expiresAt,
-                confirm: { skipForce, control, eventSink in
-                    await session.confirmKill(
-                        pending,
-                        skipForce: skipForce,
-                        control: control,
-                        eventSink: eventSink
-                    )
-                },
-                close: {
-                    session.pendingKill = nil
+            VStack(spacing: 0) {
+                if let redirectedFrom = pending.redirectedFrom {
+                    StopRedirectHeader(target: pending.family.displayName, redirectedFrom: redirectedFrom)
                 }
-            )
+                KillPreviewSheet(pending: pending, session: session) {
+                    session.closeStopSheet()
+                }
+            }
         }
         .sheet(isPresented: $session.showQuickGuide) {
             RadarQuickGuideView()
         }
+        // On the root, not the Duplicates page, so a run keeps its sheet
+        // when a menu command or a notification moves the console.
+        .sheet(item: $session.cullRun) { run in
+            DuplicateCullSheet(
+                run: run,
+                start: {
+                    Task { await session.stopDuplicateCopies(run) }
+                },
+                close: {
+                    session.cullRun = nil
+                }
+            )
+        }
         .onDisappear {
-            session.stopPresentation()
+            session.setVisible(false)
             searchDebounceTask?.cancel()
             toastDismissTask?.cancel()
         }
@@ -200,6 +197,22 @@ struct RadarConsoleView: View {
         }
     }
 
+    private func scheduleToastDismiss() {
+        toastDismissTask?.cancel()
+        guard let toast = session.toast else {
+            return
+        }
+        // A toast with Undo stays long enough to reach the button.
+        let delay: UInt64 = toast.action == nil ? 2_600_000_000 : 6_000_000_000
+        toastDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else {
+                return
+            }
+            session.toast = nil
+        }
+    }
+
     private func commitSearchDraft() {
         searchDebounceTask?.cancel()
         guard session.state.searchText != searchDraft else { return }
@@ -211,21 +224,56 @@ struct RadarConsoleView: View {
         switch session.state.focusedSelection {
         case .overview, .processes, .family, .duplicates:
             true
-        case .incidents, .rules, .engine:
+        case .incidents, .rules:
             false
         }
     }
+}
 
-    private func restoreSceneState() {
-        if !session.hasNavigationIntent {
-            session.state.focusedSelection = RadarFocusedSelection(storageValue: storedSelection)
+/// Says why the preview targets another family than the one clicked.
+private struct StopRedirectHeader: View {
+    let target: String
+    let redirectedFrom: String
+
+    var body: some View {
+        Label("Stopping \(target), which keeps restarting \(redirectedFrom)", systemImage: "arrow.triangle.2.circlepath")
+            .font(.callout.weight(.medium))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(Color.orange.opacity(0.12))
+    }
+}
+
+/// Appears only when a stop preview takes 2 s or more; quicker previews
+/// open the sheet with no flash of progress in between.
+private struct PreparingStopBanner: View {
+    let session: RadarConsoleSession
+
+    @State private var visibleStop: PreparingStop?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            if let stop = visibleStop {
+                RadarWaitLabel("Checking what \(stop.name) is running…", orbDelay: .zero)
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(RadarTheme.elevatedPanel, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.16), lineWidth: 0.75))
+                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+                    .padding(.bottom, 16)
+                    .transition(.opacity)
+            }
         }
-        session.state.searchText = storedSearchText
-        session.state.familyFilter = RadarFilter(rawValue: storedFamilyFilter) ?? .all
-        session.state.familySort = RadarSort(rawValue: storedFamilySort) ?? .smart
-        session.state.incidentQuery.text = storedIncidentText
-        session.state.incidentQuery.filter = RadarIncidentFilter(rawValue: storedIncidentFilter) ?? .all
-        session.state.incidentQuery.sort = RadarIncidentSort(rawValue: storedIncidentSort) ?? .recent
-        session.state.showInspector = storedShowInspector
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: visibleStop)
+        .task(id: session.preparingStop?.id) {
+            visibleStop = nil
+            guard let stop = session.preparingStop else { return }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, session.preparingStop?.id == stop.id else { return }
+            visibleStop = stop
+        }
     }
 }

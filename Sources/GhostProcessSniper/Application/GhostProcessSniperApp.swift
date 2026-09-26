@@ -7,29 +7,10 @@ struct GhostProcessSniperApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
+        // Menus come from MenuBarCoordinator's NSMenu and Settings from
+        // SettingsWindowController; this scene is only a fallback.
         Settings {
             SettingsView(monitor: appDelegate.coordinator.monitor)
-        }
-        .commands {
-            CommandMenu("Radar") {
-                Button("Overview") { appDelegate.coordinator.openSection(.overview) }
-                    .keyboardShortcut("1")
-                Button("All Processes") { appDelegate.coordinator.openSection(.processes) }
-                    .keyboardShortcut("6")
-                Button("Duplicates") { appDelegate.coordinator.openSection(.duplicates) }
-                    .keyboardShortcut("2")
-                Button("Incidents") { appDelegate.coordinator.openSection(.incidents) }
-                    .keyboardShortcut("3")
-                Button("Rules") { appDelegate.coordinator.openSection(.rules) }
-                    .keyboardShortcut("4")
-                Button("Engine") { appDelegate.coordinator.openSection(.engine) }
-                    .keyboardShortcut("5")
-                Divider()
-                Button("Find Processes") { appDelegate.coordinator.findProcesses() }
-                    .keyboardShortcut("f")
-                Button("Open Console") { appDelegate.coordinator.openConsole() }
-                    .keyboardShortcut("o")
-            }
         }
     }
 }
@@ -37,20 +18,62 @@ struct GhostProcessSniperApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = MenuBarCoordinator()
-    private let metricKitSubscriber = RadarMetricKitSubscriber()
+    // The notification center holds its delegate weakly.
+    private var notificationRouter: NotificationRouter?
+    private var isTerminating = false
+    private var didReplyToTermination = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Unbundled dev builds have no notification center.
+        guard Bundle.main.bundleIdentifier != nil else {
+            return
+        }
+        let router = NotificationRouter(coordinator: coordinator)
+        router.install()
+        notificationRouter = router
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        metricKitSubscriber.start()
         coordinator.start()
         if ProcessInfo.processInfo.arguments.contains("--console") {
             coordinator.openConsole()
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isTerminating else {
+            return .terminateLater
+        }
+        isTerminating = true
+        Task {
+            await coordinator.shutdown()
+            replyToTermination()
+        }
+        Task {
+            // A stop still in its grace finishes first, so its approved
+            // force goes out and its report is kept; shutdown() waits for it
+            // too. Past that, a stuck disk must never hold up quitting.
+            let limit = ContinuousClock.now + .seconds(60)
+            while coordinator.monitor.hasActiveStop, ContinuousClock.now < limit {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            try? await Task.sleep(for: .seconds(1))
+            replyToTermination()
+        }
+        return .terminateLater
+    }
+
+    private func replyToTermination() {
+        guard !didReplyToTermination else {
+            return
+        }
+        didReplyToTermination = true
+        NSApp.reply(toApplicationShouldTerminate: true)
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         coordinator.stop()
-        metricKitSubscriber.stop()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

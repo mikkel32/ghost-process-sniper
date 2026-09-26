@@ -8,30 +8,31 @@ public enum ConsoleSidebarSectionKind: String, Codable, Sendable {
 public struct RadarConsoleSnapshot: Equatable, Sendable {
     public let summary: RadarSummary
     public let families: [FamilyTriageViewModel]
-    public let topRiskFamilies: [FamilyTriageViewModel]
-    public let warmingFamilies: [FamilyTriageViewModel]
     public let detailPanels: [String: FamilyDetailPanelModel]
-    public let incidentRows: [IncidentRowViewModel]
     public let ruleRows: [RuleRowViewModel]
     public let rulePreviews: [RuleMatchPreview]
     public let duplicateClusters: [DuplicateProcessCluster]
     public let duplicateRows: [DuplicateClusterViewModel]
+    /// Unresolved incidents, for the sidebar badge; the rows themselves
+    /// are projected on demand.
+    public let activeIncidentCount: Int
     public let engine: EngineDiagnosticsViewModel
     public let compact: CompactConsoleSnapshot
     public let generatedAt: Date
     public let contentRevision: SnapshotContentRevision
+    /// The values `contentRevision` was measured from; the next sample's
+    /// revision holds its own against them.
+    var contentBaseline: SnapshotContentBaseline?
 
     public static let empty = RadarConsoleSnapshot(
         summary: .empty,
         families: [],
-        topRiskFamilies: [],
-        warmingFamilies: [],
         detailPanels: [:],
-        incidentRows: [],
         ruleRows: [],
         rulePreviews: [],
         duplicateClusters: [],
         duplicateRows: [],
+        activeIncidentCount: 0,
         engine: .empty,
         compact: .empty,
         generatedAt: Date(timeIntervalSince1970: 0),
@@ -41,14 +42,12 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
     public init(
         summary: RadarSummary,
         families: [FamilyTriageViewModel],
-        topRiskFamilies: [FamilyTriageViewModel],
-        warmingFamilies: [FamilyTriageViewModel],
         detailPanels: [String: FamilyDetailPanelModel],
-        incidentRows: [IncidentRowViewModel],
         ruleRows: [RuleRowViewModel],
         rulePreviews: [RuleMatchPreview],
         duplicateClusters: [DuplicateProcessCluster] = [],
         duplicateRows: [DuplicateClusterViewModel] = [],
+        activeIncidentCount: Int = 0,
         engine: EngineDiagnosticsViewModel,
         compact: CompactConsoleSnapshot = .empty,
         generatedAt: Date,
@@ -56,14 +55,12 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
     ) {
         self.summary = summary
         self.families = families
-        self.topRiskFamilies = topRiskFamilies
-        self.warmingFamilies = warmingFamilies
         self.detailPanels = detailPanels
-        self.incidentRows = incidentRows
         self.ruleRows = ruleRows
         self.rulePreviews = rulePreviews
         self.duplicateClusters = duplicateClusters
         self.duplicateRows = duplicateRows
+        self.activeIncidentCount = activeIncidentCount
         self.engine = engine
         self.compact = compact
         self.generatedAt = generatedAt
@@ -82,15 +79,45 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
         storeError: String?,
         previous: RadarConsoleSnapshot?,
         generatedAt: Date,
-        detailSignatures: Set<String>? = nil
+        detailSignatures: Set<String>? = nil,
+        processes: [ProcessMetrics] = []
     ) -> RadarConsoleSnapshot {
-        let contentRevision = SnapshotContentRevision.compute(
-            families: families,
-            summary: summary,
-            incidents: incidents,
-            rules: rules,
-            duplicateClusters: duplicateClusters
+        build(
+            families: families, duplicateClusters: duplicateClusters, summary: summary,
+            incidents: incidents, rules: rules, metrics: metrics, health: health,
+            storeHealth: storeHealth, storeError: storeError, previous: previous,
+            generatedAt: generatedAt, detailSignatures: detailSignatures, processes: processes,
+            contentBaseline: SnapshotContentBaseline.measure(
+                families: families,
+                summary: summary,
+                incidents: incidents,
+                rules: rules,
+                duplicateClusters: duplicateClusters,
+                previous: previous?.contentBaseline
+            )
         )
+    }
+
+    /// `contentBaseline` must be measured from exactly these inputs; the
+    /// publish payload measures it once and passes it here. `processes` is
+    /// the whole sample, which stop assessments search for supervisors.
+    static func build(
+        families: [ProcessFamily],
+        duplicateClusters: [DuplicateProcessCluster],
+        summary: RadarSummary,
+        incidents: [RadarIncident],
+        rules: [RadarRule],
+        metrics: RadarPerformanceMetrics,
+        health: SamplerHealth,
+        storeHealth: StoreHealth,
+        storeError: String?,
+        previous: RadarConsoleSnapshot?,
+        generatedAt: Date,
+        detailSignatures: Set<String>?,
+        processes: [ProcessMetrics],
+        contentBaseline: SnapshotContentBaseline
+    ) -> RadarConsoleSnapshot {
+        let contentRevision = contentBaseline.revision
         let engine = EngineDiagnosticsViewModel(
             metrics: metrics,
             health: health,
@@ -112,14 +139,16 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
 
         let previousPanels = previous?.detailPanels ?? [:]
         let classifier = DevProcessClassifier()
-        let triage = families.map { family in
-            let classification = family.classification ?? classifier.classification(for: family)
-            return FamilyTriageViewModel(family: family, classification: classification,
-                                         culprit: CulpritAnalysis(family: family, classifier: classifier, classification: classification))
-        }.sorted { FamilyTriageViewModel.areInIncreasingOrder($0, $1, by: .smart) }
+        let rows = families.map { family in
+            FamilyTriageViewModel(family: family, classification: family.classification ?? classifier.classification(for: family))
+        }
+        let keys = rows.map(FamilyTriageViewModel.SmartSortKey.init)
+        let triage = keys.indices.sorted { keys[$0] < keys[$1] }.map { rows[$0] }
+        let compactRows = triage.map(CompactSidebarRowModel.init(item:))
+        let priorities = CompactConsoleSnapshot.priorityRows(from: compactRows)
+
         var wantedKeys: Set<String>?
         if let detailSignatures {
-            let priorities = CompactConsoleSnapshot.priorityRows(from: triage.map(CompactSidebarRowModel.init(item:)))
             var keys = Set(priorities.risk.prefix(8).map(\.familyKey))
             keys.formUnion(priorities.warming.prefix(6).map(\.familyKey))
             // A signature may describe hundreds of identical instances. Prepare
@@ -133,6 +162,17 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             }
             wantedKeys = keys
         }
+        // The PID index is built at most once per snapshot; an assessment
+        // only reruns when a family's stop set changed.
+        var sampleIndex: KillSampleIndex?
+        func stopFacts(for family: ProcessFamily) -> FamilyDetailPanelModel.StopFacts? {
+            guard !processes.isEmpty else {
+                return nil
+            }
+            let index = sampleIndex ?? KillSampleIndex(processes)
+            sampleIndex = index
+            return FamilyDetailPanelModel.StopFacts(family: family, index: index, reusing: previousPanels[family.familyKey])
+        }
         var detailPanels: [String: FamilyDetailPanelModel] = [:]
         detailPanels.reserveCapacity((wantedKeys?.count ?? families.count) * 2)
         for family in families where wantedKeys?.contains(family.familyKey) ?? true {
@@ -140,7 +180,7 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             let culprit = CulpritAnalysis(family: family, classifier: classifier, classification: classification)
             let panel = FamilyDetailPanelModel(
                 family: family,
-                previous: previousPanels[family.familyKey],
+                stop: stopFacts(for: family),
                 classifier: classifier,
                 classification: classification,
                 culprit: culprit
@@ -151,25 +191,24 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             }
         }
 
-        let previews = rules.map { RuleMatchPreview(rule: $0, families: families) }
+        let previews = rules.map { RuleMatchPreview(rule: $0, families: families, now: generatedAt) }
         let matchCounts = Dictionary(uniqueKeysWithValues: previews.map { ($0.id, $0.matchCount) })
         let duplicateRows = DuplicateClusterViewModel.rows(from: duplicateClusters)
 
-        return RadarConsoleSnapshot(
+        var snapshot = RadarConsoleSnapshot(
             summary: summary,
             families: triage,
-            topRiskFamilies: Array(triage.prefix(8)),
-            warmingFamilies: Array(triage.filter { $0.forecastState >= .warming && $0.forecastState < .leaking }.prefix(6)),
             detailPanels: detailPanels,
-            incidentRows: incidents.map(IncidentRowViewModel.init(incident:)),
             ruleRows: rules.map { RuleRowViewModel(rule: $0, matchCount: matchCounts[$0.id, default: 0]) },
             rulePreviews: previews,
             duplicateClusters: duplicateClusters,
             duplicateRows: duplicateRows,
+            activeIncidentCount: incidents.reduce(0) { $1.resolvedAt == nil ? $0 + 1 : $0 },
             engine: engine,
             compact: CompactConsoleSnapshot.build(
                 summary: summary,
-                triage: triage,
+                rows: compactRows,
+                priorities: priorities,
                 detailPanels: detailPanels,
                 engineStatus: engineStatus,
                 duplicateCount: duplicateRows.count
@@ -177,6 +216,8 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             generatedAt: generatedAt,
             contentRevision: contentRevision
         )
+        snapshot.contentBaseline = contentBaseline
+        return snapshot
     }
 
     public func updatingEngine(
@@ -190,22 +231,22 @@ public struct RadarConsoleSnapshot: Equatable, Sendable {
             processText: health.map { "\($0.processCount)" } ?? compact.engineStatus.processText,
             generatedAt: generatedAt
         )
-        return RadarConsoleSnapshot(
+        var snapshot = RadarConsoleSnapshot(
             summary: summary,
             families: families,
-            topRiskFamilies: topRiskFamilies,
-            warmingFamilies: warmingFamilies,
             detailPanels: detailPanels,
-            incidentRows: incidentRows,
             ruleRows: ruleRows,
             rulePreviews: rulePreviews,
             duplicateClusters: duplicateClusters,
             duplicateRows: duplicateRows,
+            activeIncidentCount: activeIncidentCount,
             engine: engine,
             compact: compact.updatingEngineStatus(engineStatus, summary: summary),
             generatedAt: generatedAt,
             contentRevision: contentRevision
         )
+        snapshot.contentBaseline = contentBaseline
+        return snapshot
     }
 
     /// Rows matching a search, filter and sort, via the console's search

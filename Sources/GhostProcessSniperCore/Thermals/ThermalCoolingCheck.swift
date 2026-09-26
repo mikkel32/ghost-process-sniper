@@ -53,15 +53,15 @@ public struct ThermalCoolingCheck: Equatable, Sendable {
         let baselineFresh = (0...15).contains(startedAt.timeIntervalSince(snapshot.sampledAt))
         if baselineFresh {
             if let text = change(label: "CPU temperature", from: snapshot.cpuCelsius, to: current.cpuCelsius,
-                                 firstKey: snapshot.cpuSensorKey, secondKey: current.cpuSensorKey) { changes.append(text) }
+                                 firstSeries: snapshot.cpuSeries, secondSeries: current.cpuSeries) { changes.append(text) }
             if let text = change(label: "GPU temperature", from: snapshot.gpuCelsius, to: current.gpuCelsius,
-                                 firstKey: snapshot.gpuSensorKey, secondKey: current.gpuSensorKey) { changes.append(text) }
+                                 firstSeries: snapshot.gpuSeries, secondSeries: current.gpuSeries) { changes.append(text) }
         }
         return Result(title: "Reading comparison: \(app.displayName)", detail: changes.joined(separator: " · "), note: note)
     }
 
-    private func change(label: String, from: Double?, to: Double?, firstKey: String?, secondKey: String?) -> String? {
-        guard firstKey == secondKey else { return nil }
+    private func change(label: String, from: Double?, to: Double?, firstSeries: String?, secondSeries: String?) -> String? {
+        guard firstSeries == secondSeries else { return nil }
         guard let from = ThermalTemperatureAssessment.valid(from),
               let to = ThermalTemperatureAssessment.valid(to) else { return nil }
         let delta = to - from

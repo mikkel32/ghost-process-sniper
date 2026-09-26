@@ -39,7 +39,9 @@ public struct SelfUsageMonitor: Sendable {
         self.throttleThresholdPercent = throttleThresholdPercent
     }
 
-    public mutating func sample(now: Date = Date()) -> SelfResourceUsage {
+    /// `throttleAbovePercent` overrides the fixed threshold with the caller's
+    /// current budget.
+    public mutating func sample(now: Date = Date(), throttleAbovePercent: Double? = nil) -> SelfResourceUsage {
         var usage = rusage()
         getrusage(RUSAGE_SELF, &usage)
         let cpuSeconds = Double(usage.ru_utime.tv_sec) + Double(usage.ru_utime.tv_usec) / 1_000_000
@@ -70,7 +72,7 @@ public struct SelfUsageMonitor: Sendable {
             cpuPercent: cpuPercent,
             averageCPUPercent: averageCPUPercent,
             footprintBytes: footprint,
-            isThrottling: averageCPUPercent > throttleThresholdPercent
+            isThrottling: averageCPUPercent > (throttleAbovePercent ?? throttleThresholdPercent)
         )
     }
 }

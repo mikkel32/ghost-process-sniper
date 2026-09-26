@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// What kind of work a stop interrupts. It decides how politely to stop it
@@ -29,7 +30,7 @@ public enum KillRiskSeverity: Int, Codable, Comparable, Sendable {
 
 public enum KillRiskKind: String, Codable, Sendable {
     case unsavedWork, dataIntegrity, stopsContainers, lockFile, partialInstall, interruptedBuild,
-         respawn, unloadsModels, freesPorts, orphaned
+         respawn, stopsSiblings, unloadsModels, freesPorts, orphaned
 }
 
 public struct KillRisk: Identifiable, Equatable, Sendable {
@@ -50,8 +51,27 @@ public struct KillRisk: Identifiable, Equatable, Sendable {
     public var isBenefit: Bool { kind == .freesPorts || kind == .orphaned }
 }
 
+/// What a supervisor does when the process it runs exits.
+public enum KillRestartPolicy: String, Sendable {
+    /// Starts it again at once.
+    case onExit
+    /// Waits for the next change to a watched file.
+    case onFileChange
+    /// Stops every other process it runs.
+    case stopsSiblings
+}
+
 public enum KillSupervisorKind: String, Codable, Sendable {
     case launchd, nodemon, pm2, forever, supervisord, watchexec, cargoWatch, air, tsxWatch, entr, overmind
+
+    public var restartPolicy: KillRestartPolicy {
+        switch self {
+        case .launchd, .pm2, .forever, .supervisord: .onExit
+        // nodemon prints "app crashed - waiting for file changes".
+        case .nodemon, .watchexec, .cargoWatch, .air, .tsxWatch, .entr: .onFileChange
+        case .overmind: .stopsSiblings
+        }
+    }
 }
 
 /// Something that restarts the process after it stops.
@@ -75,10 +95,15 @@ public struct KillRiskAssessment: Equatable, Sendable {
     public let freedPorts: [Int]
     /// One plain sentence: what stopping this will do.
     public let headline: String?
+    /// The root stops its own workers in order: a database or a prefork
+    /// server. Signalling a worker first looks like a crash to it.
+    public let shutsDownThroughRoot: Bool
+    /// The clean-shutdown signal for a database root, sent to it alone.
+    public let rootShutdownSignal: Int32?
 
     public static let none = KillRiskAssessment(
         kind: .general, risks: [], supervisor: nil, appQuitPID: nil, graceSeconds: nil,
-        forceNeedsConfirmation: false, freedPorts: [], headline: nil
+        forceNeedsConfirmation: false, freedPorts: [], headline: nil, shutsDownThroughRoot: false, rootShutdownSignal: nil
     )
 
     public var hazards: [KillRisk] { risks.filter { !$0.isBenefit } }
@@ -102,8 +127,16 @@ public struct KillRiskAssessor: Sendable {
         let name = appName ?? root.name
 
         let kind = classify(root: rootPrint, processes: processes)
+        // A backend or worker stopped on its own is not the one that shuts
+        // the others down.
+        let underSameServer = workload.ancestors.first.map {
+            let parent = Fingerprint(name: $0.name, path: $0.executablePath, command: $0.commandLine)
+            return parent.isDataStore || parent.isPreforkMaster
+        } ?? false
+        let rootSignal = rootPrint.isDataStore && !underSameServer ? rootPrint.databaseShutdownSignal : nil
         let supervisor = findSupervisor(workload, rootPrint: rootPrint, processes: processes)
-        let ports = Array(Set(workload.processes.flatMap(\.listeningPorts))).sorted().prefix(8).map { $0 }
+        // Every port, so the stop verifies each one; titles shorten the list.
+        let ports = Array(Set(workload.processes.flatMap(\.listeningPorts))).sorted()
 
         var risks: [KillRisk] = []
         var grace: TimeInterval?
@@ -169,14 +202,11 @@ public struct KillRiskAssessor: Sendable {
         }
 
         if let supervisor {
-            let who = supervisor.pid.map { "\(supervisor.name) (PID \($0))" } ?? supervisor.name
-            risks.append(KillRisk(
-                kind: .respawn, severity: .caution, title: "Will restart",
-                detail: supervisor.kind == .launchd
-                    ? "launchd manages this process and will likely start it again. Quit the app or disable the login item that owns it."
-                    : "\(who) watches this process and restarts it. Stop \(supervisor.name) instead to make it stay stopped."
-            ))
-        } else if workload.parentIsLaunchd, !isAppMain, kind == .devServer || kind == .build || kind == .general {
+            risks.append(Self.restartRisk(supervisor, launchdJob: workload.launchdJob))
+        } else if workload.parentIsLaunchd, workload.launchdJob == nil, !isAppMain,
+                  kind == .devServer || kind == .build || kind == .general {
+            // Never for a launchd job, even one without KeepAlive: launchd
+            // started it on purpose, so it is no orphan.
             risks.append(KillRisk(kind: .orphaned, severity: .info, title: "Orphaned",
                                   detail: "Its terminal or parent is gone, so nothing will restart it."))
         }
@@ -196,7 +226,9 @@ public struct KillRiskAssessor: Sendable {
             graceSeconds: grace,
             forceNeedsConfirmation: confirmForce,
             freedPorts: ports,
-            headline: headline
+            headline: headline,
+            shutsDownThroughRoot: rootSignal != nil || (rootPrint.isPreforkMaster && !underSameServer),
+            rootShutdownSignal: rootSignal
         )
     }
 
@@ -225,6 +257,11 @@ public struct KillRiskAssessor: Sendable {
         rootPrint: Fingerprint,
         processes: [Fingerprint]
     ) -> KillSupervisor? {
+        // Checked first: launchd restarts a kept-alive job even when it is
+        // itself a supervisor, such as pm2 started at login.
+        if let job = workload.launchdJob, job.keepAlive {
+            return KillSupervisor(pid: nil, name: job.label, kind: .launchd)
+        }
         // A supervisor inside the stop goes down with its children.
         if processes.contains(where: { $0.supervisorKind != nil }) { return nil }
         for ancestor in workload.ancestors {
@@ -237,6 +274,36 @@ public struct KillRiskAssessor: Sendable {
             return KillSupervisor(pid: nil, name: "launchd", kind: .launchd)
         }
         return nil
+    }
+
+    private static func restartRisk(_ supervisor: KillSupervisor, launchdJob: LaunchdJob?) -> KillRisk {
+        let name = supervisor.name
+        switch supervisor.kind.restartPolicy {
+        case .onExit:
+            let who = supervisor.pid.map { "\(name) (PID \($0))" } ?? name
+            let detail = if let job = launchdJob, job.keepAlive, supervisor.kind == .launchd {
+                launchdAdvice(job)
+            } else if supervisor.kind == .launchd {
+                "launchd manages this process and will likely start it again. Quit the app or disable the login item that owns it."
+            } else {
+                "\(who) restarts this process when it exits. Stop \(name) instead to keep it stopped."
+            }
+            return KillRisk(kind: .respawn, severity: .caution, title: "Will restart", detail: detail)
+        case .onFileChange:
+            return KillRisk(kind: .respawn, severity: .info, title: "Restarts on your next save",
+                            detail: "\(name) starts it again the next time a watched file changes; stop \(name) to end the session.")
+        case .stopsSiblings:
+            return KillRisk(kind: .stopsSiblings, severity: .caution, title: "Stops the whole Procfile",
+                            detail: "\(name) shuts down every other process when this one exits.")
+        }
+    }
+
+    private static func launchdAdvice(_ job: LaunchdJob) -> String {
+        let restarts = "launchd keeps it running (KeepAlive in \(job.plistName)), so a normal stop is undone within seconds."
+        if job.homebrewFormula != nil {
+            return "\(restarts) Run \(job.stopCommand) to keep it stopped."
+        }
+        return "\(restarts) Stop the launchd service instead, or run \(job.stopCommand)."
     }
 
     private static func portList(_ ports: [Int]) -> String {
@@ -256,23 +323,32 @@ private struct Fingerprint {
     let binary: String
     let args: [String]
     let command: String
+    private let identities: [String]
 
     init(_ process: KillWorkloadProcess) {
         self.init(name: process.name, path: process.executablePath, command: process.commandLine)
     }
 
+    /// What identifies a workload sits at the front of argv; the rest is
+    /// flags and file lists. Electron helpers carry kilobytes of it.
+    private static let commandPrefixBytes = 512
+
     init(name: String, path: String, command: String) {
         self.name = name.lowercased()
         self.path = path.lowercased()
         rawPath = path
-        self.command = command.lowercased()
-        let tokens = self.command.split(whereSeparator: \.isWhitespace).map(String.init)
-        let first = tokens.first.map { ($0 as NSString).lastPathComponent } ?? ""
+        self.command = String(decoding: command.utf8.prefix(Self.commandPrefixBytes), as: UTF8.self).lowercased()
+        let tokens = self.command.unicodeScalars.split(whereSeparator: \.properties.isWhitespace).map(String.init)
+        let first = tokens.first.map(Self.lastComponent) ?? ""
         binary = first.isEmpty ? self.name : first
         args = Array(tokens.dropFirst())
+        identities = [self.name, binary, Self.lastComponent(self.path)]
     }
 
-    private var identities: [String] { [name, binary, (path as NSString).lastPathComponent] }
+    private static func lastComponent(_ path: String) -> String {
+        guard let slash = path.lastIndex(of: "/") else { return path }
+        return String(path[path.index(after: slash)...])
+    }
 
     private func named(_ candidates: Set<String>) -> Bool {
         identities.contains(where: candidates.contains)
@@ -282,7 +358,7 @@ private struct Fingerprint {
     private var verb: String? { args.first { !$0.hasPrefix("-") } }
 
     private func mentions(_ needles: [String]) -> Bool {
-        needles.contains { command.contains($0) || path.contains($0) }
+        needles.contains { command.includes($0) || path.includes($0) }
     }
 
     // App bundles
@@ -294,9 +370,11 @@ private struct Fingerprint {
     }
 
     var isAppMainBinary: Bool {
-        guard path.range(of: #"\.app/contents/macos/[^/]+$"#, options: .regularExpression) != nil else { return false }
+        guard let range = path.range(of: ".app/contents/macos/", options: .backwards) else { return false }
+        let executable = path[range.upperBound...]
+        guard !executable.isEmpty, !executable.contains("/") else { return false }
         let nested = [".app/contents/frameworks/", "/contents/helpers/", ".app/contents/library/", "/contents/xpcservices/"]
-        return !nested.contains(where: path.contains) && !name.contains("helper")
+        return !nested.contains(where: path.includes) && !name.includes("helper")
     }
 
     var isEditorApp: Bool {
@@ -311,24 +389,36 @@ private struct Fingerprint {
         return editors.contains { app == $0 || app.hasPrefix($0 + " ") }
     }
 
-    // Workloads
+    // Workloads: the radar's catalog names them, so a VM the radar calls a
+    // container runtime is never force-stopped as a plain process.
 
     var isContainerRuntime: Bool {
-        named(["com.docker.backend", "com.docker.virtualization", "com.docker.vmnetd", "docker desktop", "colima",
-               "limactl", "qemu-system-aarch64", "qemu-system-x86_64", "vfkit", "gvproxy", "orbstack", "podman"])
-            || path.contains("/docker.app/contents/macos/") || path.contains("/orbstack.app/contents/macos/")
+        named(WorkloadCatalog.containerRuntimes)
+            || identities.contains { $0.hasPrefix("com.docker.") || $0.hasPrefix("qemu-system-") }
+            || path.includes("/docker.app/contents/macos/") || path.includes("/orbstack.app/contents/macos/")
     }
 
     var isDataStore: Bool {
-        if named(["postgres", "postmaster", "mysqld", "mariadbd", "mongod", "mongos", "redis-server", "valkey-server",
-                  "keydb-server", "etcd", "influxd", "clickhouse", "clickhouse-server", "cockroach", "couchdb", "neo4j",
-                  "minio", "meilisearch", "typesense-server", "qdrant", "surreal", "nats-server", "rabbitmq-server",
-                  "arangod", "dgraph", "questdb", "tidb-server"]) {
+        if named(WorkloadCatalog.dataStores) {
             return true
         }
         if binary == "beam.smp" { return mentions(["rabbit", "couchdb"]) }
         if binary == "java" { return mentions(["org.elasticsearch", "opensearch", "kafka.kafka", "zookeeper", "cassandra", "neo4j", "solr"]) }
         return false
+    }
+
+    /// Postgres treats SIGTERM as Smart Shutdown, which waits for every
+    /// client to disconnect; SIGINT is its fast, clean shutdown.
+    var databaseShutdownSignal: Int32 {
+        named(["postgres", "postmaster"]) ? SIGINT : SIGTERM
+    }
+
+    /// Servers whose master re-forks any worker that exits before it does.
+    var isPreforkMaster: Bool {
+        let masters: Set = ["gunicorn", "unicorn", "puma", "uwsgi", "php-fpm", "nginx", "httpd"]
+        let launcher = binary.hasSuffix(":") ? String(binary.dropLast()) : binary
+        let script = args.first { !$0.hasPrefix("-") }.map { ($0 as NSString).lastPathComponent }
+        return named(masters) || masters.contains(launcher) || script.map(masters.contains) == true
     }
 
     var isVersionControl: Bool {
@@ -381,18 +471,20 @@ private struct Fingerprint {
         }
     }
 
+    private static let extraDevServerMarkers = [
+        "python -m http.server", "python3 -m http.server", "streamlit run", "fastapi dev", "manage.py runserver",
+        "jupyter", "jupyter-lab", "jupyter-notebook", "jupyter-server",
+    ]
+
+    /// Single-word markers match whole words, so "vite" misses "invites"
+    /// and "parcel" misses a Parcel.app helper; phrases match as text.
     var isDevServer: Bool {
-        mentions(["vite", "next dev", "next-server", "nuxt", "astro dev", "webpack serve", "webpack-dev-server",
-                  "react-scripts start", "rails s", "rails server", "puma", "unicorn", "uvicorn", "gunicorn",
-                  "hypercorn", "flask run", "runserver", "php -s", "artisan serve", "hugo server", "jekyll serve",
-                  "http-server", "live-server", "nodemon", "tsx watch", "ts-node-dev", "storybook", "expo start",
-                  "remix dev", "vite-node", "parcel", "gatsby develop", "docusaurus start", "wrangler dev",
-                  "netlify dev", "vercel dev", "dotnet watch", "phx.server", "bun --watch",
-                  "bun run dev", "deno task dev", "npm run dev", "pnpm dev", "yarn dev", "npm start", "ng serve"])
+        let tokens = WorkloadTokens(name: name, path: rawPath, command: command)
+        return tokens.mentions(WorkloadCatalog.devServerMarkers) || tokens.mentions(Self.extraDevServerMarkers)
     }
 
     var isModelRunner: Bool {
-        named(["ollama", "llama-server", "llama-cli", "koboldcpp", "lm studio", "lms", "llamafile", "whisper-server"])
+        named(WorkloadCatalog.modelRunners)
             || mentions(["mlx_lm.server", "vllm", "text-generation-launcher", "lm studio.app"])
     }
 
@@ -406,7 +498,7 @@ private struct Fingerprint {
         if named(["watchexec"]) { return .watchexec }
         if named(["cargo-watch"]) || (binary == "cargo" && verb == "watch") { return .cargoWatch }
         if named(["air"]) { return .air }
-        if (binary == "tsx" || command.contains("/tsx")) && args.contains("watch") { return .tsxWatch }
+        if (binary == "tsx" || command.includes("/tsx")) && args.contains("watch") { return .tsxWatch }
         if named(["entr"]) { return .entr }
         if named(["overmind"]) { return .overmind }
         return nil
@@ -430,6 +522,42 @@ private struct Fingerprint {
         let managed = ["/system/", "/usr/libexec/", "/usr/sbin/", "/library/apple/", "/library/privilegedhelpertools/",
                        ".app/contents/library/loginitems/", "/contents/library/launchservices/", ".app/contents/helpers/",
                        "/library/application support/"]
-        return managed.contains(where: path.hasPrefix) || managed.dropFirst(4).contains(where: path.contains)
+        return managed.contains(where: path.hasPrefix) || managed.dropFirst(4).contains(where: path.includes)
+    }
+}
+
+private extension String {
+    /// A byte-wise substring test. Foundation's `contains` bridges on every
+    /// call, and a hand-written byte loop is slow in unoptimized builds; libc's
+    /// memmem is fast in both.
+    func includes(_ needle: String) -> Bool {
+        var haystack = self
+        var needle = needle
+        return haystack.withUTF8 { text in
+            needle.withUTF8 { pattern in
+                guard !pattern.isEmpty else { return true }
+                guard pattern.count <= text.count, let textBase = text.baseAddress,
+                      let patternBase = pattern.baseAddress else { return false }
+                return memmem(textBase, text.count, patternBase, pattern.count) != nil
+            }
+        }
+    }
+}
+
+// The launchd resolver and the duplicate cull plan ask the same questions of
+// a process before acting on it, so they and the stop preview agree.
+extension KillRiskAssessor {
+    /// Apps are asked to quit, and LaunchServices rather than a launchd
+    /// job keeps them running.
+    public func isAppMainBinary(_ process: KillWorkloadProcess) -> Bool {
+        Fingerprint(process).isAppMainBinary
+    }
+
+    static func isLaunchdManagedService(path: String) -> Bool {
+        Fingerprint(name: "", path: path, command: "").isLaunchdManagedService
+    }
+
+    static func isAppMainBinary(path: String, name: String) -> Bool {
+        Fingerprint(name: name, path: path, command: "").isAppMainBinary
     }
 }

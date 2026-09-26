@@ -21,31 +21,23 @@ public struct ThermalAppInsight: Equatable, Sendable {
                 action: "Scan now to see which apps are using resources.", badge: "Awaiting a sample", contributor: nil)
         }
         let rows = activity.visibleContributors(at: now)
-        let heatNeedsReview = diagnosis.temperature.band.rawValue >= ThermalTemperatureBand.warm.rawValue ||
-            diagnosis.state == .warm || diagnosis.state == .serious || diagnosis.state == .critical
+        let heatNeedsReview = Self.heatNeedsReview(diagnosis)
+        let history = activity.recentContributors
+        func load(_ id: String) -> Double { history.first { $0.id == id }?.sustainedLoad(at: now) ?? 0 }
         // A modest GPU leader must not conceal a saturated CPU core lower in the list.
         let active = rows.filter { $0.isSubstantial(at: now) }.max {
-            ($0.observedActivity(at: now) ?? 0) < ($1.observedActivity(at: now) ?? 0)
+            max($0.observedActivity(at: now) ?? 0, load($0.id)) < max($1.observedActivity(at: now) ?? 0, load($1.id))
         }
-        let recent = heatNeedsReview ? activity.recentContributors.first(where: {
-            $0.lastActiveAt < activity.sampledAt && (0...ThermalActivityHistory.maximumAge)
-                .contains(now.timeIntervalSince($0.lastActiveAt))
-        }) : nil
-        if active == nil, let recent {
-            let seconds = Int(max(0, now.timeIntervalSince(recent.lastActiveAt)).rounded())
-            let span = recent.activeSpanSeconds
-            let strength: EvidenceStrength = recent.activeSampleCount >= 3 && span >= 20 ? .repeated : .singleSample
-            let resource = recent.peakCPUCapacityPercent >= recent.peakGPUPercent
-                ? "up to \(ThermalActivityFormat.percent(recent.peakCPUCapacityPercent)) of total CPU capacity"
-                : "up to \(ThermalActivityFormat.percent(recent.peakGPUPercent)) reported GPU activity"
-            return Self(kind: .recent, evidenceStrength: strength,
-                title: "Recently active: \(recent.displayName)",
-                evidence: "\(recent.displayName) used \(resource) \(seconds)s ago, across \(recent.activeSampleCount) sampled \(recent.activeSampleCount == 1 ? "reading" : "readings"). Current work is lower or unmeasured. Temperature can lag activity.",
-                action: recent.isSystemProcess
-                    ? "Review related apps and optional work, then compare fresh readings as the Mac cools."
-                    : "Check whether that work was expected, then compare fresh activity and temperature readings over the next minute.",
-                badge: "Recent workload, cause unconfirmed",
-                contributor: rows.first { $0.id == recent.id })
+        // Temperature integrates power, so decayed accumulated load can outrank a lighter current reading.
+        let sustained = heatNeedsReview ? history.filter { $0.sustainedLoad(at: now) >= substantialLoad }.max {
+            $0.sustainedLoad(at: now) < $1.sustainedLoad(at: now)
+        } : nil
+        let activeScore = active.map { max($0.observedActivity(at: now) ?? 0, load($0.id)) } ?? -1
+        if let sustained, sustained.sustainedLoad(at: now) > activeScore {
+            return recent(sustained, rows: rows, at: now)
+        }
+        if active == nil, heatNeedsReview, let earlier = activity.earlierContributor(at: now) {
+            return recent(earlier, rows: rows, at: now)
         }
         guard let leader = active ?? rows.max(by: {
             ($0.observedActivity(at: now) ?? 0) < ($1.observedActivity(at: now) ?? 0)
@@ -69,14 +61,52 @@ public struct ThermalAppInsight: Equatable, Sendable {
                     : "No demanding workload stands out in this sample. Inspect the app for details or keep working normally.",
                 badge: "Light workload observed", contributor: leader)
         }
-        let history = activity.recentContributors.first { $0.id == leader.id }
-        let sustained = history.map { $0.activeSampleCount >= 3 && $0.activeSpanSeconds >= 20 } ?? false
+        let repeated = history.first { $0.id == leader.id }
+            .map { $0.activeSampleCount >= 3 && $0.activeSpanSeconds >= 20 } ?? false
         return Self(kind: .active,
-            evidenceStrength: sustained ? .repeated : .singleSample,
+            evidenceStrength: repeated ? .repeated : .singleSample,
             title: heatNeedsReview ? "Start with \(leader.displayName)" : "Most active: \(leader.displayName)",
-            evidence: "\(resource) Based on \(leader.processCount) sampled \(leader.processCount == 1 ? "process" : "processes"). \(sustained ? "Repeated across recent scans." : "One current reading; the cause of heat is unconfirmed.")",
+            evidence: "\(resource) Based on \(leader.processCount) sampled \(leader.processCount == 1 ? "process" : "processes"). \(repeated ? "Repeated across recent scans." : "One current reading; the cause of heat is unconfirmed.")",
             action: leader.suggestedAction(at: now),
-            badge: sustained ? "Repeated workload observed" : "Current workload observed", contributor: leader)
+            badge: repeated ? "Repeated workload observed" : "Current workload observed", contributor: leader)
+    }
+
+    /// Matches the 10% of total CPU capacity that makes current activity substantial.
+    private static let substantialLoad = 10.0
+
+    static func heatNeedsReview(_ diagnosis: ThermalDiagnosis) -> Bool {
+        diagnosis.temperature.band.rawValue >= ThermalTemperatureBand.warm.rawValue ||
+            diagnosis.state == .warm || diagnosis.state == .serious || diagnosis.state == .critical
+    }
+
+    private static func recent(_ entry: ThermalRecentContributor, rows: [ThermalContributor], at now: Date) -> Self {
+        let current = rows.first { $0.id == entry.id }
+        let seconds = Int(max(0, now.timeIntervalSince(entry.lastActiveAt)).rounded())
+        let strength: EvidenceStrength = entry.activeSampleCount >= 3 && entry.activeSpanSeconds >= 20 ? .repeated : .singleSample
+        let gpuLed = entry.peakGPUPercent > entry.peakCPUCapacityPercent
+        let load = entry.sustainedLoad(at: now)
+        let evidence: String
+        if entry.activeSampleCount >= 2, load >= 1 {
+            let minutes = min(3, max(1, Int((entry.activeSpanSeconds / 60).rounded(.up))))
+            let resource = gpuLed ? "reported GPU activity" : "of CPU capacity"
+            let timing = current == nil
+                ? "Last busy \(seconds)s ago; current work is lower or unmeasured."
+                : "Its current work is lower."
+            evidence = "\(entry.displayName) averaged \(ThermalActivityFormat.percent(load)) \(resource) over the last \(minutes) min (recent readings weigh more). \(timing) Temperature can lag activity."
+        } else {
+            let resource = gpuLed
+                ? "up to \(ThermalActivityFormat.percent(entry.peakGPUPercent)) reported GPU activity"
+                : "up to \(ThermalActivityFormat.percent(entry.peakCPUCapacityPercent)) of total CPU capacity"
+            evidence = "\(entry.displayName) used \(resource) \(seconds)s ago, across \(entry.activeSampleCount) sampled \(entry.activeSampleCount == 1 ? "reading" : "readings"). Current work is lower or unmeasured. Temperature can lag activity."
+        }
+        return Self(kind: .recent, evidenceStrength: strength,
+            title: "Recently active: \(entry.displayName)",
+            evidence: evidence,
+            action: entry.isSystemProcess
+                ? "Review related apps and optional work, then compare fresh readings as the Mac cools."
+                : "Check whether that work was expected, then compare fresh activity and temperature readings over the next minute.",
+            badge: "Recent workload, cause unconfirmed",
+            contributor: current)
     }
 
     private static func resourceEvidence(for contributor: ThermalContributor, at now: Date) -> String {

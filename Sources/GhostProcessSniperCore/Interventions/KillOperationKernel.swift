@@ -5,7 +5,6 @@ public enum KillExitEventKind: String, Codable, Sendable {
     case exit
     case fork
     case exec
-    case signal
     case unavailable
 }
 
@@ -40,12 +39,13 @@ public enum KillWatcherHintKind: String, Codable, Sendable {
     case exit
     case fork
     case exec
-    case signal
     case unavailable
 
+    /// Our own signals are not news, so NOTE_SIGNAL is not watched: only a
+    /// fork or exec means the tree may have changed.
     public var requiresCompleteVerification: Bool {
         switch self {
-        case .fork, .exec, .signal:
+        case .fork, .exec:
             true
         case .exit, .unavailable:
             false
@@ -112,27 +112,9 @@ private final class KillExitWatcherToken: @unchecked Sendable {
     }
 }
 
-public actor KillExitWatcher {
-    public init() {}
-
-    public func watch(
-        operationID: KillOperationID,
-        targets: [KillTarget],
-        maxTargets: Int = 128
-    ) -> AsyncStream<KillExitEvent> {
-        let hintStream = watchHints(operationID: operationID, targets: targets, maxTargets: maxTargets)
-        return AsyncStream { continuation in
-            let task = Task {
-                for await hint in hintStream where hint.kind == .exit || hint.kind == .unavailable {
-                    continuation.yield(hint.exitEvent)
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    public func watchHints(
+/// Streams kernel exit, fork and exec hints for the targets of one stop.
+public struct KillExitWatcher: Sendable {
+    public static func watchHints(
         operationID: KillOperationID,
         targets: [KillTarget],
         maxTargets: Int = 128
@@ -148,7 +130,7 @@ public actor KillExitWatcher {
             for target in targets.prefix(max(0, maxTargets)) {
                 let source = DispatchSource.makeProcessSource(
                     identifier: pid_t(target.pid),
-                    eventMask: [.exit, .fork, .exec, .signal],
+                    eventMask: [.exit, .fork, .exec],
                     queue: queue
                 )
                 source.setEventHandler {
@@ -172,7 +154,7 @@ public actor KillExitWatcher {
         }
     }
 
-    private nonisolated static func hints(
+    private static func hints(
         from event: DispatchSource.ProcessEvent,
         operationID: KillOperationID,
         target: KillTarget
@@ -196,7 +178,7 @@ public actor KillExitWatcher {
                     pid: target.pid,
                     identity: target.identity,
                     kind: .fork,
-                    message: "Fork hint observed for \(target.name); complete verification will refresh the tree."
+                    message: "Fork observed for \(target.name)."
                 )
             )
         }
@@ -208,17 +190,6 @@ public actor KillExitWatcher {
                     identity: target.identity,
                     kind: .exec,
                     message: "Exec hint observed for \(target.name); identity verification remains authoritative."
-                )
-            )
-        }
-        if event.contains(.signal) {
-            hints.append(
-                KillWatcherHint(
-                    operationID: operationID,
-                    pid: target.pid,
-                    identity: target.identity,
-                    kind: .signal,
-                    message: "Signal hint observed for \(target.name)."
                 )
             )
         }
@@ -270,52 +241,43 @@ public struct KillSignalWave: Identifiable, Codable, Equatable, Sendable {
 public struct KillGraceResult: Codable, Equatable, Sendable {
     public let waitedSeconds: TimeInterval
     public let endedEarly: Bool
-    public let skipForceRequested: Bool
+    /// The user chose to stop waiting.
+    public let stoppedByUser: Bool
 
-    public static let empty = KillGraceResult(waitedSeconds: 0, endedEarly: false, skipForceRequested: false)
+    public static let empty = KillGraceResult(waitedSeconds: 0, endedEarly: false, stoppedByUser: false)
 }
 
 public struct KillGraceCoordinator: Sendable {
     public init() {}
 
+    /// Waits up to `seconds`, ending early when the targets are gone or the
+    /// user stops waiting. Holding force never shortens it.
     public func wait(
         seconds: TimeInterval,
         sleeper: @escaping @Sendable (UInt64) async -> Void,
-        skipForceCheck: (@Sendable () async -> Bool)? = nil,
+        now: @escaping @Sendable () -> Date = { Date() },
+        stopWaitingCheck: (@Sendable () async -> Bool)? = nil,
         shouldEndEarly: @escaping @Sendable () async -> Bool
     ) async -> KillGraceResult {
         guard seconds > 0 else {
-            return KillGraceResult(
-                waitedSeconds: 0,
-                endedEarly: await shouldEndEarly(),
-                skipForceRequested: await skipForceCheck?() ?? false
-            )
+            return KillGraceResult(waitedSeconds: 0, endedEarly: await shouldEndEarly(), stoppedByUser: false)
         }
 
-        let started = Date()
+        let started = now()
         let step = min(0.075, max(0.02, seconds / 8))
-        while Date().timeIntervalSince(started) < seconds {
-            if await skipForceCheck?() == true {
-                return KillGraceResult(
-                    waitedSeconds: Date().timeIntervalSince(started),
-                    endedEarly: true,
-                    skipForceRequested: true
-                )
-            }
+        while now().timeIntervalSince(started) < seconds {
+            // A cancelled Task.sleep returns at once; without this the loop
+            // would spin for the rest of the grace.
+            if Task.isCancelled { break }
             if await shouldEndEarly() {
-                return KillGraceResult(
-                    waitedSeconds: Date().timeIntervalSince(started),
-                    endedEarly: true,
-                    skipForceRequested: false
-                )
+                return KillGraceResult(waitedSeconds: now().timeIntervalSince(started), endedEarly: true, stoppedByUser: false)
+            }
+            if await stopWaitingCheck?() == true {
+                return KillGraceResult(waitedSeconds: now().timeIntervalSince(started), endedEarly: true, stoppedByUser: true)
             }
             await sleeper(UInt64(step * 1_000_000_000))
         }
-        return KillGraceResult(
-            waitedSeconds: Date().timeIntervalSince(started),
-            endedEarly: false,
-            skipForceRequested: await skipForceCheck?() ?? false
-        )
+        return KillGraceResult(waitedSeconds: now().timeIntervalSince(started), endedEarly: false, stoppedByUser: false)
     }
 }
 
@@ -344,10 +306,6 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
     public let earlyExitSavingsSeconds: TimeInterval
     public let verificationModeCounts: [String: Int]
     public let arenaReuseCount: Int
-    public let sliceCacheHitCount: Int
-    public let calibratedGracefulOdds: Double
-    public let calibratedForceOdds: Double
-    public let calibratedSurvivorOdds: Double
 
     public static let empty = KillReactorReport(
         phaseTimingsMilliseconds: [:],
@@ -355,11 +313,7 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
         signalWaves: [],
         earlyExitSavingsSeconds: 0,
         verificationModeCounts: [:],
-        arenaReuseCount: 0,
-        sliceCacheHitCount: 0,
-        calibratedGracefulOdds: 0,
-        calibratedForceOdds: 0,
-        calibratedSurvivorOdds: 0
+        arenaReuseCount: 0
     )
 
     public init(
@@ -368,11 +322,7 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
         signalWaves: [KillSignalWave],
         earlyExitSavingsSeconds: TimeInterval,
         verificationModeCounts: [String: Int],
-        arenaReuseCount: Int,
-        sliceCacheHitCount: Int,
-        calibratedGracefulOdds: Double,
-        calibratedForceOdds: Double,
-        calibratedSurvivorOdds: Double
+        arenaReuseCount: Int
     ) {
         self.phaseTimingsMilliseconds = phaseTimingsMilliseconds
         self.watcherHints = watcherHints
@@ -380,10 +330,6 @@ public struct KillReactorReport: Codable, Equatable, Sendable {
         self.earlyExitSavingsSeconds = max(0, earlyExitSavingsSeconds)
         self.verificationModeCounts = verificationModeCounts
         self.arenaReuseCount = max(0, arenaReuseCount)
-        self.sliceCacheHitCount = max(0, sliceCacheHitCount)
-        self.calibratedGracefulOdds = min(1, max(0, calibratedGracefulOdds))
-        self.calibratedForceOdds = min(1, max(0, calibratedForceOdds))
-        self.calibratedSurvivorOdds = min(1, max(0, calibratedSurvivorOdds))
     }
 }
 
@@ -396,10 +342,6 @@ public actor KillInterventionReactor {
     private var verificationModeCounts: [String: Int] = [:]
     private var earlyExitSavingsSeconds: TimeInterval = 0
     private var arenaReuseCount = 0
-    private var sliceCacheHitCount = 0
-    private var calibratedGracefulOdds = 0.0
-    private var calibratedForceOdds = 0.0
-    private var calibratedSurvivorOdds = 0.0
 
     public init(operationID: KillOperationID) {
         self.operationID = operationID
@@ -437,13 +379,6 @@ public actor KillInterventionReactor {
 
     public func recordArenaStats(_ stats: KillGraphArenaStats) {
         arenaReuseCount += stats.arenaReuseCount
-        sliceCacheHitCount += stats.sliceCacheHitCount
-    }
-
-    public func recordCalibration(_ simulation: KillStrategySimulation) {
-        calibratedGracefulOdds = simulation.expectedGracefulSuccess
-        calibratedForceOdds = simulation.forceProbability
-        calibratedSurvivorOdds = simulation.survivorRisk
     }
 
     public func hintSnapshot() -> [KillWatcherHint] {
@@ -457,11 +392,7 @@ public actor KillInterventionReactor {
             signalWaves: waves,
             earlyExitSavingsSeconds: earlyExitSavingsSeconds,
             verificationModeCounts: verificationModeCounts,
-            arenaReuseCount: arenaReuseCount,
-            sliceCacheHitCount: sliceCacheHitCount,
-            calibratedGracefulOdds: calibratedGracefulOdds,
-            calibratedForceOdds: calibratedForceOdds,
-            calibratedSurvivorOdds: calibratedSurvivorOdds
+            arenaReuseCount: arenaReuseCount
         )
     }
 }
@@ -486,44 +417,19 @@ public struct KillTargetStateStore: Equatable, Sendable {
     }
 }
 
-public struct KillProgressReducer: Sendable {
-    public init() {}
-
-    public func reduce(
-        progress: KillOperationProgress,
-        coalescingWindow: Int = 6
-    ) -> KillOperationProgressViewModel {
-        KillOperationProgressViewModel(
-            progress: progress,
-            coalescingWindow: coalescingWindow,
-            eventCoalescingCount: max(0, progress.events.count - max(1, coalescingWindow))
-        )
-    }
-}
-
 public actor KillOperationStateMachine {
     private let operationID: KillOperationID
-    private var progress: KillOperationProgress
     private var stateStore = KillTargetStateStore()
     private var exitEvents: [KillExitEvent] = []
-    private let reducer = KillProgressReducer()
 
     public init(operationID: KillOperationID) {
         self.operationID = operationID
-        self.progress = KillOperationProgress(operationID: operationID)
-    }
-
-    public func record(_ event: KillOperationEvent) {
-        progress.append(event)
-        if let pid = event.pid, let state = event.targetState {
-            stateStore.update(pid: pid, state: state)
-        }
     }
 
     public func recordExit(_ event: KillExitEvent) -> KillOperationEvent {
         exitEvents.append(event)
         stateStore.update(pid: event.pid, state: .terminated)
-        let operationEvent = KillOperationEvent(
+        return KillOperationEvent(
             operationID: operationID,
             kind: .targetUpdated,
             pid: event.pid,
@@ -531,16 +437,10 @@ public actor KillOperationStateMachine {
             message: event.message,
             createdAt: event.observedAt
         )
-        progress.append(operationEvent)
-        return operationEvent
     }
 
     public func exitEventSnapshot() -> [KillExitEvent] {
         exitEvents
-    }
-
-    public func progressViewModel(coalescingWindow: Int = 6) -> KillOperationProgressViewModel {
-        reducer.reduce(progress: progress, coalescingWindow: coalescingWindow)
     }
 
     public func targetStates() -> [Int32: KillTargetState] {

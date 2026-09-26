@@ -12,20 +12,31 @@ struct RadarConsoleDetail: View {
             case .processes:
                 ProcessBrowserView(session: session)
             case .family(let familyKey):
-                if let family = session.monitor.family(signatureID: familyKey) {
+                if let family = session.family(forKey: familyKey) {
+                    // Look up by the concrete key so an alias still finds the prebuilt panel.
+                    let panel = session.detailPanel(for: family)
+                    // Panels carry the assessment and protection floor, built
+                    // off the main actor over the same stop set as the
+                    // monitor's memo; the memo covers a first frame without one.
+                    let stopFacts = panel.stopRisk.map { (risk: $0, blockedReason: panel.stopBlockedReason) }
+                        ?? session.monitor.stopFacts(for: family)
                     FamilyDetailConsoleView(
-                        family: family,
-                        detail: session.monitor.detailViewModel(signatureID: familyKey),
-                        panel: session.monitor.consoleSnapshot.detailPanel(for: familyKey),
-                        compact: session.selectedCompactDetail,
-                        onSnooze: { minutes in session.snoozeSelected(minutes: minutes) },
-                        onIgnore: { session.ignoreSelected() },
-                        onKill: { session.prepareKill(family) },
-                        thermals: session.monitor.thermals,
-                        onPreviewProcess: { session.prepareKill(family, member: $0) },
-                        stopRisk: KillRiskAssessor().assess(
-                            KillWorkloadProfile(family: family, sample: session.monitor.sampledProcesses)
-                        )
+                        panel: panel,
+                        stop: FamilyStopState(
+                            risk: stopFacts.risk,
+                            blockedReason: stopFacts.blockedReason,
+                            isPreparing: session.isPreparingIntervention,
+                            stopSupervisor: { session.prepareKillSupervisor(of: family) }
+                        ),
+                        actions: FamilyPageActions(session: session, family: family),
+                        lastScoredAt: family.lastScoredAt,
+                        forensicsFreshness: family.forensicsFreshness
+                    )
+                } else if let report = session.recentStops[familyKey] {
+                    RecentStopView(
+                        report: report,
+                        browse: { session.browseFamilies() },
+                        stopRespawner: { session.prepareKillRespawner(of: report) }
                     )
                 } else {
                     ContentUnavailableView {
@@ -33,8 +44,10 @@ struct RadarConsoleDetail: View {
                     } description: {
                         Text("This family has left the current scan. Browse running processes or check its history in Incidents.")
                     } actions: {
-                        Button("Browse Processes") { session.browseFamilies() }
+                        Button("Back") { session.goBackOrOverview() }
                             .buttonStyle(.borderedProminent)
+                            .help("Back (⌘[)")
+                        Button("Browse Processes") { session.browseFamilies() }
                         Button("View Incidents") { session.focus(.incidents) }
                     }
                 }
@@ -44,12 +57,6 @@ struct RadarConsoleDetail: View {
                 IncidentsConsoleView(session: session)
             case .rules:
                 RulesConsoleView(session: session)
-            case .engine:
-                EngineConsoleView(
-                    monitor: session.monitor,
-                    refreshHistory: session.refreshCostHistory,
-                    onCopyDiagnostics: { session.copyDiagnostics() }
-                )
             }
         }
         .navigationTitle(session.state.focusedSelection.navigationTitle)
@@ -65,7 +72,6 @@ private extension RadarFocusedSelection {
         case .duplicates: "Duplicates"
         case .incidents: "Incidents"
         case .rules: "Rules"
-        case .engine: "Engine"
         }
     }
 }
@@ -75,13 +81,9 @@ struct RadarConsoleInspector: View {
 
     var body: some View {
         if let family = session.selectedFamily {
-            FamilyInspectorView(
-                family: family,
-                detail: session.selectedDetail,
-                panel: session.selectedPanel
-            )
+            FamilyInspectorView(panel: session.detailPanel(for: family), forensicsFreshness: family.forensicsFreshness)
         } else {
-            EngineInspectorView(monitor: session.monitor)
+            ContentUnavailableView("Nothing selected", systemImage: "sidebar.right")
         }
     }
 }

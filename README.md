@@ -27,25 +27,26 @@
 
 Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a minute. Three copies of the same watcher from terminals you closed yesterday. A fan that spins up and no idea why.
 
-**Ghost Process Sniper** watches every process you own, groups helpers into *families*, learns what normal looks like, and tells you — in plain language, with the evidence — which ones deserve attention. When something really needs to go, it previews exactly what would be stopped and waits for you to confirm.
+**Ghost Process Sniper** watches every process you own, groups helpers into *families*, learns what normal looks like, and tells you — in plain language, with the evidence — which ones deserve attention. When something really needs to go, it previews exactly what would be stopped, waits for you to confirm, and then checks that the stop did what it promised.
 
 ## Highlights
 
-- **Menu-bar radar.** A tiny scope that turns orange or red when something needs attention, with a popover summary one click away.
-- **Leak and runaway detection.** Sustained memory growth, CPU burn, and GPU load are tracked over time with trend baselines and forecasts, so a single spike doesn't cry wolf.
-- **Process families.** Apps, helpers, dev servers, and the workers they spawn are grouped, so you see "Slack" or "vite dev" — not forty anonymous PIDs.
-- **Duplicate finder.** Spots overlapping copies of the same work, like identical dev servers or watchers left behind by old sessions.
-- **Real temperatures.** Measured CPU and GPU Celsius from hardware sensors (never invented per-app temperatures), plus *What's heating your Mac?*, which ties heat to the apps doing the work.
-- **Incident history.** A local timeline of leaks, spikes, and runaways, so recurring offenders stand out.
+- **Menu-bar radar.** A tiny scope whose shape and color change with the state, and a popover that leads with one verdict, the culprits, and a **Quick Stop** for the ones worth stopping.
+- **Leak and runaway detection.** CPU and memory are measured for every one of your processes on every scan. Slow leaks are caught from up to 90 minutes of per-process history, and the helper that is growing is named. Builds, busy loops, idle services that start burning CPU, and a saturated Mac are told apart, so a long compile is not a "runaway".
+- **Process families.** Apps, helpers, dev servers, and the workers they spawn are grouped, so you see "Slack" or "vite dev" — not forty anonymous PIDs. Language servers, databases and notebook kernels an editor starts get their own family.
+- **Forgotten processes.** Judged on real evidence — a job that outlived its terminal, no CPU use for half an hour, a deleted working directory, a port held while idle — never on "its parent is launchd", which is true of every app.
+- **Duplicate finder.** Spots independently started copies of the same work, says which one to keep, and stops the orphaned extras.
+- **Real temperatures.** Measured CPU and GPU Celsius from hardware sensors, never invented per-app temperatures. The **Heat & CPU activity** panel names the app or job doing the work and offers a stop preview when it is yours.
+- **Incident history.** A local timeline of leaks, spikes, and runaways, one entry per episode, so recurring offenders stand out.
 - **Rules.** Notify, highlight, snooze, ignore, or suggest stopping matching families.
-- **Careful interventions.** Every stop knows what it interrupts: apps are asked to quit like ⌘Q so they can save, databases and Docker get time to shut down cleanly, and nothing that can lose data is forced without your say-so. Previews warn when nodemon, pm2, or launchd would just restart the process, pin exact PID + start-time identities, refuse recycled PIDs, and expire after 60 seconds.
-- **Light on your Mac.** Adaptive sampling backs off under memory pressure; the Engine view shows exactly how much CPU and memory the radar itself costs.
+- **Careful, thorough stopping.** Every stop knows what it interrupts, so apps can save and databases can flush, and nothing that can lose data is forced unless you allow it. It offers to stop the launchd service or supervisor that would otherwise restart the process, catches children born mid-stop, and then says by name what exited and whether each port is really free ([details](#what-a-stop-does)).
+- **Light on your Mac.** Background scans run at utility priority and slow down when nothing is wrong, on battery, in Low Power Mode, and when the Mac is hot; temperatures are read only while a window shows them. **Settings › Diagnostics** shows what the radar itself costs.
 
 ## Private and unprivileged by design
 
 - **No network access.** There is no networking code: no telemetry, no analytics, no update pings.
 - **No admin rights.** No privileged helper, kernel extension, or Full Disk Access. Sensor reads are read-only.
-- **Your processes only.** It can only signal processes owned by your user, and only after you confirm.
+- **Your processes only.** It can only signal processes owned by your user, and only after you confirm. A protection floor below that refuses to stop Ghost itself, the terminal or app it runs inside, `loginwindow`, `WindowServer`, `launchd`, and processes macOS marks as system processes.
 - **Local data.** Settings and history live in one SQLite file in `~/Library/Application Support/Ghost Process Sniper/`.
 
 ## Install
@@ -78,20 +79,38 @@ Each release lists the DMG's SHA-256 so you can verify the download with `shasum
 
 ## Using it
 
-Click the menu-bar scope for a summary; **Open Dashboard** opens the console:
+Click the menu-bar scope for a summary; **Open Dashboard** opens the console (right-click the scope for a menu with Quick Stops for the top culprits):
 
 | Section | What it answers |
 | --- | --- |
-| **Overview** | What needs attention now, what is trending the wrong way, and why. |
-| **All Processes** | Every family plus every other running process, searchable by name, helper, command, path, PID, or port — typo-tolerant, with filters like `cpu>20` or `is:leaking`. |
-| **Duplicates** | Which work is running more than once. |
+| **Overview** | One verdict — what needs doing, and the button that does it — then what is urgent, what is trending the wrong way, and why. |
+| **All Processes** | Every family plus every other running process, searchable by name, helper, command, path, PID, or port — typo-tolerant, with filters like `cpu>20`, `port:3000` or `is:leaking`. |
+| **Duplicates** | Which work is running more than once, which copy to keep, and which extras can go. |
 | **Incidents** | What has leaked, spiked, or run away before, and how often. |
-| **Rules** | How the radar should treat specific apps or commands. |
-| **Engine** | How much the radar itself costs, plus diagnostics for bug reports. |
+| **Rules** | What is snoozed or ignored, and how the radar should treat specific apps or commands. |
 
-Handy shortcuts: **⌘F** search (**↩** opens the best match) · **⌘R** scan now · **⌘1–⌘6** switch sections · **⌥⌘I** inspector · **⌘,** settings.
+Handy shortcuts: **⌘F** search (**↩** opens the best match) · **⌘R** scan now · **⌘1–⌘5** switch sections · **⌘[** / **⌘]** back and forward · **⇧⌘⌫** stop the selection · **⌥⌘I** inspector · **⌘,** settings.
 
-The [user guide](Docs/User-Guide.md) covers every panel, the temperature tools, and exactly how a safe stop works.
+### What a stop does
+
+Stopping always starts from a preview of the exact processes (PID plus start time, so a recycled PID is never hit) and needs **⌘↩** to confirm; Return alone never stops anything.
+
+- **Stop** runs the phases the preview showed: a polite request first (quit like ⌘Q for apps, Ctrl-C for dev servers, the database's own shutdown signal), a wait that ends as soon as everything exits, then force for whatever is left. A job paused with Ctrl-Z is resumed so it can exit.
+- **Never force-stop** — on by default for apps, editors, databases, container runtimes, git mid-operation and package installs — still runs every polite step and waits in full; it only holds back force. Anything left is reported, and **Force Stop N Processes** then sends SIGKILL to exactly those survivors.
+- **launchd services.** When a `brew services` database or another KeepAlive job would be restarted within a second, the preview offers to stop the launchd service itself, until the next login or for good, and shows the `launchctl` or `brew services` command to do or undo it yourself.
+- **Supervisors.** When pm2, forever or supervisord would restart the process, **Stop <supervisor> Instead** is the recommended stop; nodemon and other file watchers only restart on your next save, so stopping the child stays the default.
+- **Afterwards** the result names every process's fate and checks each port the workload listened on: free, still held by a named process (with **Stop It Too**), or not fully verifiable.
+
+The [user guide](Docs/User-Guide.md) covers every panel, the temperature tools, and exactly how a stop works.
+
+### Temperature sensors
+
+| Mac | Sensor map |
+| --- | --- |
+| Apple M1 and M2 families, Intel | Verified key tables |
+| Apple M3 and M4 families | Catalog tables, not yet verified on hardware; the panel says so |
+| Apple M5 and later | Sensors discovered on the Mac once per launch; best effort, and the panel says so |
+| Anything else | No Celsius readings; macOS thermal pressure only, with the reason shown |
 
 ## Build from source
 
@@ -114,19 +133,29 @@ That builds an optimized, ad-hoc-signed bundle at `dist/Ghost Process Sniper.app
 ## How it works
 
 ```text
-NativeProcessSampler (actor)      libproc / task_info probes, CPU·GPU·memory, SMC sensors
-    └─ RadarRefreshWorker (actor) families, duplicates, baselines, forecasts, rules
-        └─ RadarStore (actor)     local SQLite timeline and settings
-    └─ ProcessMonitor (MainActor) observable facade for the menu bar and console
+ProcessMonitor (MainActor)            observable facade; schedules scans by demand, power and heat
+    ├─ ThermalSampler (actor)         read-only SMC sensors, only while a window shows them
+    └─ RadarRefreshWorker (actor)     one scan at a time, at utility priority
+        ├─ NativeProcessSampler       libproc probes: CPU and memory for every process, then paths,
+        │                             argv, ports and forensics within a deadline
+        ├─ RadarPipeline              families, duplicates, baselines, member trends, CPU behavior,
+        │                             forgotten-process evidence, pressure attribution, rules
+        ├─ RadarStore (actor)         local SQLite, versioned migrations, learned in memory and written behind
+        └─ RadarPublishPayload        console snapshot and detail panels, published only when they change
+ProcessKiller                         preview, protection floor, phase walker, launchd bootout, outcome checks
 ```
 
 The code is split into two targets: **`GhostProcessSniperCore`** (sampling, intelligence, persistence, interventions — no UI) and **`GhostProcessSniper`** (SwiftUI app, menu bar, console). Architecture rules — folder ownership, the core/UI boundary, SQLite isolation, file-size budgets — are enforced by `Scripts/check_architecture.py`.
 
-Further reading: [Architecture](Docs/Architecture.md) · [Development](Docs/Development.md) · [Releasing](Docs/Releasing.md) · [Performance measurements](Docs/Performance-2026-09-09.md) · [Temperature precision](Docs/Precision-2026-09-09.md) · [Thermal insight](Docs/Thermal-Insight-2026-09-11.md)
+Further reading: [Architecture](Docs/Architecture.md) · [Development](Docs/Development.md) · [Releasing](Docs/Releasing.md) · [Thermals](Docs/Thermals.md) · [Performance measurements](Docs/Performance.md)
 
 ## Contributing
 
-Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). For bugs, **Engine → Copy Diagnostics** gives a report worth pasting. Security issues: see [SECURITY.md](SECURITY.md).
+Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). For bugs, **Copy Diagnostics** (in **Settings › Diagnostics**, or ⇧⌘D in the console) gives a report worth pasting. Security issues: see [SECURITY.md](SECURITY.md).
+
+## Acknowledgements
+
+The waiting indicator is [ThinkingOrbsKit](Packages/ThinkingOrbsKit), the SwiftUI edition of the [Libraries.dev](https://libraries.dev) thinking orbs by Jakub Antalik (MIT), vendored in `Packages/`. It appears only for waits of two seconds or more.
 
 ## License
 

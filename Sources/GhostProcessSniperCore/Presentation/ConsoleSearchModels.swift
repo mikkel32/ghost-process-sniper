@@ -9,13 +9,19 @@ public struct ProcessSearchRowModel: Identifiable, Equatable, Sendable {
     /// Why it matched, or what it runs when the name says it all.
     public let detail: String
     public let ownerName: String
+    public let memoryBytes: UInt64
     public let memoryText: String
+    /// Zero when the CPU could not be measured; the text shows a dash.
+    public let cpuPercent: Double
     public let cpuText: String
     public let commandLine: String
     public let executablePath: String
     public let isSystemProcess: Bool
+    /// Owned by the current user and not a system process, so it can go
+    /// through the stop preview.
+    public let isStoppable: Bool
 
-    init(process: ProcessMetrics, match: ProcessSearchMatch) {
+    init(process: ProcessMetrics, match: ProcessSearchMatch, isMine: Bool) {
         id = process.identity
         pid = process.pid
         name = process.name
@@ -25,11 +31,14 @@ public struct ProcessSearchRowModel: Identifiable, Equatable, Sendable {
         ownerName = process.ownerName
         // Other users' processes cannot be measured without privileges;
         // a dash is honest where a zero would be a claim.
+        memoryBytes = process.memoryForScoringBytes
+        cpuPercent = process.cpuMeasurementStatus == .unavailable ? 0 : process.cpuPercent
         memoryText = process.memoryForScoringBytes > 0 ? RadarFormat.bytes(process.memoryForScoringBytes) : "\u{2014}"
         cpuText = process.cpuMeasurementStatus == .unavailable ? "\u{2014}" : RadarFormat.percent(process.cpuPercent)
         commandLine = process.commandLine
         executablePath = process.executablePath
         isSystemProcess = process.isSystemProcess
+        isStoppable = isMine && !process.isSystemProcess
     }
 }
 
@@ -90,16 +99,18 @@ enum ConsoleSearchProjection {
                 return FamilyTriageViewModel.areInIncreasingOrder(lhs.row, rhs.row, by: sort)
             }
         let processRows = outcome.processes
-            .map { (process: untracked[$0.key].process, match: $0.value) }
+            .map { (entry: untracked[$0.key], match: $0.value) }
             .sorted { lhs, rhs in
                 if lhs.match.score != rhs.match.score { return lhs.match.score > rhs.match.score }
-                if lhs.process.memoryForScoringBytes != rhs.process.memoryForScoringBytes {
-                    return lhs.process.memoryForScoringBytes > rhs.process.memoryForScoringBytes
+                if lhs.entry.process.memoryForScoringBytes != rhs.entry.process.memoryForScoringBytes {
+                    return lhs.entry.process.memoryForScoringBytes > rhs.entry.process.memoryForScoringBytes
                 }
-                return lhs.process.pid < rhs.process.pid
+                return lhs.entry.process.pid < rhs.entry.process.pid
             }
             .prefix(processRowLimit)
-            .map { ProcessSearchRowModel(process: $0.process, match: $0.match) }
+            .map {
+                ProcessSearchRowModel(process: $0.entry.process, match: $0.match, isMine: $0.entry.subject.flags.contains(.mine))
+            }
 
         let results = ConsoleSearchResults(
             query: query,

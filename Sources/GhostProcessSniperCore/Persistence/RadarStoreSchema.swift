@@ -1,9 +1,83 @@
 import Foundation
 
 enum RadarStoreSchema {
+    /// The version that drops the write-only tables; the store backs the file
+    /// up before migrating past it.
+    static let slimVersion: Int32 = 3
+
+    /// The version that rebuilds the kill learning tables (held force,
+    /// outcome posteriors).
+    static let killLearningVersion: Int32 = 4
+
+    /// The version that adds the learned-baseline statistics (variance,
+    /// observed time, sessions). Old rows get defaults that mark them for
+    /// relearning.
+    static let baselineStatisticsVersion: Int32 = 5
+
+    /// Append new versions; never edit a version that has shipped.
+    static let migrations = [
+        // Version 1 is the schema from before versioning. Its statements are
+        // idempotent, so an unversioned file with these tables is stamped v1.
+        SQLiteMigration(
+            version: 1,
+            statements: migrationStatements,
+            addedColumns: [
+                SQLiteAddedColumn(table: "baselines", column: "measurement_version", definition: "INTEGER NOT NULL DEFAULT 0")
+            ]
+        ),
+        // Recurrence counts only resolved incidents, so the index must cover
+        // resolved_at as well.
+        SQLiteMigration(
+            version: 2,
+            statements: [
+                "DROP INDEX IF EXISTS incidents_signature_started",
+                "CREATE INDEX IF NOT EXISTS incidents_signature_started_resolved ON incidents(signature_id, started_at, resolved_at)"
+            ]
+        ),
+        // Tables nothing reads, and indexes no query uses. The kill detail
+        // tables stay until kill learning stops writing them.
+        SQLiteMigration(
+            version: slimVersion,
+            statements: [
+                "DROP TABLE IF EXISTS samples",
+                "DROP TABLE IF EXISTS forecasts",
+                "DROP TABLE IF EXISTS recommendation_history",
+                "DROP TABLE IF EXISTS predictive_alerts",
+                "DROP TABLE IF EXISTS actions",
+                "DROP INDEX IF EXISTS kill_operations_signature_time",
+                "DROP INDEX IF EXISTS kill_calibration_signature_kind_strategy"
+            ]
+        ),
+        // Learning rows written before held force and real refusals were told
+        // apart carry fake survivors and denials that locked families out of
+        // stopping, and the calibration aggregates become outcome posteriors.
+        // The three learning tables are rebuilt empty.
+        SQLiteMigration(
+            version: killLearningVersion,
+            statements: killLearningTables.map { "DROP TABLE IF EXISTS \($0)" } + killLearningStatements
+        ),
+        SQLiteMigration(
+            version: baselineStatisticsVersion,
+            statements: [],
+            addedColumns: [
+                SQLiteAddedColumn(table: "baselines", column: "memory_variance", definition: "REAL NOT NULL DEFAULT 0"),
+                SQLiteAddedColumn(table: "baselines", column: "cpu_variance", definition: "REAL NOT NULL DEFAULT 0"),
+                SQLiteAddedColumn(table: "baselines", column: "observed_seconds", definition: "REAL NOT NULL DEFAULT 0"),
+                SQLiteAddedColumn(table: "baselines", column: "session_count", definition: "INTEGER NOT NULL DEFAULT 1")
+            ]
+        )
+    ]
+
+    /// Tables whose rows expire `incidentRetention` after `created_at`.
+    static let createdAtRetentionTables = [
+        "kill_operations", "kill_operation_events", "kill_outcome_history",
+        "kill_strategy_history", "kill_signal_outcomes", "kill_graph_deltas",
+        "kill_reclaim_calibration", "kill_exit_events"
+    ]
+
+    /// Connection pragmas (WAL, synchronous, busy timeout) are applied by
+    /// SQLiteDatabase.open, because WAL cannot be enabled inside a transaction.
     static let migrationStatements = [
-        "PRAGMA journal_mode = WAL",
-        "PRAGMA synchronous = NORMAL",
         """
         CREATE TABLE IF NOT EXISTS settings(
             key TEXT PRIMARY KEY NOT NULL,
@@ -270,6 +344,67 @@ enum RadarStoreSchema {
         """,
         "CREATE INDEX IF NOT EXISTS kill_calibration_signature_kind_strategy ON kill_calibration_aggregates(signature_id, dev_kind, strategy)"
     ]
+
+    static let killLearningTables = ["kill_outcome_history", "kill_strategy_history", "kill_calibration_aggregates"]
+
+    static let killLearningStatements = [
+        """
+        CREATE TABLE IF NOT EXISTS kill_outcome_history(
+            id TEXT PRIMARY KEY NOT NULL,
+            operation_id TEXT NOT NULL,
+            signature_id TEXT,
+            strategy TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            graceful_count INTEGER NOT NULL,
+            forced_count INTEGER NOT NULL,
+            survivor_count INTEGER NOT NULL,
+            locked_count INTEGER NOT NULL,
+            realized_memory_bytes INTEGER NOT NULL,
+            denial_count INTEGER NOT NULL,
+            held_force INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS kill_outcome_history_signature_time ON kill_outcome_history(signature_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS kill_outcome_history_created ON kill_outcome_history(created_at)",
+        """
+        CREATE TABLE IF NOT EXISTS kill_strategy_history(
+            id TEXT PRIMARY KEY NOT NULL,
+            operation_id TEXT NOT NULL,
+            signature_id TEXT,
+            dev_kind TEXT,
+            strategy TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            graceful_count INTEGER NOT NULL,
+            forced_count INTEGER NOT NULL,
+            survivor_count INTEGER NOT NULL,
+            locked_count INTEGER NOT NULL,
+            realized_memory_bytes INTEGER NOT NULL,
+            denial_count INTEGER NOT NULL,
+            held_force INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS kill_strategy_history_signature_time ON kill_strategy_history(signature_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS kill_strategy_history_created ON kill_strategy_history(created_at)",
+        """
+        CREATE TABLE IF NOT EXISTS kill_calibration_aggregates(
+            id TEXT PRIMARY KEY NOT NULL,
+            signature_id TEXT,
+            dev_kind TEXT,
+            strategy TEXT NOT NULL,
+            operation_count INTEGER NOT NULL,
+            clean_count INTEGER NOT NULL,
+            clean_weight REAL NOT NULL,
+            total_weight REAL NOT NULL,
+            latency_buckets TEXT NOT NULL,
+            respawn_weight REAL NOT NULL,
+            censored_run INTEGER NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS kill_calibration_signature_kind_strategy ON kill_calibration_aggregates(signature_id, dev_kind, strategy)"
+    ]
 }
 
 enum RadarStoreQueries {
@@ -282,18 +417,45 @@ enum RadarStoreQueries {
         LIMIT ?
         """
 
-    static let recentForecasts = """
-        SELECT signature_id, state, confidence, eta_seconds, why_now, generated_at
-        FROM forecasts
-        ORDER BY generated_at DESC
-        LIMIT ?
+    static let loadEpisodes = """
+        SELECT id, signature_id, level, max_score, memory_bytes, last_seen_at, resolved_at
+        FROM incidents
+        WHERE resolved_at IS NULL OR resolved_at >= ?
         """
 
-    static let recentPredictiveAlerts = """
-        SELECT id, signature_id, state, message, created_at
-        FROM predictive_alerts
-        ORDER BY created_at DESC
-        LIMIT ?
+    static let insertIncident = """
+        INSERT INTO incidents(id, signature_id, display_name, canonical_path, command_fingerprint, family_name,
+                              level, max_score, memory_bytes, cpu_percent, leak_velocity, reasons_json,
+                              started_at, last_seen_at, resolved_at, occurrence_count)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)
+        """
+
+    static let refreshIncident = """
+        UPDATE incidents
+        SET level = ?, max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
+            cpu_percent = ?, leak_velocity = ?, last_seen_at = ?
+        WHERE id = ?
+        """
+
+    static let escalateIncident = """
+        UPDATE incidents
+        SET level = ?, max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
+            cpu_percent = ?, leak_velocity = ?, last_seen_at = ?, reasons_json = ?
+        WHERE id = ?
+        """
+
+    static let reopenIncident = """
+        UPDATE incidents
+        SET resolved_at = NULL, occurrence_count = occurrence_count + 1, last_seen_at = ?, level = ?,
+            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?), cpu_percent = ?, leak_velocity = ?
+        WHERE id = ?
+        """
+
+    static let closeIncident = """
+        UPDATE incidents
+        SET resolved_at = ?, last_seen_at = MAX(last_seen_at, ?),
+            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?)
+        WHERE id = ?
         """
 
     static let recentKillOperations = """
@@ -313,34 +475,43 @@ enum RadarStoreQueries {
         LIMIT ?
         """
 
-    static let killHistorySummary = """
+    /// The latest 20 stops of one family within 30 days. Survivors the user
+    /// chose to keep (held force) are not failures of the stop.
+    static let killHistorySummary = historySummary(from: "kill_outcome_history")
+    static let killStrategyHistory = historySummary(from: "kill_strategy_history")
+
+    private static func historySummary(from table: String) -> String {
+        """
         SELECT COUNT(*),
                AVG(CASE WHEN survivor_count = 0 AND forced_count = 0 THEN 1.0 ELSE 0.0 END),
                AVG(CASE WHEN forced_count > 0 THEN 1.0 ELSE 0.0 END),
-               AVG(CASE WHEN survivor_count > 0 THEN 1.0 ELSE 0.0 END),
+               AVG(CASE WHEN survivor_count > 0 AND held_force = 0 THEN 1.0 ELSE 0.0 END),
                AVG(realized_memory_bytes),
                SUM(denial_count)
-        FROM kill_outcome_history
-        WHERE signature_id = ?
+        FROM (SELECT * FROM \(table)
+              WHERE signature_id = ? AND created_at >= ?
+              ORDER BY created_at DESC
+              LIMIT 20)
+        """
+    }
+
+    /// Outcome posteriors: one row per family and strategy (no dev kind),
+    /// one per kind and strategy (no signature) as the family's prior.
+    static let killOutcomePosteriorColumns = """
+        signature_id, dev_kind, strategy, operation_count, clean_count, clean_weight, total_weight,
+        latency_buckets, respawn_weight, censored_run, updated_at
         """
 
-    static let killStrategyHistoryBySignatureAndKind = """
-        SELECT COUNT(*),
-               AVG(CASE WHEN survivor_count = 0 AND forced_count = 0 THEN 1.0 ELSE 0.0 END),
-               AVG(CASE WHEN forced_count > 0 THEN 1.0 ELSE 0.0 END),
-               AVG(CASE WHEN survivor_count > 0 THEN 1.0 ELSE 0.0 END),
-               AVG(realized_memory_bytes),
-               SUM(denial_count)
-        FROM kill_strategy_history
-        WHERE signature_id = ? OR dev_kind = ?
-        """
-
-    static let killCalibration = """
-        SELECT signature_id, dev_kind, strategy, operation_count, graceful_success_rate,
-               force_rate, survivor_rate, average_grace_seconds, reclaim_accuracy,
-               denial_penalty, updated_at
+    static let killOutcomePosterior = """
+        SELECT \(killOutcomePosteriorColumns)
         FROM kill_calibration_aggregates
         WHERE id = ?
         LIMIT 1
+        """
+
+    static let killOutcomeHistory = """
+        SELECT \(killOutcomePosteriorColumns)
+        FROM kill_calibration_aggregates
+        WHERE (signature_id = ? AND dev_kind IS NULL) OR (signature_id IS NULL AND dev_kind = ?)
         """
 }

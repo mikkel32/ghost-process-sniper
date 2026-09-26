@@ -1,42 +1,10 @@
 import Foundation
 
-public enum RefreshGateDecision: Equatable, Sendable {
-    case run
-    case coalesced(Int)
-
-    public var shouldRun: Bool {
-        if case .run = self {
-            return true
-        }
-        return false
-    }
-}
-
-public actor RefreshGate {
-    private var isRunning = false
-    private var pendingCoalescedCount = 0
-
-    public init() {}
-
-    public func begin() -> RefreshGateDecision {
-        if isRunning {
-            pendingCoalescedCount += 1
-            return .coalesced(pendingCoalescedCount)
-        }
-        isRunning = true
-        return .run
-    }
-
-    public func finish() -> Int {
-        let coalesced = pendingCoalescedCount
-        pendingCoalescedCount = 0
-        isRunning = false
-        return coalesced
-    }
-
-    public var inFlight: Bool {
-        isRunning
-    }
+public enum RefreshReason: Sendable {
+    /// Someone waits on data sampled after the call: Scan now, a stop, a search.
+    case user
+    /// A background tick; it joins a running refresh instead of queueing one.
+    case loop
 }
 
 public struct RefreshRequest: Equatable, Sendable {
@@ -44,10 +12,17 @@ public struct RefreshRequest: Equatable, Sendable {
     public let currentFamilies: [ProcessFamily]
     public let currentIncidents: [RadarIncident]
     public let currentStoreHealth: StoreHealth
-    public let previousRefresh: RefreshStats
     public let previousConsoleSnapshot: RadarConsoleSnapshot?
-    public let popoverVisible: Bool
+    /// The popover or the console is on screen.
+    public let uiVisible: Bool
     public let focusedSignatureIDs: Set<String>
+    /// Read every same-user process's listening ports this tick (a `port:` search).
+    public let portCensusRequested: Bool
+    /// Main-actor figures the worker folds into the published diagnostics,
+    /// so the main actor does not rebuild them after every tick.
+    public let hitchReport: RadarSmoothnessReport
+    public let lastPublishMilliseconds: Double
+    public let coalescedRefreshCount: Int
     public let now: Date
     public let startedAt: Date
 
@@ -56,10 +31,13 @@ public struct RefreshRequest: Equatable, Sendable {
         currentFamilies: [ProcessFamily],
         currentIncidents: [RadarIncident],
         currentStoreHealth: StoreHealth,
-        previousRefresh: RefreshStats,
         previousConsoleSnapshot: RadarConsoleSnapshot? = nil,
-        popoverVisible: Bool,
+        uiVisible: Bool,
         focusedSignatureIDs: Set<String>,
+        portCensusRequested: Bool = false,
+        hitchReport: RadarSmoothnessReport = .empty,
+        lastPublishMilliseconds: Double = 0,
+        coalescedRefreshCount: Int = 0,
         now: Date,
         startedAt: Date
     ) {
@@ -67,10 +45,13 @@ public struct RefreshRequest: Equatable, Sendable {
         self.currentFamilies = currentFamilies
         self.currentIncidents = currentIncidents
         self.currentStoreHealth = currentStoreHealth
-        self.previousRefresh = previousRefresh
         self.previousConsoleSnapshot = previousConsoleSnapshot
-        self.popoverVisible = popoverVisible
+        self.uiVisible = uiVisible
         self.focusedSignatureIDs = focusedSignatureIDs
+        self.portCensusRequested = portCensusRequested
+        self.hitchReport = hitchReport
+        self.lastPublishMilliseconds = lastPublishMilliseconds
+        self.coalescedRefreshCount = coalescedRefreshCount
         self.now = now
         self.startedAt = startedAt
     }
@@ -136,6 +117,9 @@ public actor RadarRefreshWorker {
     private var scheduler = RadarScheduler()
     private var averageRefreshMilliseconds = 0.0
     private var lastIncidentRefreshDate: Date?
+    /// The store flush the incident list was last read after. Incidents are
+    /// only written by a flush, so until the next one a re-read is identical.
+    private var incidentsReadAtFlush: Date?
     private var spikeRing = SpikeRingBuffer(limit: 8)
     private var thermalHistory = ThermalActivityHistory()
 
@@ -159,8 +143,9 @@ public actor RadarRefreshWorker {
         let plan = scheduler.plan(
             settings: effectiveSettings,
             families: request.currentFamilies,
-            popoverVisible: request.popoverVisible,
+            uiVisible: request.uiVisible,
             focusedSignatureIDs: request.focusedSignatureIDs,
+            portCensusRequested: request.portCensusRequested,
             now: request.now
         )
 
@@ -253,13 +238,16 @@ public actor RadarRefreshWorker {
 
         do {
             currentStoreHealth = try await store?.enqueue(model: model, settings: request.settings, now: request.now) ?? .empty
-            if shouldRefreshIncidents(
-                summary: summary,
+            if Self.shouldRereadIncidents(
+                lastReadAt: lastIncidentRefreshDate,
+                readAtFlush: incidentsReadAtFlush,
+                storeFlush: currentStoreHealth.lastFlushDate,
                 performanceMode: scheduler.currentPerformanceMode,
                 now: request.now
             ) {
                 currentIncidents = try await store?.recentIncidents() ?? []
                 lastIncidentRefreshDate = request.now
+                incidentsReadAtFlush = currentStoreHealth.lastFlushDate
             }
         } catch {
             storeError = error.localizedDescription
@@ -274,12 +262,7 @@ public actor RadarRefreshWorker {
         )
 
         let storeMilliseconds = Date().timeIntervalSince(storeStart) * 1_000
-        let nextInterval = scheduler.nextInterval(
-            settings: effectiveSettings,
-            summary: summary,
-            lastRefresh: request.previousRefresh,
-            popoverVisible: request.popoverVisible
-        )
+        let hotSinceAlerted = scheduler.noteHotFamilies(scored.families, now: request.now)
         let stats = RefreshStats(
             startedAt: request.startedAt,
             sampleMilliseconds: batch.stats.elapsedMilliseconds,
@@ -291,6 +274,14 @@ public actor RadarRefreshWorker {
             processCount: batch.processes.count,
             familyCount: scored.families.count
         )
+        let nextInterval = scheduler.nextInterval(settings: effectiveSettings, context: RadarSchedulingContext(
+            uiVisible: request.uiVisible,
+            power: scheduler.currentPower,
+            thermalPressure: scheduler.currentPressure,
+            summaryLevel: summary.level,
+            hotSinceAlerted: hotSinceAlerted,
+            currentRefreshMilliseconds: stats.totalMilliseconds
+        ))
         let performance = metrics(
             performanceMode: scheduler.currentPerformanceMode,
             stats: stats,
@@ -308,14 +299,12 @@ public actor RadarRefreshWorker {
         let spikeThreshold = RadarPerformanceBudget.budget(for: scheduler.currentPerformanceMode).targetRefreshMilliseconds
         spikeRing.record(trace: phaseTrace, threshold: spikeThreshold, at: request.now)
         let spikeReport = spikeRing.report
-        let tracedPerformance = performance.updatingSmoothness(
-            hitchCount: spikeReport.hitchCount,
-            worstHitchMilliseconds: spikeReport.worstHitchMilliseconds,
-            latestSpikePhase: spikeReport.latestSpikePhase,
-            scannerTaskCount: batch.stats.scannerTaskCount,
-            tinyQueueSequentialCount: batch.stats.tinyQueueSequentialCount,
-            smoothnessReport: spikeReport
-        )
+        var tracedPerformance = performance
+        tracedPerformance.smoothness.record(spikeReport.merging(request.hitchReport))
+        tracedPerformance.smoothness.mainActorPublishMilliseconds = request.lastPublishMilliseconds
+        tracedPerformance.smoothness.coalescedRefreshCount = request.coalescedRefreshCount
+        tracedPerformance.smoothness.scannerTaskCount = batch.stats.scannerTaskCount
+        tracedPerformance.smoothness.tinyQueueSequentialCount = batch.stats.tinyQueueSequentialCount
         let payload = RadarPublishPayload.build(
             families: scored.families,
             duplicateClusters: build.duplicateClusters,
@@ -328,7 +317,8 @@ public actor RadarRefreshWorker {
             performance: tracedPerformance,
             previous: request.previousConsoleSnapshot,
             generatedAt: request.now,
-            detailSignatures: request.focusedSignatureIDs.union(scored.families.prefix(8).map(\.familyKey))
+            detailSignatures: request.focusedSignatureIDs.union(scored.families.prefix(8).map(\.familyKey)),
+            processes: batch.processes
         )
         let currentActivity = ThermalActivityAnalyzer.project(
             processes: batch.processes, families: scored.families, now: request.now)
@@ -368,6 +358,20 @@ public actor RadarRefreshWorker {
     ) -> RadarPerformanceMetrics {
         let alpha = averageRefreshMilliseconds == 0 ? 1 : 0.18
         averageRefreshMilliseconds = averageRefreshMilliseconds * (1 - alpha) + stats.totalMilliseconds * alpha
+        var smoothness = RadarSmoothnessState()
+        smoothness.refreshInFlight = true
+        smoothness.scannerWorkerCount = samplerStats.scannerWorkerCount
+        smoothness.skippedOptionalWorkCount = samplerStats.skippedOptionalWorkCount
+        smoothness.scannerTaskCount = samplerStats.scannerTaskCount
+        smoothness.tinyQueueSequentialCount = samplerStats.tinyQueueSequentialCount
+        smoothness.samplerAllocationReuseCount = samplerStats.scratchpadReuseCount
+        smoothness.taskInfoReadCount = samplerStats.taskInfoReadCount
+        smoothness.reusedProcessRecordCount = samplerStats.reusedRecordCount
+        smoothness.duplicateClusterCount = duplicateClusterCount
+        smoothness.promotedDuplicateCandidateCount = promotedDuplicateCandidateCount
+        smoothness.duplicateDetectorMilliseconds = duplicateDetectorMilliseconds
+        smoothness.hardwareOffenderCount = hardwareOffenderCount
+        smoothness.hardwareDetectorMilliseconds = hardwareDetectorMilliseconds
         return RadarPerformanceMetrics(
             mode: performanceMode,
             pressureLevel: scheduler.currentPressure,
@@ -381,31 +385,20 @@ public actor RadarRefreshWorker {
             lastStoreFlushDate: storeHealth.lastFlushDate,
             budget: RadarPerformanceBudget.budget(for: performanceMode),
             scannerHealth: scannerHealth,
-            refreshInFlight: true,
-            scannerWorkerCount: samplerStats.scannerWorkerCount,
-            skippedOptionalWorkCount: samplerStats.skippedOptionalWorkCount,
-            scannerTaskCount: samplerStats.scannerTaskCount,
-            tinyQueueSequentialCount: samplerStats.tinyQueueSequentialCount,
-            samplerAllocationReuseCount: samplerStats.scratchpadReuseCount,
-            taskInfoReadCount: samplerStats.taskInfoReadCount,
-            reusedProcessRecordCount: samplerStats.reusedRecordCount,
-            duplicateClusterCount: duplicateClusterCount,
-            promotedDuplicateCandidateCount: promotedDuplicateCandidateCount,
-            duplicateDetectorMilliseconds: duplicateDetectorMilliseconds,
-            hardwareOffenderCount: hardwareOffenderCount,
-            hardwareDetectorMilliseconds: hardwareDetectorMilliseconds
+            smoothness: smoothness
         )
     }
 
-    private func shouldRefreshIncidents(
-        summary: RadarSummary,
+    /// Re-reads after every flush, and on a slow timer as a safety net for
+    /// anything else that touches the incident table.
+    static func shouldRereadIncidents(
+        lastReadAt: Date?,
+        readAtFlush: Date?,
+        storeFlush: Date?,
         performanceMode: RadarPerformanceMode,
         now: Date
     ) -> Bool {
-        if summary.level >= .hot || summary.hotCount > 0 {
-            return true
-        }
-        guard let lastIncidentRefreshDate else {
+        guard let lastReadAt, storeFlush == readAtFlush else {
             return true
         }
         let quietInterval: TimeInterval = switch performanceMode {
@@ -413,6 +406,6 @@ public actor RadarRefreshWorker {
         case .balanced: 15
         case .realtime: 5
         }
-        return now.timeIntervalSince(lastIncidentRefreshDate) >= quietInterval
+        return now.timeIntervalSince(lastReadAt) >= quietInterval
     }
 }

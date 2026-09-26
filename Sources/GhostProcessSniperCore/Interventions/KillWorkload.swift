@@ -11,6 +11,11 @@ public struct KillWorkloadProcess: Equatable, Sendable {
     public let commandLine: String
     public let listeningPorts: [Int]
     public let isRoot: Bool
+    /// Pins the radar's numbers to this exact process, not a PID reused since.
+    public let identity: ProcessIdentity?
+    /// CPU over the last radar scan; the kill snapshot cannot measure it.
+    public let cpuPercent: Double
+    public let memoryBytes: UInt64
 
     public init(
         pid: Int32,
@@ -19,7 +24,10 @@ public struct KillWorkloadProcess: Equatable, Sendable {
         executablePath: String,
         commandLine: String,
         listeningPorts: [Int] = [],
-        isRoot: Bool = false
+        isRoot: Bool = false,
+        identity: ProcessIdentity? = nil,
+        cpuPercent: Double = 0,
+        memoryBytes: UInt64 = 0
     ) {
         self.pid = pid
         self.parentPID = parentPID
@@ -28,6 +36,9 @@ public struct KillWorkloadProcess: Equatable, Sendable {
         self.commandLine = commandLine
         self.listeningPorts = listeningPorts
         self.isRoot = isRoot
+        self.identity = identity
+        self.cpuPercent = cpuPercent
+        self.memoryBytes = memoryBytes
     }
 }
 
@@ -53,13 +64,21 @@ public struct KillWorkloadProfile: Equatable, Sendable {
     /// Nearest parent first, stopping before launchd.
     public let ancestors: [KillWorkloadAncestor]
     public let parentIsLaunchd: Bool
+    /// The launchd job that runs the root, found when the stop is previewed.
+    public let launchdJob: LaunchdJob?
 
     public static let empty = KillWorkloadProfile(processes: [], ancestors: [], parentIsLaunchd: false)
 
-    public init(processes: [KillWorkloadProcess], ancestors: [KillWorkloadAncestor], parentIsLaunchd: Bool) {
+    public init(
+        processes: [KillWorkloadProcess],
+        ancestors: [KillWorkloadAncestor],
+        parentIsLaunchd: Bool,
+        launchdJob: LaunchdJob? = nil
+    ) {
         self.processes = processes
         self.ancestors = ancestors
         self.parentIsLaunchd = parentIsLaunchd
+        self.launchdJob = launchdJob
     }
 
     public var root: KillWorkloadProcess? {
@@ -78,7 +97,10 @@ public struct KillWorkloadProfile: Equatable, Sendable {
             executablePath: process.executablePath,
             commandLine: process.commandLine,
             listeningPorts: process.listeningPorts,
-            isRoot: true
+            isRoot: true,
+            identity: process.identity,
+            cpuPercent: process.cpuPercent,
+            memoryBytes: process.memoryBytes
         )
         let byPID = Dictionary(processes.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
         var chain: [KillWorkloadAncestor] = []
@@ -93,7 +115,30 @@ public struct KillWorkloadProfile: Equatable, Sendable {
         return KillWorkloadProfile(
             processes: [single],
             ancestors: chain + ancestors,
-            parentIsLaunchd: isRootOfFamily ? parentIsLaunchd : process.parentPID == 1
+            parentIsLaunchd: isRootOfFamily ? parentIsLaunchd : process.parentPID == 1,
+            launchdJob: isRootOfFamily ? launchdJob : nil
         )
+    }
+
+    public func withLaunchdJob(_ job: LaunchdJob?) -> KillWorkloadProfile {
+        KillWorkloadProfile(processes: processes, ancestors: ancestors, parentIsLaunchd: parentIsLaunchd, launchdJob: job)
+    }
+
+    /// The context of stopping an ancestor instead, such as the supervisor
+    /// that keeps restarting this family: the ancestor becomes the root and
+    /// everything below it, this family included, goes down with it.
+    public func rerooted(atAncestor pid: Int32) -> KillWorkloadProfile? {
+        guard let index = ancestors.firstIndex(where: { $0.pid == pid }) else { return nil }
+        let chain = ancestors[...index].reversed().enumerated().map { depth, ancestor in
+            KillWorkloadProcess(pid: ancestor.pid, name: ancestor.name, executablePath: ancestor.executablePath,
+                                commandLine: ancestor.commandLine, isRoot: depth == 0)
+        }
+        let below = processes.map { process in
+            KillWorkloadProcess(pid: process.pid, parentPID: process.parentPID, name: process.name,
+                                executablePath: process.executablePath, commandLine: process.commandLine,
+                                listeningPorts: process.listeningPorts, identity: process.identity,
+                                cpuPercent: process.cpuPercent, memoryBytes: process.memoryBytes)
+        }
+        return KillWorkloadProfile(processes: chain + below, ancestors: Array(ancestors[(index + 1)...]), parentIsLaunchd: false)
     }
 }

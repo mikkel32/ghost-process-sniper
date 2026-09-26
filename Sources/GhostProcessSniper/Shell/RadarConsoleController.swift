@@ -4,17 +4,32 @@ import SwiftUI
 
 @MainActor
 final class RadarConsoleController: NSObject, NSWindowDelegate {
+    private static let frameName = "GhostProcessSniper.RadarConsole"
     private var window: NSWindow?
+    // Kept across closes, so a reopened console keeps its place, query and histories.
     private var session: RadarConsoleSession?
+    private var monitor: ProcessMonitor?
 
-    func show(monitor: ProcessMonitor, killer: ProcessKiller) {
+    func show(
+        monitor: ProcessMonitor,
+        killer: ProcessKiller,
+        quickStops: QuickStopAdvisor,
+        openSettings: @escaping () -> Void
+    ) {
+        self.monitor = monitor
         if let window {
             window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
+            monitor.setConsoleVisible(true)
             return
         }
 
-        let session = RadarConsoleSession(monitor: monitor, killer: killer)
+        let session = self.session ?? RadarConsoleSession(
+            monitor: monitor, killer: killer, quickStops: quickStops, openSettings: openSettings
+        )
+        if let key = session.state.focusedSelection.familyKey, session.family(forKey: key) == nil {
+            session.state.focusedSelection = .overview
+        }
         let rootView = RadarConsoleView(session: session)
         let hosting = NSHostingController(rootView: rootView)
         // The console owns its window dimensions. A lazy process list must not
@@ -33,8 +48,10 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unifiedCompact
-        window.setFrameAutosaveName("GhostProcessSniper.RadarConsole")
-        window.center()
+        if !window.setFrameUsingName(Self.frameName) {
+            window.center()
+        }
+        window.setFrameAutosaveName(Self.frameName)
         if let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame {
             var frame = window.frame
             frame.size.width = min(frame.width, visibleFrame.width)
@@ -47,8 +64,21 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         self.window = window
         self.session = session
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
+        monitor.setConsoleVisible(true)
         RadarLogger.ui.info("Opened radar console")
+    }
+
+    /// Stop needs a selected family with processes you own; snooze and
+    /// ignore need any selected family. Menu validation is rare, so the
+    /// answer is computed fresh rather than read from presentation state.
+    /// A closed console keeps its session, but its selection is not on
+    /// screen, so nothing may act on it.
+    func canActOnSelection(stop: Bool) -> Bool {
+        guard window != nil, let session, session.state.focusedSelection.familyKey != nil else {
+            return false
+        }
+        return stop ? session.selectedFamily?.ownedIdentities.isEmpty == false : true
     }
 
     @discardableResult
@@ -110,20 +140,84 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         session?.ignoreSelected()
     }
 
+    func prepareKill(familyKey: String) {
+        showIfNeeded()
+        session?.focus(.family(familyKey))
+        session?.prepareKill(familyKey: familyKey)
+    }
+
+    func stopFamily(_ action: QuickStopAction) {
+        showIfNeeded()
+        session?.quickStop(action)
+    }
+
+    var canGoBack: Bool {
+        window != nil && session?.history.canGoBack == true
+    }
+
+    var canGoForward: Bool {
+        window != nil && session?.history.canGoForward == true
+    }
+
+    func goBack() {
+        showIfNeeded()
+        session?.goBack()
+    }
+
+    func goForward() {
+        showIfNeeded()
+        session?.goForward()
+    }
+
     func prepareKillSelected() {
         showIfNeeded()
-        session?.prepareKillSelected()
+        session?.stopSelected()
+    }
+
+    // A minimized or fully covered console is not a visible surface: the
+    // engine drops to its background cadence and the session stops presenting.
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        updateVisibility()
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        updateVisibility()
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        updateVisibility()
     }
 
     func windowWillClose(_ notification: Notification) {
-        session?.stopPresentation()
+        monitor?.setConsoleVisible(false)
+        session?.setVisible(false)
+        // Transient UI must not resurface on the next open: the view that
+        // would dismiss a toast goes away with the window.
+        session?.pendingKill = nil
+        // A preview still being prepared checks this id before it presents,
+        // so it lands nowhere instead of reopening with the next console and
+        // blocking the stop that open was for.
+        session?.preparingStop = nil
+        // A cull still stopping copies carries on and shows its progress on
+        // the next open; one that is done or not yet started is dropped.
+        if session?.cullRun?.isRunning != true { session?.cullRun = nil }
+        session?.toast = nil
+        session?.showQuickGuide = false
         window = nil
-        session = nil
         RadarLogger.ui.info("Closed radar console")
+    }
+
+    private func updateVisibility() {
+        guard let window else {
+            return
+        }
+        let visible = window.occlusionState.contains(.visible) && !window.isMiniaturized
+        monitor?.setConsoleVisible(visible)
+        session?.setVisible(visible)
     }
 
     private func showIfNeeded() {
         window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 }
