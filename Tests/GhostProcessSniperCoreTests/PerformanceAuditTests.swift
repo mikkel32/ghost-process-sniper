@@ -21,8 +21,7 @@ final class PerformanceAuditTests: XCTestCase {
                 settings.groupFamilies = false
                 let worker = RadarRefreshWorker(store: nil, builder: ProcessFamilyBuilder(currentUserID: 501))
                 let request = RefreshRequest(settings: settings, currentFamilies: [], currentIncidents: [],
-                                             currentStoreHealth: .empty, previousRefresh: .empty,
-                                             popoverVisible: true,
+                                             currentStoreHealth: .empty, uiVisible: true,
                                              focusedSignatureIDs: [ProcessSignature.from(root: processes[0]).id],
                                              now: now, startedAt: Date())
                 let started = DispatchTime.now().uptimeNanoseconds

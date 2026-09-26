@@ -12,9 +12,9 @@ public struct RefreshRequest: Equatable, Sendable {
     public let currentFamilies: [ProcessFamily]
     public let currentIncidents: [RadarIncident]
     public let currentStoreHealth: StoreHealth
-    public let previousRefresh: RefreshStats
     public let previousConsoleSnapshot: RadarConsoleSnapshot?
-    public let popoverVisible: Bool
+    /// The popover or the console is on screen.
+    public let uiVisible: Bool
     public let focusedSignatureIDs: Set<String>
     /// Read every same-user process's listening ports this tick (a `port:` search).
     public let portCensusRequested: Bool
@@ -26,9 +26,8 @@ public struct RefreshRequest: Equatable, Sendable {
         currentFamilies: [ProcessFamily],
         currentIncidents: [RadarIncident],
         currentStoreHealth: StoreHealth,
-        previousRefresh: RefreshStats,
         previousConsoleSnapshot: RadarConsoleSnapshot? = nil,
-        popoverVisible: Bool,
+        uiVisible: Bool,
         focusedSignatureIDs: Set<String>,
         portCensusRequested: Bool = false,
         now: Date,
@@ -38,9 +37,8 @@ public struct RefreshRequest: Equatable, Sendable {
         self.currentFamilies = currentFamilies
         self.currentIncidents = currentIncidents
         self.currentStoreHealth = currentStoreHealth
-        self.previousRefresh = previousRefresh
         self.previousConsoleSnapshot = previousConsoleSnapshot
-        self.popoverVisible = popoverVisible
+        self.uiVisible = uiVisible
         self.focusedSignatureIDs = focusedSignatureIDs
         self.portCensusRequested = portCensusRequested
         self.now = now
@@ -134,7 +132,7 @@ public actor RadarRefreshWorker {
         let plan = scheduler.plan(
             settings: effectiveSettings,
             families: request.currentFamilies,
-            popoverVisible: request.popoverVisible,
+            uiVisible: request.uiVisible,
             focusedSignatureIDs: request.focusedSignatureIDs,
             portCensusRequested: request.portCensusRequested,
             now: request.now
@@ -253,12 +251,7 @@ public actor RadarRefreshWorker {
         )
 
         let storeMilliseconds = Date().timeIntervalSince(storeStart) * 1_000
-        let nextInterval = scheduler.nextInterval(
-            settings: effectiveSettings,
-            summary: summary,
-            lastRefresh: request.previousRefresh,
-            popoverVisible: request.popoverVisible
-        )
+        let hotSinceAlerted = scheduler.noteHotFamilies(scored.families, now: request.now)
         let stats = RefreshStats(
             startedAt: request.startedAt,
             sampleMilliseconds: batch.stats.elapsedMilliseconds,
@@ -270,6 +263,14 @@ public actor RadarRefreshWorker {
             processCount: batch.processes.count,
             familyCount: scored.families.count
         )
+        let nextInterval = scheduler.nextInterval(settings: effectiveSettings, context: RadarSchedulingContext(
+            uiVisible: request.uiVisible,
+            power: scheduler.currentPower,
+            thermalPressure: scheduler.currentPressure,
+            summaryLevel: summary.level,
+            hotSinceAlerted: hotSinceAlerted,
+            currentRefreshMilliseconds: stats.totalMilliseconds
+        ))
         let performance = metrics(
             performanceMode: scheduler.currentPerformanceMode,
             stats: stats,

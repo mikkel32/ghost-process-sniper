@@ -1629,8 +1629,7 @@ private func radarRefreshWorkerPublishesStableOutcome() async throws {
             currentFamilies: [],
             currentIncidents: [],
             currentStoreHealth: .empty,
-            previousRefresh: .empty,
-            popoverVisible: false,
+            uiVisible: false,
             focusedSignatureIDs: [],
             now: Date(timeIntervalSince1970: 9_500),
             startedAt: Date(timeIntervalSince1970: 9_500)
@@ -1653,13 +1652,13 @@ private func radarSchedulerAdaptsCadence() throws {
     let quiet = RadarSummary(statusText: "Quiet", level: .quiet, familyCount: 0, hotCount: 0, totalMemoryBytes: 0, topFamilyName: nil)
     let hot = RadarSummary(statusText: "1 hot", level: .hot, familyCount: 1, hotCount: 1, totalMemoryBytes: 1, topFamilyName: "node")
 
-    let quietInterval = scheduler.nextInterval(settings: settings, summary: quiet, lastRefresh: .empty, popoverVisible: false)
-    let jitteredQuietInterval = scheduler.nextInterval(settings: settings, summary: quiet, lastRefresh: .empty, popoverVisible: false)
-    let hotInterval = scheduler.nextInterval(settings: settings, summary: hot, lastRefresh: .empty, popoverVisible: false)
-    let plan = scheduler.plan(settings: settings, families: [hotFamily(pid: 900, memory: 300_000_000, cpu: 95)], popoverVisible: false, now: Date())
+    let quietInterval = scheduler.nextInterval(settings: settings, context: RadarSchedulingContext(uiVisible: false, summaryLevel: quiet.level))
+    let hotInterval = scheduler.nextInterval(settings: settings, context: RadarSchedulingContext(uiVisible: false, summaryLevel: hot.level))
+    let visibleInterval = scheduler.nextInterval(settings: settings, context: RadarSchedulingContext(uiVisible: true, summaryLevel: quiet.level))
+    let plan = scheduler.plan(settings: settings, families: [hotFamily(pid: 900, memory: 300_000_000, cpu: 95)], uiVisible: false, now: Date())
 
     try check(quietInterval > hotInterval, "scheduler should back off quiet radar and tighten hot radar")
-    try check(jitteredQuietInterval != quietInterval, "quiet scheduler cadence should add small jitter to avoid one-second alignment")
+    try check(visibleInterval < quietInterval, "an open surface should sample faster than the hidden quiet cadence")
     try check(plan.maxForensicsPerRefresh >= 0, "scheduler should produce a bounded forensics plan")
     try check(plan.commandRefreshInterval >= 20, "quiet balanced plans should avoid frequent command/path sweeps")
 }
@@ -1670,7 +1669,7 @@ private func radarSchedulerFocusesSelectedFamilies() throws {
     let plan = scheduler.plan(
         settings: .aggressive,
         families: [family],
-        popoverVisible: false,
+        uiVisible: false,
         focusedSignatureIDs: [family.signature.id],
         now: Date(timeIntervalSince1970: 9_000)
     )

@@ -96,7 +96,7 @@ final class FullCoverageSamplingTests: XCTestCase {
     func testCriticalThermalStateStillMeasuresHotFamilies() async throws {
         var scheduler = RadarScheduler(pressureProvider: { .critical })
         let hot = RefreshPerformanceFixture.family(RefreshPerformanceFixture.process(0, pid: 1_001), level: .hot)
-        let plan = scheduler.plan(settings: .smart, families: [hot], popoverVisible: false,
+        let plan = scheduler.plan(settings: .smart, families: [hot], uiVisible: false,
                                   now: Date(timeIntervalSince1970: 1_000_000))
         XCTAssertTrue(plan.probePolicy.allowsRichMetrics)
         XCTAssertGreaterThanOrEqual(plan.metricsEnrichmentBudget, 4)

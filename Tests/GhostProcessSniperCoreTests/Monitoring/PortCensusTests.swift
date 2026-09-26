@@ -12,7 +12,7 @@ final class PortCensusTests: XCTestCase {
         XCTAssertTrue(demand.candidateIdentities.isEmpty, "a quiet family is not a candidate")
 
         var scheduler = RadarScheduler(pressureProvider: { .nominal })
-        let plan = scheduler.plan(settings: .smart, families: [dev, plain], popoverVisible: true, now: now)
+        let plan = scheduler.plan(settings: .smart, families: [dev, plain], uiVisible: true, now: now)
         XCTAssertEqual(plan.hintedIdentities, Set(dev.members.map(\.identity)))
         XCTAssertEqual(plan.portCensusIdentities, Set(dev.members.map(\.identity)))
     }
@@ -22,14 +22,14 @@ final class PortCensusTests: XCTestCase {
         var scheduler = RadarScheduler(pressureProvider: { .nominal })
         var covered = Set<ProcessIdentity>()
         for step in 0..<5 {
-            let plan = scheduler.plan(settings: .smart, families: [dev], popoverVisible: false,
+            let plan = scheduler.plan(settings: .smart, families: [dev], uiVisible: false,
                                       now: now.addingTimeInterval(Double(step) * 3.5))
             XCTAssertLessThanOrEqual(plan.portCensusIdentities.count, 2)
             XCTAssertTrue(covered.isDisjoint(with: plan.portCensusIdentities), "oldest reads go first")
             covered.formUnion(plan.portCensusIdentities)
         }
         XCTAssertEqual(covered, Set(dev.members.map(\.identity)))
-        let rested = scheduler.plan(settings: .smart, families: [dev], popoverVisible: false,
+        let rested = scheduler.plan(settings: .smart, families: [dev], uiVisible: false,
                                     now: now.addingTimeInterval(20))
         XCTAssertTrue(rested.portCensusIdentities.isEmpty, "nothing is due again before the census age")
     }
@@ -37,7 +37,7 @@ final class PortCensusTests: XCTestCase {
     func testNoCensusWhenOptionalForensicsArePaused() {
         let dev = devFamily(pids: [3_000])
         var scheduler = RadarScheduler(pressureProvider: { .serious })
-        let plan = scheduler.plan(settings: .smart, families: [dev], popoverVisible: true, now: now)
+        let plan = scheduler.plan(settings: .smart, families: [dev], uiVisible: true, now: now)
         XCTAssertTrue(plan.portCensusIdentities.isEmpty)
         XCTAssertFalse(plan.allowsOptionalForensics)
     }

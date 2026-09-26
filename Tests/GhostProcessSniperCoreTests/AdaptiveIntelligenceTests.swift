@@ -79,50 +79,20 @@ final class AdaptiveIntelligenceTests: XCTestCase {
 
     func testAdaptivePerformanceUsesIntentAndPressureInsteadOfManualKnobs() {
         var settings = ThresholdSettings.smart
+        func mode(_ level: GhostLevel, visible: Bool, pressure: SystemPressureLevel = .nominal) -> RadarPerformanceMode {
+            settings.resolvedPerformanceMode(RadarSchedulingContext(
+                uiVisible: visible, thermalPressure: pressure, summaryLevel: level))
+        }
 
-        XCTAssertEqual(
-            settings.resolvedPerformanceMode(
-                summaryLevel: .quiet,
-                popoverVisible: false,
-                systemPressure: .nominal
-            ),
-            .balanced
-        )
-        XCTAssertEqual(
-            settings.resolvedPerformanceMode(
-                summaryLevel: .quiet,
-                popoverVisible: true,
-                systemPressure: .nominal
-            ),
-            .realtime
-        )
-        XCTAssertEqual(
-            settings.resolvedPerformanceMode(
-                summaryLevel: .quiet,
-                popoverVisible: false,
-                systemPressure: .serious
-            ),
-            .batterySaver
-        )
-        XCTAssertEqual(
-            settings.resolvedPerformanceMode(
-                summaryLevel: .hot,
-                popoverVisible: false,
-                systemPressure: .nominal
-            ),
-            .realtime
-        )
+        XCTAssertEqual(mode(.quiet, visible: false), .balanced)
+        XCTAssertEqual(mode(.quiet, visible: true), .realtime)
+        XCTAssertEqual(mode(.quiet, visible: false, pressure: .serious), .batterySaver)
+        // Nobody is watching, so a hot family alone no longer buys realtime budgets.
+        XCTAssertEqual(mode(.hot, visible: false), .balanced)
 
         settings.adaptivePerformance = false
         settings.performanceMode = .batterySaver
-        XCTAssertEqual(
-            settings.resolvedPerformanceMode(
-                summaryLevel: .critical,
-                popoverVisible: true,
-                systemPressure: .nominal
-            ),
-            .batterySaver
-        )
+        XCTAssertEqual(mode(.critical, visible: true), .batterySaver)
     }
 
     func testExtremeEvidenceScoreDoesNotAutomaticallyMeanCriticalHeat() {

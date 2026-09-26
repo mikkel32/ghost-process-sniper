@@ -126,7 +126,7 @@ final class ThermalDashboardTests: XCTestCase {
         let processes = [process(1, cpu: 18)]
         let worker = RadarRefreshWorker(store: nil, builder: ProcessFamilyBuilder(currentUserID: 501))
         let request = RefreshRequest(settings: settings, currentFamilies: [], currentIncidents: [],
-            currentStoreHealth: .empty, previousRefresh: .empty, popoverVisible: true,
+            currentStoreHealth: .empty, uiVisible: true,
             focusedSignatureIDs: [], now: now, startedAt: now)
         let outcome = await worker.ingest(batch: ProcessSampleBatch(processes: processes, sampledAt: now, stats: .empty),
             request: request)

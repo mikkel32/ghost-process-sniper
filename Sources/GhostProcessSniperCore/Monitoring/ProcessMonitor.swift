@@ -32,12 +32,15 @@ public final class ProcessMonitor {
     @ObservationIgnored public private(set) var sampledProcesses: [ProcessMetrics] = []
     @ObservationIgnored public private(set) var sampleRevision: UInt64 = 0
 
-    @ObservationIgnored private let thermalSampler = ThermalSampler()
+    @ObservationIgnored private let thermalSampler: any ThermalSampling
     @ObservationIgnored private var selfUsageMonitor = SelfUsageMonitor()
     @ObservationIgnored private let notifier: RadarNotifying
     @ObservationIgnored private let store: RadarStore?
     @ObservationIgnored private let worker: RadarRefreshWorker
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    /// The loop's current sleep; cancelling it runs the next tick now.
+    @ObservationIgnored var sleeper: Task<Void, Never>?
+    @ObservationIgnored var wakePending = false
     /// The only path into the worker: NativeProcessSampler.sample reuses
     /// scratch buffers across awaits and must never run concurrently.
     @ObservationIgnored private var inFlight: Task<Void, Never>?
@@ -47,11 +50,11 @@ public final class ProcessMonitor {
     @ObservationIgnored private(set) var rerunCount = 0
     @ObservationIgnored private var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
-    @ObservationIgnored private var popoverVisible = false
+    @ObservationIgnored var visibleSurfaces: Set<RadarSurface> = []
     @ObservationIgnored private var focusedSignatureIDs: Set<String> = []
     @ObservationIgnored private var portCensusRequested = false
     @ObservationIgnored private var lastCompletedPublishMilliseconds = 0.0
-    @ObservationIgnored private let hitchMonitor = MainActorHitchMonitor()
+    @ObservationIgnored let hitchMonitor = MainActorHitchMonitor()
     @ObservationIgnored private var publishedStateObservers: [UUID: (ProcessMonitorPublishedState) -> Void] = [:]
 
     public var statusLevel: GhostLevel {
@@ -68,10 +71,12 @@ public final class ProcessMonitor {
         intelligence: RadarIntelligence = RadarIntelligence(),
         settings: ThresholdSettings = .smart,
         store: RadarStore? = ProcessMonitor.createDefaultStore(),
-        notifier: RadarNotifying = NoopRadarNotifier()
+        notifier: RadarNotifying = NoopRadarNotifier(),
+        thermalSampler: any ThermalSampling = ThermalSampler()
     ) {
         self.settings = settings
         self.store = store
+        self.thermalSampler = thermalSampler
         self.notifier = notifier
         self.worker = RadarRefreshWorker(
             sampler: sampler,
@@ -83,33 +88,38 @@ public final class ProcessMonitor {
 
     deinit {
         refreshTask?.cancel()
+        sleeper?.cancel()
         settingsSaveTask?.cancel()
     }
 
     public func start() {
         stop()
-        hitchMonitor.start()
-        refreshTask = Task { @MainActor [weak self] in
+        wakePending = false
+        // Utility QoS keeps hidden sampling, scoring and store work off the
+        // performance cores; a visible caller awaiting it escalates it.
+        refreshTask = Task(priority: .utility) { @MainActor [weak self] in
             await self?.loadPersistedSettingsIfNeeded()
+            var isFirstTick = true
             while !Task.isCancelled {
-                await self?.refresh(reason: .loop)
-                var interval = max(0.25, self?.performanceMetrics.nextRefreshInterval ?? 1)
-                // Self-throttle: when the radar's own average CPU is above
-                // budget, stretch the cadence until it recovers.
-                if self?.selfUsage.isThrottling == true {
-                    interval = min(interval * 1.6, 8)
-                }
-                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard let interval = await self?.runLoopTick(isFirstTick: isFirstTick) else { return }
+                isFirstTick = false
+                await self?.sleepUntilNextTick(interval)
             }
         }
+        updateHitchMonitor()
+    }
+
+    var isRunning: Bool {
+        refreshTask != nil
     }
 
     public func stop() {
         refreshTask?.cancel()
         refreshTask = nil
+        sleeper?.cancel()
         settingsSaveTask?.cancel()
         settingsSaveTask = nil
-        hitchMonitor.stop()
+        updateHitchMonitor()
         Task { [store] in
             try? await store?.flush()
         }
@@ -160,14 +170,19 @@ public final class ProcessMonitor {
         defer { signpost.endInterval("RadarRefresh", refreshState) }
 
         do {
-            thermals = await thermalSampler.sample(now: now)
+            // Only the popover and console show temperatures.
+            if uiVisible {
+                thermals = await thermalSampler.sample(now: now)
+            }
             let outcome = try await worker.refresh(refreshRequest(now: now, startedAt: refreshStart))
-            let usage = selfUsageMonitor.sample()
+            let usage = selfUsageMonitor.sample(
+                throttleAbovePercent: uiVisible ? .infinity : 2 * outcome.performance.budget.targetIdleCPUPercent
+            )
             if usage != selfUsage {
-                selfUsage = usage
-                if usage.isThrottling {
-                    RadarLogger.sampler.info("Self-throttle active: radar averaging \(Int(usage.averageCPUPercent.rounded()), privacy: .public)% CPU")
+                if usage.isThrottling, !selfUsage.isThrottling {
+                    RadarLogger.sampler.info("Self-throttle active: radar averaging \(String(format: "%.2f", usage.averageCPUPercent), privacy: .public)% CPU")
                 }
+                selfUsage = usage
             }
             apply(outcome, coalescedRefreshCount: coalescedCount)
             await notifier.process(model: model)
@@ -202,9 +217,8 @@ public final class ProcessMonitor {
             currentFamilies: families,
             currentIncidents: incidents,
             currentStoreHealth: storeHealth,
-            previousRefresh: performanceMetrics.lastRefresh,
             previousConsoleSnapshot: consoleSnapshot,
-            popoverVisible: popoverVisible,
+            uiVisible: uiVisible,
             focusedSignatureIDs: focusedSignatureIDs,
             portCensusRequested: portCensusRequested,
             now: now,
@@ -234,7 +248,7 @@ public final class ProcessMonitor {
     }
 
     public func setPopoverVisible(_ visible: Bool) {
-        popoverVisible = visible
+        setSurface(.popover, visible: visible)
     }
 
     @discardableResult
