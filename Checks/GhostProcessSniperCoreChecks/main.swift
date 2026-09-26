@@ -21,6 +21,7 @@ struct CoreChecks {
         await run("nativeSamplerDefersForensicsWhenPlanRequestsIt") { try await nativeSamplerDefersForensicsWhenPlanRequestsIt() }
         await run("nativeSamplerUsesBSDFirstCheapGraph") { try await nativeSamplerUsesBSDFirstCheapGraph() }
         await run("nativeForensicsListOnlyListeningPorts") { try await nativeForensicsListOnlyListeningPorts() }
+        await run("nativePortCensusFindsListeningPort") { try await nativePortCensusFindsListeningPort() }
         await run("classifierScoresDevProcesses") { try classifierScoresDevProcesses() }
         await run("classifierProducesProcessKinds") { try classifierProducesProcessKinds() }
         await run("duplicateDetectorCapturesSmallSameUserProcesses") { try duplicateDetectorCapturesSmallSameUserProcesses() }
@@ -233,6 +234,22 @@ private func nativeForensicsListOnlyListeningPorts() async throws {
         }
         try check(current.forensics.listeningPorts.contains(listenerPort), "forensics should list the check's TCP listener")
         try check(!current.forensics.listeningPorts.contains(clientPort), "forensics should not list an outbound connection's ephemeral port")
+    }
+    #endif
+}
+
+private func nativePortCensusFindsListeningPort() async throws {
+    #if os(macOS)
+    try await withLoopbackConnection { listenerPort, _ in
+        let sampler = NativeProcessSampler()
+        var plan = SamplingPlan.balanced(now: Date(timeIntervalSince1970: 1_030))
+        plan.portCensusAll = true
+        let batch = try await sampler.sample(plan: plan)
+        guard let current = batch.processes.first(where: { $0.pid == getpid() }) else {
+            throw CheckFailure(message: "sampler did not include current process")
+        }
+        try check(batch.stats.portCensusCount > 0, "an explicit census should read ports")
+        try check(current.forensics.listeningPorts.contains(listenerPort), "the census should find a quiet process's listener")
     }
     #endif
 }

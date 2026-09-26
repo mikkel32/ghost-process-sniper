@@ -53,6 +53,8 @@ protocol ProcessProbeSource: Sendable {
     func executablePath(_ pid: pid_t) -> String
     func commandLine(_ pid: pid_t) -> String?
     func forensics(_ pid: pid_t) -> (forensics: ProcessForensics, expensiveCallCount: Int)
+    func listeningPorts(_ pid: pid_t) -> Set<Int>?
     /// Monotonic nanoseconds that exclude sleep, for CPU deltas and tick deadlines.
     func now() -> UInt64
+    var effectiveUserID: UInt32 { get }
 }

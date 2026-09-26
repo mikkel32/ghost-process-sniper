@@ -87,7 +87,8 @@ public actor NativeProcessSampler: ProcessSampling {
             tick.deadline.budgetMilliseconds += Self.backlogAllowanceMilliseconds
         }
         runPathLane(now: now, tick: &tick)
-        await runForensicsJobs(plan: plan, now: now, tick: &tick)
+        let refreshed = await runForensicsJobs(plan: plan, now: now, tick: &tick)
+        runPortCensus(plan: plan, now: now, refreshed: refreshed, tick: &tick)
         await runArgumentLane(plan: plan, now: now, tick: &tick)
 
         var processes: [ProcessMetrics] = []
@@ -186,6 +187,7 @@ public actor NativeProcessSampler: ProcessSampling {
             parentPID: lite.parentPID,
             userID: lite.userID,
             name: lite.name,
+            openFileCount: lite.openFileCount,
             residentMemoryBytes: usage?.residentBytes ?? cached?.residentMemoryBytes ?? 0,
             physicalFootprintBytes: usage?.physicalFootprintBytes ?? cached?.physicalFootprintBytes ?? 0,
             virtualMemoryBytes: virtualBytes,
@@ -301,7 +303,7 @@ public actor NativeProcessSampler: ProcessSampling {
         let now = plan.sampledAt
         let isPriority = raw.priority > 0
         let entry = forensicsCache.entry(for: identity)
-        if let entry, now.timeIntervalSince(entry.refreshedAt) <= Self.freshForensicsAge {
+        if let entry, !entry.isPortsOnly, now.timeIntervalSince(entry.refreshedAt) <= Self.freshForensicsAge {
             tick.counters.forensicsCacheHitCount += 1
             tick.counters.count(.forensicsCache)
             return entry.forensics
@@ -314,8 +316,8 @@ public actor NativeProcessSampler: ProcessSampling {
         }
         guard isPriority else {
             // Quiet processes keep what is known, so their ports stay searchable.
-            if let entry, !entry.forensics.isPartial,
-               now.timeIntervalSince(entry.refreshedAt) <= Self.quietForensicsMaxAge {
+            if let entry, entry.isPortsOnly || !entry.forensics.isPartial,
+               now.timeIntervalSince(entry.portsRefreshedAt) <= Self.quietForensicsMaxAge {
                 tick.counters.forensicsCacheHitCount += 1
                 tick.counters.count(.forensicsCache)
                 return entry.forensics
@@ -333,12 +335,13 @@ public actor NativeProcessSampler: ProcessSampling {
         // Stale-while-revalidate: a server that bound its port after the last
         // read gets re-read instead of showing "no ports" for its whole life.
         tick.forensicsJobs.append(ForensicsJob(pid: raw.pid, identity: identity, sampleIndex: sampleIndex,
-            neverRead: entry == nil, refreshedAt: entry?.refreshedAt ?? .distantPast))
+            neverRead: entry == nil || entry?.isPortsOnly == true, refreshedAt: entry?.refreshedAt ?? .distantPast))
         return entry?.forensics
     }
 
-    private func runForensicsJobs(plan: SamplingPlan, now: Date, tick: inout SamplerTick) async {
-        guard !tick.forensicsJobs.isEmpty else { return }
+    /// Returns the sample indices that got a full forensics read.
+    private func runForensicsJobs(plan: SamplingPlan, now: Date, tick: inout SamplerTick) async -> Set<Int> {
+        guard !tick.forensicsJobs.isEmpty else { return [] }
         tick.forensicsJobs.sort(by: SamplerJobs.forensicsOrder)
         var accepted: [ForensicsJob] = []
         for job in tick.forensicsJobs {
@@ -370,19 +373,61 @@ public actor NativeProcessSampler: ProcessSampling {
             if !accepted.isEmpty { tick.counters.tinyQueueSequentialCount += 1 }
             results = accepted.map { SamplerJobs.readForensics($0, source: source) }
         }
+        var refreshed = Set<Int>()
         for result in results {
             forensicsCache.update(result.forensics, for: result.job.identity, at: now)
             tick.samples[result.job.sampleIndex].forensics = result.forensics
             tick.counters.forensicsRefreshCount += 1
             tick.counters.expensiveCallCount += result.expensiveCallCount
             tick.counters.count(.forensicsQueue)
+            refreshed.insert(result.job.sampleIndex)
         }
+        return refreshed
+    }
+
+    /// Listening ports only: no cwd, no vnode reads. Background census covers
+    /// the few quiet developer processes the plan names; an explicit request
+    /// covers every same-user process with open files, under its own cap.
+    private func runPortCensus(plan: SamplingPlan, now: Date, refreshed: Set<Int>, tick: inout SamplerTick) {
+        if plan.portCensusAll {
+            let cap = TickDeadline(startedAt: source.now(), budgetMilliseconds: Self.fullCensusMilliseconds)
+            let user = source.effectiveUserID
+            for index in tick.samples.indices where !refreshed.contains(index) {
+                guard tick.samples[index].userID == user, tick.samples[index].openFileCount > 0 else { continue }
+                if cap.isExpired(at: source.now()) {
+                    tick.counters.didHitDeadline = true
+                    return
+                }
+                censusPorts(at: index, now: now, tick: &tick)
+            }
+            return
+        }
+        guard plan.allowsOptionalForensics else { return }
+        var remaining = plan.maxForensicsPerRefresh
+        for identity in plan.portCensusIdentities where remaining > 0 {
+            guard let index = tick.indexByIdentity[identity], !refreshed.contains(index) else { continue }
+            if tick.deadline.isExpired(at: source.now()) {
+                tick.counters.didHitDeadline = true
+                return
+            }
+            censusPorts(at: index, now: now, tick: &tick)
+            remaining -= 1
+        }
+    }
+
+    private func censusPorts(at index: Int, now: Date, tick: inout SamplerTick) {
+        let identity = tick.samples[index].identity
+        tick.counters.expensiveCallCount += 1
+        guard let ports = source.listeningPorts(identity.pid) else { return }
+        tick.samples[index].forensics = forensicsCache.mergePorts(ports, for: identity, at: now)
+        tick.counters.portCensusCount += 1
     }
 
     // MARK: - Policy
 
     private static let sequentialJobLimit = 8
     private static let backlogAllowanceMilliseconds = 30.0
+    private static let fullCensusMilliseconds = 40.0
     private static let freshForensicsAge: TimeInterval = 60
     private static let quietForensicsMaxAge: TimeInterval = 600
     /// Deadline ticks skip pruning, but a machine that always hits the

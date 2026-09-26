@@ -48,6 +48,8 @@ public struct RefreshRequest: Equatable, Sendable {
     public let previousConsoleSnapshot: RadarConsoleSnapshot?
     public let popoverVisible: Bool
     public let focusedSignatureIDs: Set<String>
+    /// Read every same-user process's listening ports this tick (a `port:` search).
+    public let portCensusRequested: Bool
     public let now: Date
     public let startedAt: Date
 
@@ -60,6 +62,7 @@ public struct RefreshRequest: Equatable, Sendable {
         previousConsoleSnapshot: RadarConsoleSnapshot? = nil,
         popoverVisible: Bool,
         focusedSignatureIDs: Set<String>,
+        portCensusRequested: Bool = false,
         now: Date,
         startedAt: Date
     ) {
@@ -71,6 +74,7 @@ public struct RefreshRequest: Equatable, Sendable {
         self.previousConsoleSnapshot = previousConsoleSnapshot
         self.popoverVisible = popoverVisible
         self.focusedSignatureIDs = focusedSignatureIDs
+        self.portCensusRequested = portCensusRequested
         self.now = now
         self.startedAt = startedAt
     }
@@ -161,6 +165,7 @@ public actor RadarRefreshWorker {
             families: request.currentFamilies,
             popoverVisible: request.popoverVisible,
             focusedSignatureIDs: request.focusedSignatureIDs,
+            portCensusRequested: request.portCensusRequested,
             now: request.now
         )
 

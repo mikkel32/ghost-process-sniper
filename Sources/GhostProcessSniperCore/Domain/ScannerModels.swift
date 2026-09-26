@@ -153,6 +153,7 @@ public struct ScannerCostLedger: Equatable, Sendable {
     public let usageReadCount: Int
     public let usageFailedCount: Int
     public let bsdDeniedCount: Int
+    public let portCensusCount: Int
 
     public init(
         cheapProbeCount: Int,
@@ -171,7 +172,8 @@ public struct ScannerCostLedger: Equatable, Sendable {
         tinyQueueSequentialCount: Int = 0,
         usageReadCount: Int = 0,
         usageFailedCount: Int = 0,
-        bsdDeniedCount: Int = 0
+        bsdDeniedCount: Int = 0,
+        portCensusCount: Int = 0
     ) {
         self.cheapProbeCount = cheapProbeCount
         self.richMetricCount = richMetricCount
@@ -190,6 +192,7 @@ public struct ScannerCostLedger: Equatable, Sendable {
         self.usageReadCount = usageReadCount
         self.usageFailedCount = usageFailedCount
         self.bsdDeniedCount = bsdDeniedCount
+        self.portCensusCount = portCensusCount
     }
 
     public init(stats: SamplerStats) {
@@ -210,7 +213,8 @@ public struct ScannerCostLedger: Equatable, Sendable {
             tinyQueueSequentialCount: stats.tinyQueueSequentialCount,
             usageReadCount: stats.usageReadCount,
             usageFailedCount: stats.usageFailedCount,
-            bsdDeniedCount: stats.bsdDeniedCount
+            bsdDeniedCount: stats.bsdDeniedCount,
+            portCensusCount: stats.portCensusCount
         )
     }
 }

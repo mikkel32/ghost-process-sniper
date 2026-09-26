@@ -44,6 +44,10 @@ public struct SamplingPlan: Equatable, Sendable {
     public var uiVisible: Bool
     /// Members of classified developer families: priority work without explicit demand.
     public var hintedIdentities: Set<ProcessIdentity>
+    /// Quiet developer processes whose listening ports are due a cheap re-read.
+    public var portCensusIdentities: Set<ProcessIdentity>
+    /// One-shot: read the listening ports of every same-user process this tick.
+    public var portCensusAll: Bool
 
     public static func balanced(now: Date = Date()) -> SamplingPlan {
         let budget = ScannerBudget.budget(for: .balanced)
@@ -84,7 +88,9 @@ public struct SamplingPlan: Equatable, Sendable {
         lanePriorities: [ScanLane] = [],
         metricsEnrichmentBudget: Int? = nil,
         uiVisible: Bool = false,
-        hintedIdentities: Set<ProcessIdentity> = []
+        hintedIdentities: Set<ProcessIdentity> = [],
+        portCensusIdentities: Set<ProcessIdentity> = [],
+        portCensusAll: Bool = false
     ) {
         self.sampledAt = sampledAt
         self.performanceMode = performanceMode
@@ -100,6 +106,8 @@ public struct SamplingPlan: Equatable, Sendable {
         self.metricsEnrichmentBudget = metricsEnrichmentBudget ?? max(4, (scannerBudget ?? ScannerBudget.budget(for: performanceMode)).maxTelemetryRefreshes * 2)
         self.uiVisible = uiVisible
         self.hintedIdentities = hintedIdentities
+        self.portCensusIdentities = portCensusIdentities
+        self.portCensusAll = portCensusAll
     }
 }
 
@@ -132,6 +140,7 @@ public struct SamplerStats: Equatable, Sendable {
     public let usageFailedCount: Int
     /// Other users' processes the kernel will not describe without privilege.
     public let bsdDeniedCount: Int
+    public let portCensusCount: Int
 
     public static let empty = SamplerStats(
         processCount: 0,
@@ -168,7 +177,8 @@ public struct SamplerStats: Equatable, Sendable {
         scratchpadReuseCount: Int = 0,
         usageReadCount: Int = 0,
         usageFailedCount: Int = 0,
-        bsdDeniedCount: Int = 0
+        bsdDeniedCount: Int = 0,
+        portCensusCount: Int = 0
     ) {
         self.processCount = processCount
         self.commandRefreshCount = commandRefreshCount
@@ -196,6 +206,7 @@ public struct SamplerStats: Equatable, Sendable {
         self.usageReadCount = usageReadCount
         self.usageFailedCount = usageFailedCount
         self.bsdDeniedCount = bsdDeniedCount
+        self.portCensusCount = portCensusCount
     }
 }
 

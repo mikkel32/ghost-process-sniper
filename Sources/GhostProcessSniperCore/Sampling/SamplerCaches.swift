@@ -60,6 +60,17 @@ public struct ForensicsCache: Sendable {
     public struct Entry: Equatable, Sendable {
         public let forensics: ProcessForensics
         public let refreshedAt: Date
+        /// Only the port census has read this process; cwd and fd counts are unknown.
+        public let isPortsOnly: Bool
+        /// When the listening ports were last read, by a full read or the census.
+        public let portsRefreshedAt: Date
+
+        init(forensics: ProcessForensics, refreshedAt: Date, isPortsOnly: Bool = false, portsRefreshedAt: Date? = nil) {
+            self.forensics = forensics
+            self.refreshedAt = refreshedAt
+            self.isPortsOnly = isPortsOnly
+            self.portsRefreshedAt = portsRefreshedAt ?? refreshedAt
+        }
     }
 
     private var entries: [ProcessIdentity: Entry] = [:]
@@ -79,7 +90,7 @@ public struct ForensicsCache: Sendable {
 
     public func negativeEntry(for identity: ProcessIdentity, now: Date, maxAge: TimeInterval) -> Entry? {
         guard let entry = entries[identity],
-              entry.forensics.isPartial,
+              entry.forensics.isPartial, !entry.isPortsOnly,
               now.timeIntervalSince(entry.refreshedAt) <= maxAge
         else {
             return nil
@@ -89,6 +100,25 @@ public struct ForensicsCache: Sendable {
 
     public mutating func update(_ forensics: ProcessForensics, for identity: ProcessIdentity, at date: Date) {
         entries[identity] = Entry(forensics: forensics, refreshedAt: date)
+    }
+
+    /// Folds a ports-only census into the entry, keeping a full read's other
+    /// facts and its age, and returns what the process should now show.
+    @discardableResult
+    mutating func mergePorts(_ ports: Set<Int>, for identity: ProcessIdentity, at date: Date) -> ProcessForensics {
+        let listening = ListeningSocketReader.displayPorts(ports)
+        if let entry = entries[identity], !entry.isPortsOnly {
+            let old = entry.forensics
+            let merged = ProcessForensics(currentDirectory: old.currentDirectory, rootDirectory: old.rootDirectory,
+                openFileCount: old.openFileCount, socketCount: old.socketCount, listeningPorts: listening,
+                isPartial: old.isPartial, notes: old.notes)
+            entries[identity] = Entry(forensics: merged, refreshedAt: entry.refreshedAt, portsRefreshedAt: date)
+            return merged
+        }
+        let census = ProcessForensics(currentDirectory: nil, rootDirectory: nil, openFileCount: nil, socketCount: nil,
+            listeningPorts: listening, isPartial: true, notes: ["ports only"])
+        entries[identity] = Entry(forensics: census, refreshedAt: date, isPortsOnly: true)
+        return census
     }
 
     mutating func remove(_ identity: ProcessIdentity) {

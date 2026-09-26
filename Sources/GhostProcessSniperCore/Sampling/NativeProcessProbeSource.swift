@@ -142,8 +142,16 @@ struct NativeProcessProbeSource: ProcessProbeSource {
         return (forensics, expensiveCallCount)
     }
 
+    func listeningPorts(_ pid: pid_t) -> Set<Int>? {
+        ListeningSocketReader.listeningTCPPorts(pid: pid)
+    }
+
     func now() -> UInt64 {
         DispatchTime.now().uptimeNanoseconds
+    }
+
+    var effectiveUserID: UInt32 {
+        UInt32(geteuid())
     }
 
     private func vnodePaths(for pid: pid_t) -> (currentDirectory: String?, rootDirectory: String?)? {

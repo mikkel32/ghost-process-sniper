@@ -66,6 +66,7 @@ struct SamplingCounters {
     var usageReadCount = 0
     var usageFailedCount = 0
     var bsdDeniedCount = 0
+    var portCensusCount = 0
     var didHitDeadline = false
     var laneCounts: [ScanLane: Int] = [:]
 
@@ -122,7 +123,8 @@ extension SamplingCounters {
             scratchpadReuseCount: scratchpadReuseCount,
             usageReadCount: usageReadCount,
             usageFailedCount: usageFailedCount,
-            bsdDeniedCount: bsdDeniedCount
+            bsdDeniedCount: bsdDeniedCount,
+            portCensusCount: portCensusCount
         )
     }
 }

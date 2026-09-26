@@ -43,6 +43,7 @@ public final class ProcessMonitor {
     @ObservationIgnored private var didLoadPersistedSettings = false
     @ObservationIgnored private var popoverVisible = false
     @ObservationIgnored private var focusedSignatureIDs: Set<String> = []
+    @ObservationIgnored private var portCensusRequested = false
     @ObservationIgnored private var lastCompletedPublishMilliseconds = 0.0
     @ObservationIgnored private let hitchMonitor = MainActorHitchMonitor()
     @ObservationIgnored private var publishedStateObservers: [UUID: (ProcessMonitorPublishedState) -> Void] = [:]
@@ -164,7 +165,8 @@ public final class ProcessMonitor {
     }
 
     private func refreshRequest(now: Date, startedAt: Date) -> RefreshRequest {
-        RefreshRequest(
+        defer { portCensusRequested = false }
+        return RefreshRequest(
             settings: settings,
             currentFamilies: families,
             currentIncidents: incidents,
@@ -173,6 +175,7 @@ public final class ProcessMonitor {
             previousConsoleSnapshot: consoleSnapshot,
             popoverVisible: popoverVisible,
             focusedSignatureIDs: focusedSignatureIDs,
+            portCensusRequested: portCensusRequested,
             now: now,
             startedAt: startedAt
         )
@@ -224,6 +227,13 @@ public final class ProcessMonitor {
 
     public func focusFamilies(signatureIDs: Set<String>) {
         focusedSignatureIDs = signatureIDs
+    }
+
+    /// Reads every same-user process's listening ports on the next refresh and
+    /// starts that refresh now, so `port:3000` finds a quiet server.
+    public func requestPortCensus() {
+        portCensusRequested = true
+        Task { await refresh() }
     }
 
     public func snooze(_ family: ProcessFamily, minutes: TimeInterval = 60) async {

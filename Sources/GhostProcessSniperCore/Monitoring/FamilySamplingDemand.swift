@@ -9,7 +9,7 @@ struct FamilySamplingDemand: Sendable {
     private(set) var candidatePIDs = Set<Int32>()
     private(set) var forensicsIdentities = Set<ProcessIdentity>()
     private(set) var forensicsPIDs = Set<Int32>()
-    /// Members of classified developer families: priority work without explicit demand.
+    /// Members of classified developer families: sampling hints and port-census candidates.
     private(set) var devIdentities = Set<ProcessIdentity>()
     private(set) var hotFamilyCount = 0
     private(set) var focusedFamilyCount = 0

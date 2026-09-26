@@ -9,6 +9,7 @@ struct ActiveProcessSample {
     let userID: UInt32
     /// The lite record's name, for the placeholder when no telemetry was read.
     let name: String
+    let openFileCount: Int
     let residentMemoryBytes: UInt64
     let physicalFootprintBytes: UInt64
     let virtualMemoryBytes: UInt64

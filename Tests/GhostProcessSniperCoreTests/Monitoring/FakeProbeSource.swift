@@ -30,6 +30,7 @@ final class FakeProbeSource: ProcessProbeSource, @unchecked Sendable {
         var path = 0
         var arguments = 0
         var forensics = 0
+        var ports = 0
     }
 
     private let lock = NSLock()
@@ -43,6 +44,7 @@ final class FakeProbeSource: ProcessProbeSource, @unchecked Sendable {
     /// A pid's usage read reports this process instead, as if the pid were
     /// reused between the BSD and usage reads.
     private var usageImpostors: [Int32: Process] = [:]
+    let effectiveUserID: UInt32 = 501
 
     init(_ processes: [Process] = []) {
         for process in processes { insert(process) }
@@ -146,6 +148,13 @@ final class FakeProbeSource: ProcessProbeSource, @unchecked Sendable {
             let ports = find(pid)?.ports ?? []
             return (ProcessForensics(currentDirectory: "/work", rootDirectory: "/", openFileCount: 8,
                 socketCount: ports.count, listeningPorts: ports.sorted(), isPartial: false, notes: []), 3)
+        }
+    }
+
+    func listeningPorts(_ pid: pid_t) -> Set<Int>? {
+        locked {
+            calls.ports += 1
+            return find(pid)?.ports
         }
     }
 

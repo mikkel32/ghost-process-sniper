@@ -5,6 +5,8 @@ public struct RadarScheduler: Sendable {
     private var systemPressure: SystemPressureLevel = .nominal
     private var effectivePerformanceMode: RadarPerformanceMode = .balanced
     private var cadenceStep: UInt64 = 0
+    /// When each quiet developer process last had its ports read.
+    private var portCensusStamps: [ProcessIdentity: Date] = [:]
     private let pressureProvider: @Sendable () -> SystemPressureLevel
 
     public init() {
@@ -25,6 +27,7 @@ public struct RadarScheduler: Sendable {
         families: [ProcessFamily],
         popoverVisible: Bool,
         focusedSignatureIDs: Set<String> = [],
+        portCensusRequested: Bool = false,
         now: Date
     ) -> SamplingPlan {
         let pressure = updateSystemPressure()
@@ -55,6 +58,12 @@ public struct RadarScheduler: Sendable {
         let metricsBudget = pressure == .critical
             ? max(4, demandBudget)
             : max(scannerBudget.maxTelemetryRefreshes, demandBudget)
+        let census = portCensusIdentities(
+            demand: demand,
+            limit: pressure.allowsOptionalForensics ? min(popoverVisible ? 6 : 2, maxForensics) : 0,
+            maxAge: popoverVisible ? 15 : 60,
+            now: now
+        )
 
         return SamplingPlan(
             sampledAt: now,
@@ -70,8 +79,33 @@ public struct RadarScheduler: Sendable {
             probePolicy: probePolicy,
             metricsEnrichmentBudget: metricsBudget,
             uiVisible: popoverVisible,
-            hintedIdentities: demand.devIdentities
+            hintedIdentities: demand.devIdentities,
+            portCensusIdentities: census,
+            portCensusAll: portCensusRequested
         )
+    }
+
+    /// Quiet developer processes whose ports are due, oldest read first, so a
+    /// forgotten server on :3000 is answerable without being hot or focused.
+    private mutating func portCensusIdentities(
+        demand: FamilySamplingDemand,
+        limit: Int,
+        maxAge: TimeInterval,
+        now: Date
+    ) -> Set<ProcessIdentity> {
+        portCensusStamps = portCensusStamps.filter { demand.devIdentities.contains($0.key) }
+        guard limit > 0 else { return [] }
+        let due = demand.devIdentities.filter { identity in
+            !demand.forensicsIdentities.contains(identity) &&
+                portCensusStamps[identity].map { now.timeIntervalSince($0) >= maxAge } ?? true
+        }
+        let picked = due.sorted {
+            (portCensusStamps[$0] ?? .distantPast, $0.pid) < (portCensusStamps[$1] ?? .distantPast, $1.pid)
+        }.prefix(limit)
+        for identity in picked {
+            portCensusStamps[identity] = now
+        }
+        return Set(picked)
     }
 
     public mutating func nextInterval(
