@@ -254,8 +254,8 @@ public enum IORegistryGPUClientReader {
         // Stay on the Foundation objects instead of bridging the whole array
         // to [Any] and every entry to [String: Any].
         var total: UInt64 = 0
-        for case let entry as NSDictionary in usage {
-            total &+= nanoseconds(entry["accumulatedGPUTime"]) &+ nanoseconds(entry["AccumulatedGPUTime"])
+        for case let record as NSDictionary in usage {
+            total &+= nanoseconds(record["accumulatedGPUTime"]) &+ nanoseconds(record["AccumulatedGPUTime"])
         }
         return total
     }
