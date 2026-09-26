@@ -202,7 +202,9 @@ public final class ProcessKiller: Sendable {
                 eventSink: eventSink,
                 known: Set((preflight.targets + preflight.locked + preflight.stale + preflight.recycled + preflight.exited).map(\.identity)),
                 bornAfter: plan.approvedAt ?? preflightSnapshot.sampledAt,
-                adoptsLateMembers: plan.scope != .singleRoot
+                // A quitting app may start an updater or crash reporter on
+                // purpose; what it starts is reported, never stopped.
+                adoptsLateMembers: plan.scope != .singleRoot && runProfile.strategy != .quitApp
             )
             let walk = try await walk(runProfile.phases, targets: targets, context: context, report: &report)
 

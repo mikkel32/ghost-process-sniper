@@ -17,7 +17,8 @@ struct KillPhaseContext: Sendable {
     let known: Set<ProcessIdentity>
     /// Processes born after this are new to the stop.
     let bornAfter: Date
-    /// False for a single-process stop: its new children are only reported.
+    /// False for a single-process stop or a quitting app: what they start
+    /// is only reported.
     let adoptsLateMembers: Bool
 }
 

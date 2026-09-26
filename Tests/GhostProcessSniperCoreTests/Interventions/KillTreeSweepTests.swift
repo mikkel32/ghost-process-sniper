@@ -68,6 +68,21 @@ final class KillTreeSweepTests: XCTestCase {
         XCTAssertTrue(report.summary.contains("Kept running after forker stopped: daemon (PID 1321)."), report.summary)
     }
 
+    func testWhatAQuittingAppStartsIsOnlyReported() async {
+        let table = FakeProcessTable()
+        let app = KillProcessLite.fake(pid: 1360, name: "Pages")
+        let updater = KillProcessLite.fake(pid: 1361, parent: 1360, name: "Autoupdate", start: duringStop)
+        table.add(app, FakeProcessTable.Behaviour(quitsOnRequest: 100_000))
+        table.onSnapshot { $0 == 1 ? [updater] : [] }
+
+        let report = await table.killer().kill(plan: .fixture(app, paths: [1360: KillFixture.pagesPath]), forceKillDelay: 2)
+
+        XCTAssertEqual(report.strategyUsed, .quitApp)
+        XCTAssertTrue(table.signals(to: 1361).isEmpty, "an updater started at quit is left to do its job")
+        XCTAssertEqual(report.lateTargets.map(\.pid), [1361])
+        XCTAssertEqual(table.signals(to: 1360), [SIGSTOP, SIGKILL])
+    }
+
     func testForkStormIsCappedAfterThreeRounds() async {
         let table = FakeProcessTable()
         let root = KillProcessLite.fake(pid: 1330, name: "forkbomb")
