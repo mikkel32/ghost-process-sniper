@@ -157,14 +157,16 @@ public struct SpikeRingBuffer: Equatable, Sendable {
 public final class MainActorHitchMonitor {
     private var task: Task<Void, Never>?
     private var spikes = SpikeRingBuffer(limit: 8)
-    private let sleepMeasuringLateness: @Sendable (Duration) async throws -> Duration
+    private let sleepMeasuringLateness: @MainActor @Sendable (Duration) async throws -> Duration
     private var heartbeatInterval: TimeInterval = 0.25
     private var thresholdMilliseconds: Double = 120
 
     /// The clock must stop while the Mac sleeps (the default suspending
     /// clock does), or waking from sleep would read as a minutes-long hitch.
     public init<C: Clock<Duration>>(clock: C = SuspendingClock()) {
-        sleepMeasuringLateness = { interval in
+        // Main-actor isolated so the post-sleep reading waits for the main
+        // thread: a busy main actor is exactly the lateness being measured.
+        sleepMeasuringLateness = { @MainActor interval in
             let expected = clock.now.advanced(by: interval)
             try await clock.sleep(until: expected, tolerance: nil)
             return expected.duration(to: clock.now)

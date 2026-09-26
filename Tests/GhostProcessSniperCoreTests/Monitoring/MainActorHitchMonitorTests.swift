@@ -72,6 +72,19 @@ final class MainActorHitchMonitorTests: XCTestCase {
         XCTAssertEqual(report.latestSpikePhase, "main actor heartbeat")
     }
 
+    func testBlockedMainActorOnARealClockIsAHitch() async throws {
+        let monitor = MainActorHitchMonitor(clock: SuspendingClock())
+        monitor.start(interval: 0.05, thresholdMilliseconds: 120)
+        try await Task.sleep(for: .milliseconds(2_300))
+        let blockedUntil = Date().addingTimeInterval(0.3)
+        while Date() < blockedUntil {}
+        try await Task.sleep(for: .milliseconds(200))
+        monitor.stop()
+        let report = monitor.report
+        XCTAssertGreaterThanOrEqual(report.hitchCount, 1, "a 300 ms main-actor stall must register")
+        XCTAssertGreaterThan(report.worstHitchMilliseconds, 150)
+    }
+
     func testReportLinesArePreformattedAndStable() {
         var ring = SpikeRingBuffer(limit: 4)
         ring.record(phase: "sample", milliseconds: 42.4, threshold: 20, at: Date(timeIntervalSince1970: 1), logToOS: false)
