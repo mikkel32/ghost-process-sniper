@@ -76,6 +76,10 @@ final class SQLiteDatabase {
         handle != nil
     }
 
+    var isInTransaction: Bool {
+        handle.map { sqlite3_get_autocommit($0) == 0 } ?? false
+    }
+
     /// Corrupt or foreign files cannot be repaired in place; the caller moves
     /// them aside instead of failing on every launch.
     var lastFailureIsCorruption: Bool {
@@ -87,6 +91,8 @@ final class SQLiteDatabase {
         guard handle == nil else {
             return
         }
+        // A failure recorded on an earlier connection says nothing about this one.
+        lastResultCode = SQLITE_OK
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true

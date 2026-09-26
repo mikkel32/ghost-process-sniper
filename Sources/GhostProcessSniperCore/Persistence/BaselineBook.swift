@@ -184,6 +184,16 @@ final class BaselineBook {
         pendingUpserts.removeAll(keepingCapacity: true)
     }
 
+    /// The file was replaced: every cached baseline is written to the new
+    /// one at the next persist pass.
+    func markAllUnpersisted() {
+        discardStaged()
+        for signatureID in cache.keys {
+            dirty[signatureID] = Dirty(persistedSampleCount: 0, since: .distantPast)
+        }
+        lastPersistPass = nil
+    }
+
     /// Forgets clean rows and misses not seen since `cutoff`; a signature that
     /// comes back reloads from disk.
     func evict(notSeenSince cutoff: Date) {
