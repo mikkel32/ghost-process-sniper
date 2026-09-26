@@ -12,8 +12,9 @@ final class MonitorPublishDietTests: XCTestCase {
 
     func testTicksThatOnlyAdvanceTimeLeaveDiagnosticsAndHealthAlone() async {
         let monitor = monitor(GatedSampler(processes: processes))
-        // Let the cold first tick decay out of the average refresh cost.
-        for _ in 0..<10 {
+        // Let the cold first tick decay out of the average refresh cost
+        // (under 0.5% of its weight is left after 30 ticks).
+        for _ in 0..<30 {
             await monitor.refresh()
         }
         let firstSample = monitor.lastSampleDate
