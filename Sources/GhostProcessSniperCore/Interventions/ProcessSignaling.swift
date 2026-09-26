@@ -51,12 +51,12 @@ public struct DefaultProcessLookup: ProcessLookup {
                 commandRefreshInterval: 3_600,
                 includeForensicsFor: [],
                 includeForensicsForPIDs: [],
-                forceCommandRefresh: false,
                 allowsOptionalForensics: false,
                 maxForensicsPerRefresh: 0,
                 reason: "kill-\(policy.rawValue)",
                 scannerBudget: budget,
-                lanePriorities: [.cheapMetrics, .telemetryCache, .deadlineSkipped]
+                // Only the process graph matters here; no path or argv reads.
+                telemetryDisabled: true
             )
         )
         return KillProcessSnapshot(

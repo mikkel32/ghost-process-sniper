@@ -83,13 +83,17 @@ public actor NativeProcessSampler: ProcessSampling {
 
         // Cold start and big backlogs get a one-off allowance so paths and argv
         // fill in within a few ticks instead of minutes.
-        if completedSampleCount < 3 || tick.telemetryJobs.count > 64 {
+        if !plan.telemetryDisabled, completedSampleCount < 3 || tick.telemetryJobs.count > 64 {
             tick.deadline.budgetMilliseconds += Self.backlogAllowanceMilliseconds
         }
-        runPathLane(now: now, tick: &tick)
+        if !plan.telemetryDisabled {
+            runPathLane(now: now, tick: &tick)
+        }
         let refreshed = await runForensicsJobs(plan: plan, now: now, tick: &tick)
         runPortCensus(plan: plan, now: now, refreshed: refreshed, tick: &tick)
-        await runArgumentLane(plan: plan, now: now, tick: &tick)
+        if !plan.telemetryDisabled {
+            await runArgumentLane(plan: plan, now: now, tick: &tick)
+        }
 
         var processes: [ProcessMetrics] = []
         processes.reserveCapacity(tick.samples.count)

@@ -2714,7 +2714,7 @@ private func processKillerUsesCheapSnapshotPolicy() async throws {
     try check(preview.usedCheapPath, "default lookup should mark kill snapshots as cheap")
     try check(plans.last?.allowsOptionalForensics == false, "kill snapshot should disable optional forensics")
     try check(plans.last?.maxForensicsPerRefresh == 0, "kill snapshot should not enqueue forensics")
-    try check(plans.last?.scannerBudget.maxTelemetryRefreshes == 0, "kill snapshot should avoid command/path sweeps")
+    try check(plans.last?.telemetryDisabled == true && plans.last?.scannerBudget.maxTelemetryRefreshes == 0, "kill snapshot should avoid command/path sweeps")
 }
 
 private func processKillerUsesDedicatedSnapshotProvider() async throws {

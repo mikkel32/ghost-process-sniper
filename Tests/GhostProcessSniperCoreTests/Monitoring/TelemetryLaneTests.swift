@@ -17,6 +17,16 @@ final class TelemetryLaneTests: XCTestCase {
         XCTAssertEqual(source.recordedCalls.path, 600, "a path is read once per identity")
     }
 
+    func testDisabledTelemetrySkipsPathAndArgumentReads() async throws {
+        let source = FakeProbeSource.table(count: 50)
+        let sampler = NativeProcessSampler(source: source)
+        let batch = try await sampler.sample(plan: .fixture(at: 0) { $0.telemetryDisabled = true })
+        XCTAssertEqual(batch.processes.count, 50, "the process graph is still complete")
+        XCTAssertEqual(source.recordedCalls.path, 0)
+        XCTAssertEqual(source.recordedCalls.arguments, 0)
+        XCTAssertTrue(batch.processes.allSatisfy { $0.executablePath.isEmpty })
+    }
+
     func testDeferredIdentityIsRetriedNextTickAndNeverCountedAsAHit() async throws {
         let source = FakeProbeSource.table(count: 100)
         source.setReadCost(pathMicroseconds: 2_000, argumentsMicroseconds: 2_000)

@@ -48,6 +48,9 @@ public struct SamplingPlan: Equatable, Sendable {
     public var portCensusIdentities: Set<ProcessIdentity>
     /// One-shot: read the listening ports of every same-user process this tick.
     public var portCensusAll: Bool
+    /// Skips the path and argv lanes: processes keep cached telemetry or get
+    /// a name-only placeholder. For kill snapshots, which need only the graph.
+    public var telemetryDisabled: Bool
 
     public static func balanced(now: Date = Date()) -> SamplingPlan {
         let budget = ScannerBudget.budget(for: .balanced)
@@ -70,27 +73,24 @@ public struct SamplingPlan: Equatable, Sendable {
     /// age is only the safety net for processes that rewrite their own argv.
     public static let telemetryRefreshInterval: TimeInterval = 600
 
-    /// `lanePriorities` and `forceCommandRefresh` are ignored (nothing needs
-    /// them any more); they stay only so existing callers compile.
     public init(
         sampledAt: Date,
         performanceMode: RadarPerformanceMode,
         commandRefreshInterval: TimeInterval,
         includeForensicsFor: Set<ProcessIdentity>,
         includeForensicsForPIDs: Set<Int32>,
-        forceCommandRefresh: Bool = false,
         allowsOptionalForensics: Bool,
         maxForensicsPerRefresh: Int,
         reason: String,
         scannerBudget: ScannerBudget? = nil,
         candidateSet: CandidateSet = .empty,
         probePolicy: ProcessProbePolicy = .balanced,
-        lanePriorities: [ScanLane] = [],
         metricsEnrichmentBudget: Int? = nil,
         uiVisible: Bool = false,
         hintedIdentities: Set<ProcessIdentity> = [],
         portCensusIdentities: Set<ProcessIdentity> = [],
-        portCensusAll: Bool = false
+        portCensusAll: Bool = false,
+        telemetryDisabled: Bool = false
     ) {
         self.sampledAt = sampledAt
         self.performanceMode = performanceMode
@@ -108,6 +108,7 @@ public struct SamplingPlan: Equatable, Sendable {
         self.hintedIdentities = hintedIdentities
         self.portCensusIdentities = portCensusIdentities
         self.portCensusAll = portCensusAll
+        self.telemetryDisabled = telemetryDisabled
     }
 }
 
