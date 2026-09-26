@@ -40,6 +40,20 @@ final class ProcessMonitorWakeTests: XCTestCase {
         XCTAssertEqual(plan?.performanceMode, .realtime)
     }
 
+    func testHiddenSleepDoesNotKeepAReleasedMonitorAlive() async {
+        let sampler = GatedSampler()
+        var monitor: ProcessMonitor? = monitor(sampler)
+        weak let released = monitor
+        monitor?.start()
+        let warmedUp = await waitUntil(timeout: 5) { await sampler.calls >= 2 }
+        XCTAssertTrue(warmedUp)
+        try? await Task.sleep(for: .milliseconds(100))
+
+        monitor = nil
+        let gone = await waitUntil(timeout: 1) { released == nil }
+        XCTAssertTrue(gone, "the loop must not hold the monitor through a 3.5 s sleep")
+    }
+
     func testThermalsAreSampledOnlyWhileASurfaceIsVisible() async {
         let thermals = CountingThermalSampler()
         let monitor = monitor(GatedSampler(), thermals: thermals)

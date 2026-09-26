@@ -106,7 +106,8 @@ public final class ProcessMonitor {
             while !Task.isCancelled {
                 guard let interval = await self?.runLoopTick(isFirstTick: isFirstTick) else { return }
                 isFirstTick = false
-                await self?.sleepUntilNextTick(interval)
+                let sleeper = self?.startSleepUntilNextTick(interval)
+                await sleeper?.value
             }
         }
         updateHitchMonitor()

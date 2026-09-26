@@ -67,15 +67,17 @@ extension ProcessMonitor {
     }
 
     /// Hidden sleeps allow 15 % timer slack so the system can batch the
-    /// wake-up with others; a visible cadence stays exact.
-    func sleepUntilNextTick(_ interval: TimeInterval) async {
-        guard !wakePending else { return }
+    /// wake-up with others; a visible cadence stays exact. Returns nil when a
+    /// wake is already pending. The loop awaits the returned task without
+    /// holding the monitor, so a sleep never delays deinit.
+    func startSleepUntilNextTick(_ interval: TimeInterval) -> Task<Void, Never>? {
+        guard !wakePending else { return nil }
         let tolerance: Duration = uiVisible ? .zero : .seconds(interval * 0.15)
         let sleeper = Task<Void, Never> {
             try? await Task.sleep(for: .seconds(interval), tolerance: tolerance)
         }
         self.sleeper = sleeper
-        await sleeper.value
+        return sleeper
     }
 
     /// Runs the next loop tick now: ends a sleep in progress, or skips the
