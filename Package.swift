@@ -11,6 +11,9 @@ let package = Package(
         .executable(name: "GhostProcessSniperCoreChecks", targets: ["GhostProcessSniperCoreChecks"]),
         .library(name: "GhostProcessSniperCore", targets: ["GhostProcessSniperCore"])
     ],
+    dependencies: [
+        .package(path: "Packages/ThinkingOrbsKit")
+    ],
     targets: [
         .target(
             name: "GhostProcessSniperCore",
@@ -21,7 +24,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "GhostProcessSniper",
-            dependencies: ["GhostProcessSniperCore"]
+            dependencies: [
+                "GhostProcessSniperCore",
+                .product(name: "ThinkingOrbsKit", package: "ThinkingOrbsKit")
+            ]
         ),
         .executableTarget(
             name: "GhostProcessSniperCoreChecks",
