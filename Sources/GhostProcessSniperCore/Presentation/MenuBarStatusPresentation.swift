@@ -59,6 +59,11 @@ public struct MenuBarStatusPresentation: Equatable, Sendable {
         return capped(normalized.isEmpty ? "Quiet" : normalized, limit: 44)
     }
 
+    /// The popover's state text without building the tooltip and render key.
+    public static func compactStateText(summary: RadarSummary) -> String {
+        compactStateText(summary: summary, normalizedStatus: normalizedStatus(summary.statusText))
+    }
+
     private static func accessibilityLabel(summary: RadarSummary, normalizedStatus: String) -> String {
         let state: String
         if summary.level >= .critical {

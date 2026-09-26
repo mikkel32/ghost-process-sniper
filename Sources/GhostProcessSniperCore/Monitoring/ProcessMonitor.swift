@@ -44,7 +44,9 @@ public final class ProcessMonitor {
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
-    @ObservationIgnored private var popoverVisible = false
+    // Written only by the surface setters in ProcessMonitor+Surfaces.swift.
+    @ObservationIgnored var popoverVisible = false
+    @ObservationIgnored var consoleVisible = false
     @ObservationIgnored private var focusedSignatureIDs: Set<String> = []
     @ObservationIgnored private var averageRefreshMilliseconds = 0.0
     @ObservationIgnored private var lastCompletedPublishMilliseconds = 0.0
@@ -139,7 +141,7 @@ public final class ProcessMonitor {
                 currentStoreHealth: storeHealth,
                 previousRefresh: performanceMetrics.lastRefresh,
                 previousConsoleSnapshot: consoleSnapshot,
-                popoverVisible: popoverVisible,
+                popoverVisible: popoverVisible || consoleVisible,
                 focusedSignatureIDs: focusedSignatureIDs,
                 now: now,
                 startedAt: refreshStart
@@ -203,7 +205,7 @@ public final class ProcessMonitor {
         recordSample(processes)
         let effectivePerformanceMode = effectiveSettings.resolvedPerformanceMode(
             summaryLevel: summary.level,
-            popoverVisible: popoverVisible,
+            popoverVisible: popoverVisible || consoleVisible,
             systemPressure: scheduler.currentPressure
         )
         let stats = RefreshStats(
@@ -257,10 +259,6 @@ public final class ProcessMonitor {
         let updated = performanceMetrics.updatingSmoothness(statusUpdateMilliseconds: milliseconds)
         performanceMetrics = updated
         publishedState = publishedState.updating(performanceMetrics: updated)
-    }
-
-    public func setPopoverVisible(_ visible: Bool) {
-        popoverVisible = visible
     }
 
     @discardableResult

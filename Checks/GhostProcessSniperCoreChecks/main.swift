@@ -1508,6 +1508,7 @@ private func menuBarStatusPresentationIsIconOnlyAndCompact() throws {
         )
         try check(presentation.title.isEmpty, "menu bar presentation should always be icon-only")
         try check(presentation.compactStateText.count <= 8, "popover state chip should stay compact")
+        try check(MenuBarStatusPresentation.compactStateText(summary: summary) == presentation.compactStateText, "static state text should match the full presentation")
         try check(!presentation.tooltip.contains("No threshold ETA"), "tooltip should normalize awkward ETA wording")
     }
 

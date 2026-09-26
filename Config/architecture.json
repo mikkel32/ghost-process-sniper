@@ -12,7 +12,7 @@
     "GhostProcessSniperCore/Persistence/RadarStore.swift": 1072,
     "GhostProcessSniperCore/Sampling/ProcessSampler.swift": 917,
     "GhostProcessSniperCore/Intelligence/ProcessFamilyBuilder.swift": 828,
-    "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 680,
+    "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 678,
     "GhostProcessSniperCore/Domain/ScannerModels.swift": 695,
     "GhostProcessSniperCore/Configuration/SettingsPerformanceModels.swift": 771,
     "GhostProcessSniperCore/Intelligence/ForecastModels.swift": 767,

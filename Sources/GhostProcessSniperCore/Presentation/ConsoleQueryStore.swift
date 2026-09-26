@@ -85,6 +85,16 @@ public final class ConsoleQueryStore {
         }
     }
 
+    /// Shows a synchronously built projection at once, so a console that just
+    /// opened never draws empty lists, and retires any older projection still
+    /// in flight so it cannot overwrite the seed.
+    public func seed(_ snapshot: ConsoleDerivedSnapshot) {
+        guard snapshot.key != self.snapshot.key else { return }
+        generation &+= 1
+        isUpdating = false
+        self.snapshot = snapshot
+    }
+
     public func cancel() {
         generation &+= 1
         isUpdating = false
