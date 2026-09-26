@@ -65,8 +65,10 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
     /// Stop needs a selected family with processes you own; snooze and
     /// ignore need any selected family. Menu validation is rare, so the
     /// answer is computed fresh rather than read from presentation state.
+    /// A closed console keeps its session, but its selection is not on
+    /// screen, so nothing may act on it.
     func canActOnSelection(stop: Bool) -> Bool {
-        guard let session, session.state.focusedSelection.familyKey != nil else {
+        guard window != nil, let session, session.state.focusedSelection.familyKey != nil else {
             return false
         }
         return stop ? session.selectedFamily?.ownedIdentities.isEmpty == false : true
@@ -159,8 +161,11 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         monitor?.setConsoleVisible(false)
         session?.setVisible(false)
-        // A stop preview left open must not resurface on the next open.
+        // Transient UI must not resurface on the next open: the view that
+        // would dismiss a toast goes away with the window.
         session?.pendingKill = nil
+        session?.toast = nil
+        session?.showQuickGuide = false
         window = nil
         RadarLogger.ui.info("Closed radar console")
     }

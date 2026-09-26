@@ -43,18 +43,8 @@ struct RadarConsoleView: View {
             }
             .animation(reduceMotion ? nil : .spring(duration: 0.32), value: session.toast)
         }
-        .onChange(of: session.toast) { _, toast in
-            toastDismissTask?.cancel()
-            guard toast != nil else {
-                return
-            }
-            toastDismissTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 2_600_000_000)
-                guard !Task.isCancelled else {
-                    return
-                }
-                session.toast = nil
-            }
+        .onChange(of: session.toast) { _, _ in
+            scheduleToastDismiss()
         }
     }
 
@@ -69,6 +59,8 @@ struct RadarConsoleView: View {
         .onAppear {
             // Showing the window already starts a fresh sample (setConsoleVisible).
             session.setVisible(true)
+            // A toast raised while the window was closed has no dismiss timer yet.
+            scheduleToastDismiss()
             // ⌘F can fire before this view attaches (window just created):
             // catch any focus request we missed.
             if showsGlobalSearch, session.searchFocusToken != handledSearchFocusToken {
@@ -183,6 +175,20 @@ struct RadarConsoleView: View {
                     RadarConsoleInspector(session: session)
                         .inspectorColumnWidth(min: 260, ideal: 315, max: 380)
                 }
+        }
+    }
+
+    private func scheduleToastDismiss() {
+        toastDismissTask?.cancel()
+        guard session.toast != nil else {
+            return
+        }
+        toastDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_600_000_000)
+            guard !Task.isCancelled else {
+                return
+            }
+            session.toast = nil
         }
     }
 
