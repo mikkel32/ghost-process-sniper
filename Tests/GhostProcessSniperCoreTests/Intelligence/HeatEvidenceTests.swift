@@ -65,7 +65,10 @@ final class CorroborationHistoryTests: XCTestCase {
 
         XCTAssertEqual(family.trend.sampleCount, 1)
         XCTAssertEqual(family.score.heat.sustainedSignalCount, 0)
-        XCTAssertGreaterThanOrEqual(family.score.heat.corroborationCount, 1)
+        // An idle family is a bystander: pressure weighs its share but does
+        // not corroborate it.
+        XCTAssertEqual(family.score.heat.corroborationCount, 0)
+        XCTAssertTrue(family.score.heat.evidence.contains { $0.hasPrefix("Host memory pressure is warning") })
         XCTAssertFalse(family.forecastIsCredibleEscalation)
         let verdict = FamilyVerdict.synthesize(family: family, pattern: family.trend.resolvedPattern)
         XCTAssertFalse(verdict.headline.hasPrefix("Leak"), verdict.headline)

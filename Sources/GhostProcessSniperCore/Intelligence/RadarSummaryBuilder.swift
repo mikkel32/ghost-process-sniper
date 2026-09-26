@@ -2,7 +2,7 @@ import Foundation
 
 /// Rolls scored families up into the menu-bar level and status line.
 enum RadarSummaryBuilder {
-    static func summary(for families: [ProcessFamily]) -> RadarSummary {
+    static func summary(for families: [ProcessFamily], hostOutlook: HostMemoryOutlook? = nil) -> RadarSummary {
         let level = families.map { family in
             family.forecastIsCredibleEscalation
                 ? max(family.score.level, family.forecast.state.level)
@@ -17,7 +17,11 @@ enum RadarSummaryBuilder {
         let top = families.first
 
         let statusText: String
-        if let topForecast = families.first(where: { $0.forecastIsCredibleEscalation }) {
+        // The whole Mac running out of headroom soon outranks any one family.
+        if let outlook = hostOutlook, outlook.etaSeconds <= 30 * 60 {
+            let culprit = outlook.topContributorName.map { " · \($0)" } ?? ""
+            statusText = "Memory critical in \(PressureAttribution.etaText(outlook.etaSeconds))\(culprit)"
+        } else if let topForecast = families.first(where: { $0.forecastIsCredibleEscalation }) {
             statusText = escalationText(topForecast.forecast)
         } else if let topWarming = families.first(where: { $0.forecastIsCredibleEarlyWarning }) {
             statusText = earlyWarningText(topWarming.forecast)
@@ -41,7 +45,9 @@ enum RadarSummaryBuilder {
             totalMemoryBytes: totalMemory,
             topFamilyName: top?.displayName,
             leakingCount: leakingCount,
-            suggestionCount: suggestionCount
+            suggestionCount: suggestionCount,
+            hostPressureETA: hostOutlook?.etaSeconds,
+            hostPressureCulprit: hostOutlook?.topContributorName
         )
     }
 

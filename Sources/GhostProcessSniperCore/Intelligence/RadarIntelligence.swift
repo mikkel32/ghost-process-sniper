@@ -169,7 +169,8 @@ public struct RadarIntelligence: Sendable {
                 settings: settings
             ),
             family: family,
-            pressure: context.systemPressure
+            pressure: context.systemPressure,
+            share: context.pressureShare(for: family)
         )
         let staged = family.enriched(
             score: score,
@@ -186,7 +187,8 @@ public struct RadarIntelligence: Sendable {
             score: suppressedScore,
             suggestions: preliminarySuppression
         )
-        let forecast = forecaster.forecast(family: workingFamily, settings: settings, now: now)
+        let forecast = forecaster.forecast(family: workingFamily, settings: settings, now: now,
+                                           pressure: context.systemPressure, hostOutlook: context.hostOutlook)
         let predictiveScore = scoreWithForecast(suppressedScore, forecast: forecast, family: workingFamily)
         let refinedHeat = GhostHeatModel.refined(
             base: predictiveScore.heat,
@@ -194,6 +196,7 @@ public struct RadarIntelligence: Sendable {
             baseline: baseline,
             recentIncidentCount: recentIncidents,
             pressure: context.systemPressure,
+            pressureShare: context.pressureShare(for: workingFamily),
             forecast: forecast
         )
         let heatResolvedScore = GhostScore(
@@ -485,25 +488,27 @@ public struct RadarIntelligence: Sendable {
         )
     }
 
-    // The same footprint matters more when the whole machine is starved:
-    // large families get pushed up the queue while host pressure is high.
+    // When the whole machine is starved, the families that hold or grow
+    // its memory move up the queue, in proportion to their share: an idle
+    // bystander of the same size barely moves.
     private func pressureAdjustedScore(
         _ score: GhostScore,
         family: ProcessFamily,
-        pressure: SystemMemoryPressure
+        pressure: SystemMemoryPressure,
+        share: PressureShare
     ) -> GhostScore {
         guard pressure.isKnown, pressure.level >= .warning,
-              family.totalPhysicalFootprintBytes > 512 * 1_048_576
+              family.totalPhysicalFootprintBytes > 512 * 1_048_576, share.boostScale > 0.05
         else {
             return score
         }
-        let boost: Double = pressure.level == .critical ? 12 : 7
-        let reason = "system memory pressure is \(pressure.level.label.lowercased())"
+        let boost: Double = (pressure.level == .critical ? 12 : 7) * share.boostScale
+        let reason = "system memory pressure is \(pressure.level.label.lowercased()) (\(share.text))"
         let pressureComponent = GhostScoreComponent(
             slot: "pressure",
             kind: .system,
             title: "Host memory pressure",
-            detail: "This footprint matters more while system pressure is \(pressure.level.label.lowercased())",
+            detail: "Holds \(share.text) while system pressure is \(pressure.level.label.lowercased())",
             impact: boost,
             level: pressure.level.ghostLevel
         )

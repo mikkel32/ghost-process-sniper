@@ -48,6 +48,12 @@ public struct FamilyScoringCache: Sendable {
         let now = now ?? family.root.sampledAt
         var hasher = Hasher()
         hasher.combine(context.systemPressure.level)
+        if context.systemPressure.level >= .warning {
+            let share = context.pressureShare(for: family)
+            hasher.combine(Int((share.contribution * 20).rounded()))
+            hasher.combine(share.corroboratesPressure)
+        }
+        hasher.combine(context.hostOutlook.map { Int($0.etaSeconds / 60) })
         hasher.combine(family.signature.id)
         hasher.combine(family.members.map(\.identity))
         hasher.combine(family.coverage.isScorable)

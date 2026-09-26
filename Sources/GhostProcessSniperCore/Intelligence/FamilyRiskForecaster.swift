@@ -16,7 +16,9 @@ public struct FamilyRiskForecaster: Sendable {
     public func forecast(
         family: ProcessFamily,
         settings: ThresholdSettings,
-        now: Date
+        now: Date,
+        pressure: SystemMemoryPressure = .unknown,
+        hostOutlook: HostMemoryOutlook? = nil
     ) -> RiskForecast {
         let baseline = AnomalyBaseline(family: family)
         let trustedWindow = family.trend.hasSustainedHistory && family.hasRecentMeasurements(at: now)
@@ -36,8 +38,19 @@ public struct FamilyRiskForecaster: Sendable {
             velocity: memoryVelocity,
             acceleration: acceleration
         ).flatMap { $0.isFinite && $0 <= 86_400 ? $0 : nil }
-        let eta = memoryETA
-        let etaKind: ForecastETAKind = eta == nil ? .none : .memoryLimit
+        // While the Mac's headroom is shrinking, this family's growth may
+        // make pressure critical before it reaches its own limit.
+        let hostETA = hostOutlook == nil ? nil :
+            PressureAttribution.familyETASeconds(velocity: memoryVelocity, pressure: pressure).flatMap { $0 <= 86_400 ? $0 : nil }
+        let eta: TimeInterval?
+        let etaKind: ForecastETAKind
+        if let hostETA, hostETA < (memoryETA ?? .infinity) {
+            eta = hostETA
+            etaKind = .hostMemory
+        } else {
+            eta = memoryETA
+            etaKind = memoryETA == nil ? .none : .memoryLimit
+        }
         let horizon = trustedHorizon(ForecastHorizon.from(etaSeconds: eta), trend: family.trend)
         let recurrenceRisk = min(1, Double(baseline.recurrenceCount) / 5)
         let staleLikelihood = family.forgottenAssessment.likelihood
@@ -73,6 +86,7 @@ public struct FamilyRiskForecaster: Sendable {
             state: state,
             horizon: horizon,
             etaText: etaText(eta),
+            etaKind: etaKind,
             baseline: baseline,
             memoryVelocity: memoryVelocity,
             acceleration: acceleration,
@@ -392,6 +406,7 @@ public struct FamilyRiskForecaster: Sendable {
         state: ForecastState,
         horizon: ForecastHorizon,
         etaText: String,
+        etaKind: ForecastETAKind,
         baseline: AnomalyBaseline,
         memoryVelocity: Double,
         acceleration: Double,
@@ -442,7 +457,9 @@ public struct FamilyRiskForecaster: Sendable {
         if acceleration > 0 {
             parts.append("leak is accelerating")
         }
-        if horizon == .soon || horizon == .imminent {
+        if etaKind == .hostMemory, horizon == .soon || horizon == .imminent {
+            parts.append("at this rate memory pressure turns critical in ~\(etaText)")
+        } else if horizon == .soon || horizon == .imminent {
             parts.append("memory limit in \(etaText)")
         }
         if baseline.memoryMultiple >= 1.5 {

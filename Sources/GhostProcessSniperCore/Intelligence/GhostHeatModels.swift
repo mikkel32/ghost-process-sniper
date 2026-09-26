@@ -221,6 +221,7 @@ public enum GhostHeatModel {
         baseline: FamilyBaseline?,
         recentIncidentCount: Int,
         pressure: SystemMemoryPressure,
+        pressureShare: PressureShare? = nil,
         forecast: RiskForecast
     ) -> GhostHeat {
         var heat = base.value
@@ -264,16 +265,20 @@ public enum GhostHeatModel {
             // Old incidents are context, not independent evidence of a new problem.
         }
 
+        // Pressure weighs by the family's share of used memory and of its
+        // growth; only a family driving the growth is corroborated by it.
+        let share = pressureShare ?? PressureAttribution.share(for: family, pressure: pressure)
         if pressure.isKnown, pressure.level >= .warning,
-           family.totalPhysicalFootprintBytes > 512 * 1_048_576 {
-            let boost = pressure.level == .critical ? 16.0 : 9.0
-            heat += boost
-            if pressure.level == .critical, family.totalPhysicalFootprintBytes >= 1_073_741_824 {
+           family.totalPhysicalFootprintBytes > 512 * 1_048_576, share.boostScale > 0.05 {
+            heat += (pressure.level == .critical ? 16.0 : 9.0) * share.boostScale
+            if pressure.level == .critical, family.totalPhysicalFootprintBytes >= 1_073_741_824, share.boostScale >= 1 {
                 heat = max(32, heat)
             }
-            evidence.append("Host memory pressure is \(pressure.level.label.lowercased())")
-            confidence += 0.08
-            contextVotes += 1
+            evidence.append("Host memory pressure is \(pressure.level.label.lowercased()); this family holds \(share.text)")
+            confidence += 0.08 * share.boostScale
+            if share.corroboratesPressure {
+                contextVotes += 1
+            }
         }
 
         let forecastIsHeatTrusted = forecast.confidence >= 0.55 && family.trend.hasSustainedHistory &&

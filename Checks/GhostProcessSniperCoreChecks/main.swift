@@ -1063,9 +1063,10 @@ private func systemPressureSamplerFollowsKernelVerdict() throws {
 }
 
 private func systemPressureBoostsLargeFamilies() throws {
+    // Half of the memory in use: pressure is largely this family's doing.
     let family = forecastFamily(
         pid: 220,
-        memory: 1_610_612_736,
+        memory: 8_589_934_592,
         cpu: 3,
         trend: .empty,
         score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"])
@@ -1098,6 +1099,18 @@ private func systemPressureBoostsLargeFamilies() throws {
     try check(pressured.score.value >= nominal.score.value + 10, "critical host pressure should boost large families")
     try check(pressured.score.reasons.joined(separator: " ").contains("pressure"), "pressure boost should be explained in reasons")
     try check(pressured.score.level >= .watch, "gigabyte families under critical pressure should be at least watch")
+
+    // A 1.5 GB bystander holding a tenth of used memory is barely moved.
+    let bystander = forecastFamily(pid: 221, memory: 1_610_612_736, cpu: 3, trend: .empty,
+        score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"]))
+    let calm = intelligence.enrich(family: freshMeasurements(bystander, at: now),
+        context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []), settings: .aggressive, now: now)
+    let squeezed = intelligence.enrich(family: freshMeasurements(bystander, at: now),
+        context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: SystemMemoryPressure(
+            level: .critical, usedFraction: 0.95, totalBytes: 17_179_869_184, availableBytes: 858_993_459,
+            compressedBytes: 4_294_967_296)),
+        settings: .aggressive, now: now)
+    try check(squeezed.score.value - calm.score.value < 10, "an idle bystander should get only its share of the pressure boost")
 }
 
 private func familyVerdictSynthesizesJudgment() throws {

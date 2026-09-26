@@ -9,6 +9,10 @@ public struct RadarSummary: Equatable, Sendable {
     public let topFamilyName: String?
     public let leakingCount: Int
     public let suggestionCount: Int
+    /// When host memory pressure turns critical at the current growth.
+    public let hostPressureETA: TimeInterval?
+    /// The family driving that growth the most.
+    public let hostPressureCulprit: String?
 
     public static let empty = RadarSummary(
         statusText: "Quiet",
@@ -29,7 +33,9 @@ public struct RadarSummary: Equatable, Sendable {
         totalMemoryBytes: UInt64,
         topFamilyName: String?,
         leakingCount: Int = 0,
-        suggestionCount: Int = 0
+        suggestionCount: Int = 0,
+        hostPressureETA: TimeInterval? = nil,
+        hostPressureCulprit: String? = nil
     ) {
         self.statusText = statusText
         self.level = level
@@ -39,6 +45,8 @@ public struct RadarSummary: Equatable, Sendable {
         self.topFamilyName = topFamilyName
         self.leakingCount = leakingCount
         self.suggestionCount = suggestionCount
+        self.hostPressureETA = hostPressureETA
+        self.hostPressureCulprit = hostPressureCulprit
     }
 }
 
@@ -289,17 +297,24 @@ public struct RadarContext: Equatable, Sendable {
     public let recentIncidentCounts: [String: Int]
     public let rules: [RadarRule]
     public let systemPressure: SystemMemoryPressure
+    /// Each family's share of host memory pressure, by family key.
+    public let pressureShares: [String: PressureShare]
+    public let hostOutlook: HostMemoryOutlook?
 
     public init(
         baselines: [String: FamilyBaseline],
         recentIncidentCounts: [String: Int],
         rules: [RadarRule],
-        systemPressure: SystemMemoryPressure = .unknown
+        systemPressure: SystemMemoryPressure = .unknown,
+        pressureShares: [String: PressureShare] = [:],
+        hostOutlook: HostMemoryOutlook? = nil
     ) {
         self.baselines = baselines
         self.recentIncidentCounts = recentIncidentCounts
         self.rules = rules
         self.systemPressure = systemPressure
+        self.pressureShares = pressureShares
+        self.hostOutlook = hostOutlook
     }
 
     public func updating(systemPressure: SystemMemoryPressure) -> RadarContext {
@@ -307,8 +322,28 @@ public struct RadarContext: Equatable, Sendable {
             baselines: baselines,
             recentIncidentCounts: recentIncidentCounts,
             rules: rules,
-            systemPressure: systemPressure
+            systemPressure: systemPressure,
+            pressureShares: pressureShares,
+            hostOutlook: hostOutlook
         )
+    }
+
+    /// Attributes host pressure across this tick's families.
+    public func attributingPressure(to families: [ProcessFamily]) -> RadarContext {
+        guard systemPressure.isKnown, systemPressure.level >= .elevated else { return self }
+        return RadarContext(
+            baselines: baselines,
+            recentIncidentCounts: recentIncidentCounts,
+            rules: rules,
+            systemPressure: systemPressure,
+            pressureShares: PressureAttribution.compute(families: families, pressure: systemPressure),
+            hostOutlook: PressureAttribution.outlook(families: families, pressure: systemPressure)
+        )
+    }
+
+    /// This family's share, computed alone when the tick had none.
+    public func pressureShare(for family: ProcessFamily) -> PressureShare {
+        pressureShares[family.familyKey] ?? PressureAttribution.share(for: family, pressure: systemPressure)
     }
 }
 

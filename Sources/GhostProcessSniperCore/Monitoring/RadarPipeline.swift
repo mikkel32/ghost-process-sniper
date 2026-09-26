@@ -78,6 +78,7 @@ public struct RadarPipeline: Sendable {
     private var metricsVersions: [String: UInt64] = [:]
     private var signatureVersions: [String: UInt64] = [:]
     private var scoringCache = FamilyScoringCache()
+    private var hostOutlook: HostMemoryOutlook?
 
     public init(
         builder: ProcessFamilyBuilder = ProcessFamilyBuilder(),
@@ -98,7 +99,7 @@ public struct RadarPipeline: Sendable {
         return RadarPipelineOutput(
             families: scored.families,
             duplicateClusters: build.duplicateClusters,
-            summary: builder.summary(for: scored.families),
+            summary: summary(for: scored.families),
             diff: build.diff,
             buildMilliseconds: build.buildMilliseconds,
             scoreMilliseconds: scored.scoreMilliseconds,
@@ -109,8 +110,9 @@ public struct RadarPipeline: Sendable {
         )
     }
 
+    /// Includes the host memory outlook of the latest scored tick.
     public func summary(for families: [ProcessFamily]) -> RadarSummary {
-        builder.summary(for: families)
+        RadarSummaryBuilder.summary(for: families, hostOutlook: hostOutlook)
     }
 
     public mutating func buildCandidates(
@@ -147,6 +149,9 @@ public struct RadarPipeline: Sendable {
         now: Date
     ) -> (families: [ProcessFamily], scoreMilliseconds: Double) {
         let scoreStart = Date()
+        // Attributed once for the tick, before any family is scored.
+        let context = context.attributingPressure(to: families)
+        hostOutlook = context.hostOutlook
         let familyKeys = Set(families.map(\.familyKey))
         scoringCache.prune(keeping: familyKeys)
         if metricsVersions.count > familyKeys.count + 64 {
