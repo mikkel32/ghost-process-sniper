@@ -3,6 +3,7 @@ import Foundation
 public enum RadarStoreError: Error, LocalizedError {
     case openFailed(String)
     case sqlite(String)
+    case unreadSettings
 
     public var errorDescription: String? {
         switch self {
@@ -10,6 +11,8 @@ public enum RadarStoreError: Error, LocalizedError {
             "Unable to open radar store: \(message)"
         case .sqlite(let message):
             "Radar store error: \(message)"
+        case .unreadSettings:
+            "Radar store error: saved settings were not loaded yet, so they were left as they are"
         }
     }
 }
@@ -44,6 +47,11 @@ public actor RadarStore {
     private var lastContextMilliseconds = 0.0
     private var skippedSettingsWriteCount = 0
     private var lastSettingsJSON: String?
+    /// A save from a caller that never saw the stored settings would put
+    /// its defaults over them.
+    private var hasReadSettings = false
+    /// Read from a file found corrupt after open, written into its replacement.
+    private var salvage: StoreSalvage?
     private var lastErrorMessage: String?
     private var droppedModelCount = 0
     private var isClosed = false
@@ -74,25 +82,42 @@ public actor RadarStore {
     }
 
     public func loadSettings(defaults: ThresholdSettings) throws -> ThresholdSettings {
-        let db = try ensureOpen()
-        guard let json = try db.string("SELECT json FROM settings WHERE key = 'thresholds' LIMIT 1") else {
-            return defaults
+        try recoveringFromCorruption {
+            let db = try ensureOpen()
+            let json = try db.string("SELECT json FROM settings WHERE key = 'thresholds' LIMIT 1")
+            hasReadSettings = true
+            guard let json else {
+                return defaults
+            }
+            lastSettingsJSON = json
+            return codec.decode(ThresholdSettings.self, from: json) ?? defaults
         }
-        lastSettingsJSON = json
-        return codec.decode(ThresholdSettings.self, from: json) ?? defaults
     }
 
+    /// Throws `unreadSettings` instead of replacing stored settings that
+    /// this store never loaded.
     public func saveSettings(_ settings: ThresholdSettings) throws {
+        try recoveringFromCorruption {
+            try writeSettings(settings)
+        }
+    }
+
+    private func writeSettings(_ settings: ThresholdSettings) throws {
         let db = try ensureOpen()
         let json = try codec.encode(settings)
         if lastSettingsJSON == json {
             skippedSettingsWriteCount += 1
             return
         }
-        if let stored = try db.string("SELECT json FROM settings WHERE key = 'thresholds' LIMIT 1"), stored == json {
-            lastSettingsJSON = json
-            skippedSettingsWriteCount += 1
-            return
+        if let stored = try db.string("SELECT json FROM settings WHERE key = 'thresholds' LIMIT 1") {
+            if stored == json {
+                lastSettingsJSON = json
+                skippedSettingsWriteCount += 1
+                return
+            }
+            guard hasReadSettings else {
+                throw RadarStoreError.unreadSettings
+            }
         }
         try db.execute(
             "INSERT INTO settings(key, json, updated_at) VALUES('thresholds', ?, ?) " +
@@ -112,17 +137,19 @@ public actor RadarStore {
         defer {
             lastContextMilliseconds = Date().timeIntervalSince(contextStart) * 1_000
         }
-        try ensureOpen()
-        let signatureIDs = Array(Set(families.map(\.signature.id)))
-        let rules = try ruleBook.composed(settings: settings, now: now)
-        return RadarContext(
-            baselines: try baselineBook.baselines(for: signatureIDs, at: now),
-            recentIncidentCounts: try incidentLedger.recentCounts(
-                for: signatureIDs,
-                since: now.addingTimeInterval(-RadarStore.incidentRetention)
-            ),
-            rules: rules
-        )
+        return try recoveringFromCorruption {
+            try ensureOpen()
+            let signatureIDs = Array(Set(families.map(\.signature.id)))
+            let rules = try ruleBook.composed(settings: settings, now: now)
+            return RadarContext(
+                baselines: try baselineBook.baselines(for: signatureIDs, at: now),
+                recentIncidentCounts: try incidentLedger.recentCounts(
+                    for: signatureIDs,
+                    since: now.addingTimeInterval(-RadarStore.incidentRetention)
+                ),
+                rules: rules
+            )
+        }
     }
 
     /// `settings` only sets the flush cadence. Settings are persisted by
@@ -139,11 +166,19 @@ public actor RadarStore {
         try flush(now: now, force: false)
     }
 
+    /// A failed flush requeues its models, so the retry after a recovery
+    /// learns them into the fresh file.
+    private func flush(now: Date, force: Bool) throws {
+        try recoveringFromCorruption {
+            try flushQueued(now: now, force: force)
+        }
+    }
+
     /// Learns every queued model in memory, then writes only what is due:
     /// incident changes and baselines that have learned enough or waited
     /// long enough. A flush with nothing due skips the transaction entirely.
     /// `force` writes every learned baseline, for shutdown.
-    private func flush(now: Date, force: Bool) throws {
+    private func flushQueued(now: Date, force: Bool) throws {
         guard !pendingModels.isEmpty || (force && baselineBook.deferredCount > 0) else {
             return
         }
@@ -304,14 +339,18 @@ public actor RadarStore {
 
     /// Opens and migrates on first use. After a failure it retries at most
     /// once per `openRetryInterval`, rethrowing the last error in between so
-    /// callers can surface it.
+    /// callers can surface it. A file that a statement found corrupt is
+    /// moved aside and replaced here, outside any transaction.
     @discardableResult
     private func ensureOpen() throws -> SQLiteDatabase {
         guard !isClosed else {
             throw RadarStoreError.sqlite("the store is closed")
         }
         if db.isOpen {
-            return db
+            guard canRecoverFromCorruption else {
+                return db
+            }
+            moveCorruptFileAside()
         }
         let now = clock()
         if let openFailure, now.timeIntervalSince(openFailure.date) < Self.openRetryInterval {
@@ -329,6 +368,11 @@ public actor RadarStore {
             openFailure = nil
             lastErrorMessage = nil
         }
+        if let salvage {
+            self.salvage = nil
+            lastSettingsJSON = salvage.restore(into: db)
+            ruleBook.invalidate()
+        }
         RadarLogger.store.info("Radar store opened at \(self.url.path, privacy: .private)")
         return db
     }
@@ -343,6 +387,38 @@ public actor RadarStore {
             try openMigrated()
             recoveredFromCorruption = true
         }
+    }
+
+    /// Runs a store call once more when it found the file corrupt, so the
+    /// retry runs on a fresh file.
+    private func recoveringFromCorruption<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch where canRecoverFromCorruption {
+            return try body()
+        }
+    }
+
+    /// Corruption found after open, by a statement that read a damaged page
+    /// the open never touched. At most once a session: a fresh file that is
+    /// corrupt again points at the disk, and replacing it on every call
+    /// would not help.
+    private var canRecoverFromCorruption: Bool {
+        db.isOpen && db.lastFailureIsCorruption && !db.isInTransaction && !recoveredFromCorruption
+    }
+
+    /// Recovers like corruption found at open, keeping the settings and
+    /// rules the damaged file still yields and every learned baseline in
+    /// memory. The next ensureOpen creates the fresh file.
+    private func moveCorruptFileAside() {
+        salvage = StoreSalvage(readingFrom: db, knownSettingsJSON: lastSettingsJSON)
+        let moved = db.quarantineFiles(at: clock())
+        RadarLogger.store.error("Radar store was corrupt; moved it to \(moved.lastPathComponent, privacy: .public) and started fresh")
+        recoveredFromCorruption = true
+        openFailure = nil
+        lastSettingsJSON = nil
+        incidentLedger.reset()
+        baselineBook.markAllUnpersisted()
     }
 
     /// A half-migrated connection must not look open to the next caller.

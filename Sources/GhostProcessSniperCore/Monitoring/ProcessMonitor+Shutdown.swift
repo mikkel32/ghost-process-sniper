@@ -12,7 +12,7 @@ extension ProcessMonitor {
         let settingsSavePending = settingsSaveTask != nil
         stop()
         if settingsSavePending {
-            try? await store?.saveSettings(settings)
+            await saveSettingsIfLoaded()
         }
         await store?.close()
     }

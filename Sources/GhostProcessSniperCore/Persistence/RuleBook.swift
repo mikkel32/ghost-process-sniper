@@ -79,7 +79,7 @@ final class RuleBook {
         }
     }
 
-    private func invalidate() {
+    func invalidate() {
         revision += 1
         cachedStored = nil
         cachedKey = nil

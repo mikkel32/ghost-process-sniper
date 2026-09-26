@@ -172,6 +172,13 @@ final class IncidentLedger {
         pendingWrites.removeAll(keepingCapacity: true)
     }
 
+    /// The file was replaced, so the tracked rows are gone; the next model
+    /// reloads the episodes from the new file.
+    func reset() {
+        committed = nil
+        discardStaged()
+    }
+
     private func update(_ open: inout OpenIncident, with family: ProcessFamily, at date: Date) {
         let previous = open.peak
         open.peak.absorb(family)
