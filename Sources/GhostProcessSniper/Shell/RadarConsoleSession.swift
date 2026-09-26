@@ -366,6 +366,7 @@ final class RadarConsoleSession {
 
     func prepareKill(familyKey: String) {
         guard let family = monitor.family(signatureID: familyKey) else {
+            showToast("That process already exited", systemImage: "checkmark.circle")
             return
         }
         prepareKill(family)
@@ -379,94 +380,10 @@ final class RadarConsoleSession {
         return hours == hours.rounded() ? "\(Int(hours)) h" : String(format: "%.1f h", hours)
     }
 
-    private(set) var isPreparingIntervention = false
-
-    func prepareKill(_ family: ProcessFamily, member: ProcessIdentity? = nil) {
-        guard !isPreparingIntervention, pendingKill == nil else { return }
-        isPreparingIntervention = true
-        Task {
-            defer { isPreparingIntervention = false }
-            var plan = await monitor.killPlan(for: family)
-            if let member {
-                guard family.ownedIdentities.contains(member),
-                      let process = family.members.first(where: { $0.identity == member }),
-                      !process.isSystemProcess else {
-                    showToast("This process cannot be targeted", systemImage: "lock")
-                    return
-                }
-                plan = plan.targetingOnly(process)
-            }
-            await presentPreview(of: plan, for: family)
-        }
-    }
-
-    /// Previews an alternative the advisor proposed, such as the supervisor
-    /// that restarts the family. It replaces any open preview, and the stop
-    /// is learned by the family that owns the new root. A root no family
-    /// owns, like an unlisted pm2 daemon, is only audited: its stop says
-    /// nothing about how `family` stops.
-    func prepareKill(_ family: ProcessFamily, plan: KillPlan) {
-        guard !isPreparingIntervention else { return }
-        isPreparingIntervention = true
-        Task {
-            defer { isPreparingIntervention = false }
-            if let owner = monitor.families.first(where: { $0.ownedIdentities.contains(plan.rootIdentity) }) {
-                await presentPreview(of: plan, for: owner)
-            } else {
-                await presentPreview(of: plan, for: family, learnsFromOutcome: false)
-            }
-        }
-    }
-
-    private func presentPreview(of plan: KillPlan, for family: ProcessFamily, learnsFromOutcome: Bool = true) async {
-        let delay = monitor.settings.forceKillDelay
-        let preview = await killer.preview(plan: plan, forceKillDelay: delay)
-        let expiresAt = Date().addingTimeInterval(60)
-        pendingKill = PendingKill(
-            family: family,
-            preview: preview,
-            plan: plan.binding(to: preview.targetIdentities, expiresAt: expiresAt, profile: preview.strategyProfile),
-            forceKillDelay: delay,
-            expiresAt: expiresAt,
-            learnsFromOutcome: learnsFromOutcome
-        )
-    }
-
-    func confirmKill(
-        _ pending: PendingKill,
-        skipForce: Bool = false,
-        control: KillOperationControl? = nil,
-        eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
-    ) async -> KillReport {
-        await monitor.confirmKill(
-            family: pending.family,
-            killer: killer,
-            approvedPlan: pending.plan,
-            forceKillDelay: pending.forceKillDelay,
-            skipForce: skipForce,
-            learnsFromOutcome: pending.learnsFromOutcome,
-            control: control,
-            eventSink: eventSink
-        )
-    }
-
-    /// Sends SIGKILL now to what a held stop reported still running, and
-    /// to nothing else; nil when nothing survived.
-    func forceSurvivors(
-        _ pending: PendingKill,
-        report: KillReport,
-        eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
-    ) async -> KillReport? {
-        guard let plan = pending.plan.forcingSurvivors(of: report) else { return nil }
-        return await monitor.confirmKill(
-            family: pending.family,
-            killer: killer,
-            approvedPlan: plan,
-            forceKillDelay: pending.forceKillDelay,
-            learnsFromOutcome: pending.learnsFromOutcome,
-            eventSink: eventSink
-        )
-    }
+    /// A stop preview is being computed; stop buttons show it and ignore repeat clicks.
+    var isPreparingIntervention = false
+    /// The open stop preview is being computed again.
+    var isRefreshingPreview = false
 }
 
 @MainActor
@@ -498,17 +415,6 @@ final class RadarConsoleViewState {
             showInspector: showInspector
         )
     }
-}
-
-struct PendingKill: Identifiable {
-    let id = UUID()
-    let family: ProcessFamily
-    let preview: KillPreview
-    let plan: KillPlan
-    let forceKillDelay: TimeInterval
-    let expiresAt: Date
-    /// False when the stop is of another process than `family`.
-    let learnsFromOutcome: Bool
 }
 
 struct RadarToast: Identifiable, Equatable {

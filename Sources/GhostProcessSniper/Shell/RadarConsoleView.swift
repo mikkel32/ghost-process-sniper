@@ -160,22 +160,9 @@ struct RadarConsoleView: View {
     var body: some View {
         persistedConsole
         .sheet(item: $session.pendingKill) { pending in
-            KillPreviewSheet(
-                family: pending.family,
-                preview: pending.preview,
-                approvalExpiresAt: pending.expiresAt,
-                confirm: { skipForce, control, eventSink in
-                    await session.confirmKill(
-                        pending,
-                        skipForce: skipForce,
-                        control: control,
-                        eventSink: eventSink
-                    )
-                },
-                close: {
-                    session.pendingKill = nil
-                }
-            )
+            KillPreviewSheet(pending: pending, session: session) {
+                session.pendingKill = nil
+            }
         }
         .sheet(isPresented: $session.showQuickGuide) {
             RadarQuickGuideView()
