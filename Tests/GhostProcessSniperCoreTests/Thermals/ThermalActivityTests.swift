@@ -104,6 +104,27 @@ final class ThermalActivityTests: XCTestCase {
         XCTAssertEqual(result.visibleContributors(at: now.addingTimeInterval(2)).first?.familyKey, "family-2")
     }
 
+    func testNextExpiryIsTheEarliestReadingBoundary() {
+        let result = summary([
+            sample(1, cpu: 400, date: now.addingTimeInterval(-5)),
+            sample(2, cpu: 300, gpu: 20, date: now.addingTimeInterval(-2))
+        ])
+        XCTAssertEqual(result.nextExpiry(after: now), now.addingTimeInterval(7))
+        XCTAssertEqual(result.nextExpiry(after: now.addingTimeInterval(7)), now.addingTimeInterval(10))
+        XCTAssertEqual(result.nextExpiry(after: now.addingTimeInterval(11)), now.addingTimeInterval(12))
+        XCTAssertNil(result.nextExpiry(after: now.addingTimeInterval(12)))
+        XCTAssertNil(ThermalActivitySummary.empty.nextExpiry(after: now))
+        XCTAssertEqual(result.expiryDates(after: now), [7, 10, 12].map { now.addingTimeInterval($0) })
+    }
+
+    func testSnapshotExpiresFifteenSecondsAfterItsReading() {
+        let snapshot = ThermalSnapshot(sampledAt: now, cpuCelsius: 70, gpuCelsius: nil, sensorCount: 1,
+                                       sensorKeys: [], systemState: "Nominal", unavailableReason: nil)
+        XCTAssertEqual(snapshot.expiresAt, now.addingTimeInterval(15))
+        XCTAssertEqual(snapshot.temperatureText(70, at: snapshot.expiresAt), "70.0°C")
+        XCTAssertEqual(snapshot.temperatureText(70, at: snapshot.expiresAt.addingTimeInterval(0.01)), "Unavailable")
+    }
+
     private func summary(_ samples: [ThermalActivitySample]) -> ThermalActivitySummary {
         ThermalActivitySummary.build(samples: samples, now: now, processorCount: 10)
     }

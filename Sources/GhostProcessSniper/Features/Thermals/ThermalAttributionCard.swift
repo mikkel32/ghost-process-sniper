@@ -7,7 +7,10 @@ struct ThermalAttributionCard: View {
     let diagnosis: ThermalDiagnosis
     let insight: ThermalAppInsight
     let now: Date
+    /// Offered only for a repeated, user-owned heat suspect; it opens the stop preview.
+    let stopTarget: ThermalStopTarget?
     let onInspect: (ThermalContributor) -> Void
+    let onStop: (String) -> Void
     let onCompare: (ThermalContributor) -> Void
     let onBrowse: () -> Void
     let onRefresh: () -> Void
@@ -29,17 +32,12 @@ struct ThermalAttributionCard: View {
     }
 
     private var earlierWork: ThermalRecentContributor? {
-        guard isFresh else { return nil }
-        return summary.recentContributors.first {
-            $0.lastActiveAt < summary.sampledAt &&
-            (0...ThermalActivityHistory.maximumAge).contains(now.timeIntervalSince($0.lastActiveAt))
-        }
+        isFresh ? summary.earlierContributor(at: now) : nil
     }
 
     private var scopeTitle: String {
         if !isFresh { return "Outdated scan" }
         if summary.observedProcessCount == 0 { return "No process data yet" }
-        if summary.coverage == .monitoredFamilies { return "Selected processes" }
         return summary.cpuObservedProcessCount < summary.observedProcessCount ||
             summary.gpuObservedProcessCount < summary.observedProcessCount ? "Partial resource readings" : "Process scan"
     }
@@ -47,8 +45,7 @@ struct ThermalAttributionCard: View {
     private var scopeDetail: String {
         guard isFresh else { return "Scan again before using app activity to explain current heat." }
         guard summary.observedProcessCount > 0 else { return "No process readings yet." }
-        let scope = summary.coverage == .processInventory ? "processes seen" : "monitored processes seen"
-        return "At the scan, of \(summary.observedProcessCount) \(scope), CPU was measured for \(summary.cpuObservedProcessCount) and GPU was reported for \(summary.gpuObservedProcessCount)."
+        return "At the scan, of \(summary.observedProcessCount) processes seen, CPU was measured for \(summary.cpuObservedProcessCount) and GPU was reported for \(summary.gpuObservedProcessCount)."
     }
 
     var body: some View {
@@ -85,8 +82,8 @@ struct ThermalAttributionCard: View {
 
             HStack(alignment: .top, spacing: 7) {
                 Image(systemName: isFresh && summary.cpuObservedProcessCount == summary.observedProcessCount &&
-                      summary.gpuObservedProcessCount == summary.observedProcessCount &&
-                      summary.coverage == .processInventory ? "checkmark.circle" : "info.circle")
+                      summary.gpuObservedProcessCount == summary.observedProcessCount
+                      ? "checkmark.circle" : "info.circle")
                     .foregroundStyle(RadarTheme.brand)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
@@ -101,9 +98,6 @@ struct ThermalAttributionCard: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            Text("Activity is a clue to the workload, not a measured percentage of heat. Other work may be missing from the scan.")
-                .font(.caption2).foregroundStyle(.secondary)
 
             Divider().opacity(0.5)
             Text(insight.action)
@@ -200,6 +194,9 @@ struct ThermalAttributionCard: View {
             onInspect(contributor)
         }
         .buttonStyle(.borderedProminent).tint(RadarTheme.brand)
+        if let stopTarget {
+            ThermalStopButton(target: stopTarget, onStop: onStop)
+        }
         Button("Compare after a change", systemImage: "arrow.left.arrow.right") {
             onCompare(contributor)
         }

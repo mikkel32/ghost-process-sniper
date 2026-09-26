@@ -58,44 +58,50 @@ final class ThermalInterpretationTests: XCTestCase {
         for (name, state) in [("Serious", ThermalDiagnosis.State.serious), ("Critical", .critical)] {
             let result = ThermalDiagnosis.evaluate(snapshot: snapshot(nil, state: name), activity: .empty, at: now)
             XCTAssertEqual(result.state, state)
-            XCTAssertTrue(result.status.lowercased().contains("pressure"))
+            XCTAssertTrue(result.reviewStatus.lowercased().contains("pressure"))
             XCTAssertFalse(result.headline.contains("Waiting"))
         }
     }
 
     func testWeakLeaderDoesNotBecomeTheExplanationForEightyDegrees() {
-        let result = ThermalDiagnosis.evaluate(snapshot: snapshot(80), activity: activity(cpu: 5), at: now)
-        XCTAssertTrue(result.nextStep.contains("does not explain"))
-        XCTAssertFalse(result.nextStep.contains("Start with"))
-        XCTAssertFalse(result.nextStep.contains("plausible contributor"))
+        let result = insight(temperature: 80, activity: activity(cpu: 5))
+        XCTAssertEqual(result.kind, .modest)
+        XCTAssertTrue(result.action.contains("does not clearly explain the heat"))
+        XCTAssertFalse(result.title.contains("Start with"))
     }
 
-    func testIncompleteCoverageNeverBecomesAnIdleDiagnosis() {
-        let result = ThermalDiagnosis.evaluate(snapshot: snapshot(82), activity: activity(cpu: 5, missing: 8), at: now)
-        XCTAssertTrue(result.nextStep.contains("incomplete"))
-        XCTAssertFalse(result.nextStep.contains("idle"))
-        XCTAssertTrue(result.coverageText.contains("1 of 9"))
+    func testIncompleteCoverageIsDisclosedAndNeverBecomesAnIdleDiagnosis() {
+        let activity = activity(cpu: 5, missing: 8)
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(82), activity: activity, at: now)
+        XCTAssertTrue(diagnosis.coverageText.contains("1 of 9"))
+        XCTAssertTrue(diagnosis.coverageText.contains("8 without either reading"))
+        let result = ThermalAppInsight.evaluate(activity: activity, diagnosis: diagnosis, at: now)
+        XCTAssertEqual(result.kind, .modest)
+        XCTAssertFalse(result.evidence.contains("idle"))
     }
 
     func testSubstantialActivityIsAPlausibleContributorAndNotAHeatShare() {
-        let result = ThermalDiagnosis.evaluate(snapshot: snapshot(82), activity: activity(cpu: 200), at: now)
-        XCTAssertTrue(result.nextStep.contains("Render"))
-        XCTAssertTrue(result.nextStep.contains("plausible contributor"))
-        XCTAssertTrue(result.nextStep.contains("not proof"))
-        XCTAssertFalse(result.nextStep.contains("percent of heat"))
+        let result = insight(temperature: 82, activity: activity(cpu: 200))
+        XCTAssertEqual(result.kind, .active)
+        XCTAssertEqual(result.title, "Start with Render")
+        XCTAssertTrue(result.evidence.contains("the cause of heat is unconfirmed"))
+        XCTAssertFalse(result.evidence.contains("of heat:"))
     }
 
     func testOldActivityCannotNameASuspect() {
-        let result = ThermalDiagnosis.evaluate(snapshot: snapshot(82), activity: activity(cpu: 200, date: now.addingTimeInterval(-13)), at: now)
-        XCTAssertFalse(result.isActivityFresh)
-        XCTAssertFalse(result.nextStep.contains("Render"))
-        XCTAssertTrue(result.nextStep.contains("Scan now"))
+        let activity = activity(cpu: 200, date: now.addingTimeInterval(-13))
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(82), activity: activity, at: now)
+        XCTAssertFalse(diagnosis.isActivityFresh)
+        let result = ThermalAppInsight.evaluate(activity: activity, diagnosis: diagnosis, at: now)
+        XCTAssertEqual(result.kind, .checking)
+        XCTAssertNil(result.contributor)
+        XCTAssertFalse(result.title.contains("Render"))
     }
 
     func testModestFirstPlaceAtLowTemperatureIsNotAProblemVerdict() {
-        let result = ThermalDiagnosis.evaluate(snapshot: snapshot(55), activity: activity(cpu: 5), at: now)
-        XCTAssertTrue(result.nextStep.contains("modest"))
-        XCTAssertTrue(result.nextStep.contains("not evidence of a problem"))
+        let result = insight(temperature: 55, activity: activity(cpu: 5))
+        XCTAssertEqual(result.kind, .modest)
+        XCTAssertTrue(result.action.contains("No demanding workload stands out"))
     }
 
     func testRepeatedTimerTicksDoNotCreateHistoryOrPersistence() {
@@ -105,7 +111,6 @@ final class ThermalInterpretationTests: XCTestCase {
         let result = ThermalTemperatureAssessment.evaluate(snapshot: snapshot(82), observations: window, at: now.addingTimeInterval(14))
         XCTAssertEqual(result.trajectory.direction, .measuring)
         XCTAssertEqual(result.trajectory.hotSeconds, 0)
-        XCTAssertNil(result.persistenceText)
     }
 
     func testRisingTemperatureUsesFourDistinctSamplesAndThirtySeconds() {
@@ -122,7 +127,6 @@ final class ThermalInterpretationTests: XCTestCase {
         XCTAssertEqual(result.temperature.band, .hot)
         XCTAssertEqual(result.temperature.trajectory.direction, .falling)
         XCTAssertTrue(result.headline.contains("Cooling, but still"))
-        XCTAssertTrue(result.nextStep.contains("falling"))
     }
 
     func testPersistentHeatNeedsContinuousSampleEvidence() {
@@ -130,14 +134,13 @@ final class ThermalInterpretationTests: XCTestCase {
         let result = ThermalDiagnosis.evaluate(snapshot: latest, activity: .empty, observations: window, at: latest.sampledAt)
         XCTAssertEqual(result.temperature.trajectory.hotSeconds, 60)
         XCTAssertTrue(result.headline.contains("persisting"))
-        XCTAssertEqual(result.temperature.persistenceText, "80°C+ in samples spanning 60s")
     }
 
     func testGapBreaksTrendAndPersistence() {
         var (window, _) = history([82, 84, 86, 88])
         let latest = snapshot(88, at: now.addingTimeInterval(60))
         window.record(latest, at: latest.sampledAt)
-        XCTAssertEqual(window.readings.count, 1)
+        XCTAssertEqual(window.segments(for: .cpu, at: latest.sampledAt).map(\.points.count), [4, 1])
         let result = ThermalTemperatureAssessment.evaluate(snapshot: latest, observations: window, at: latest.sampledAt)
         XCTAssertEqual(result.trajectory.direction, .measuring)
         XCTAssertEqual(result.trajectory.hotSeconds, 0)
@@ -187,12 +190,59 @@ final class ThermalInterpretationTests: XCTestCase {
         XCTAssertEqual(result.trajectory.spanSeconds, 10)
     }
 
+    func testTrendSurvivesHottestCoreRotationWithinOneSensorSet() {
+        var window = ThermalObservationWindow()
+        var latest = snapshot(nil)
+        for (index, value) in [70.0, 73, 76, 79, 82, 85, 88].enumerated() {
+            latest = ThermalSnapshot(sampledAt: now.addingTimeInterval(Double(index * 10)),
+                cpuCelsius: value, gpuCelsius: nil, sensorCount: 2, sensorKeys: ["Tp01", "Tp05"],
+                systemState: "Normal", unavailableReason: nil,
+                cpuSensorKey: index.isMultiple(of: 2) ? "Tp01" : "Tp05", cpuSeriesID: "cpu:Tp01,Tp05")
+            window.record(latest, at: latest.sampledAt)
+        }
+        let result = ThermalDiagnosis.evaluate(snapshot: latest, activity: .empty, observations: window,
+                                               at: latest.sampledAt)
+        XCTAssertEqual(result.temperature.trajectory.direction, .rising)
+        XCTAssertEqual(result.temperature.trajectory.spanSeconds, 60)
+        XCTAssertGreaterThan(result.temperature.trajectory.hotSeconds, 0)
+        XCTAssertTrue(result.headline.contains("rising"))
+    }
+
+    func testTrendResetsWhenTheSensorSetChanges() {
+        var window = ThermalObservationWindow()
+        var latest = snapshot(nil)
+        for (index, value) in [70.0, 72, 76, 80].enumerated() {
+            latest = ThermalSnapshot(sampledAt: now.addingTimeInterval(Double(index * 10)),
+                cpuCelsius: value, gpuCelsius: nil, sensorCount: 2, sensorKeys: ["Tp01", "Tp05"],
+                systemState: "Normal", unavailableReason: nil, cpuSensorKey: "Tp01",
+                cpuSeriesID: index < 2 ? "cpu:Tp01,Tp05" : "cpu:Tp01")
+            window.record(latest, at: latest.sampledAt)
+        }
+        let result = ThermalTemperatureAssessment.evaluate(snapshot: latest, observations: window,
+                                                            at: latest.sampledAt)
+        XCTAssertEqual(result.trajectory.direction, .measuring)
+        XCTAssertEqual(result.trajectory.spanSeconds, 10)
+    }
+
     func testSingleSpikeDoesNotInventASustainedRise() {
         let (window, latest) = history([75, 75, 75, 75, 75, 75, 90])
         let result = ThermalTemperatureAssessment.evaluate(snapshot: latest, observations: window, at: latest.sampledAt)
         XCTAssertEqual(result.band, .veryHot, "The instantaneous reading must remain visible")
         XCTAssertEqual(result.trajectory.direction, .steady, "One outlier cannot fabricate a trend")
         XCTAssertEqual(result.trajectory.hotSeconds, 0)
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: latest, activity: .empty, observations: window,
+                                                  at: latest.sampledAt)
+        XCTAssertEqual(diagnosis.reviewStatus, "Very hot")
+        XCTAssertFalse(diagnosis.headline.contains("Reduce"))
+        XCTAssertEqual(diagnosis.headline, "90.0°C · Brief spike — watching the next readings")
+    }
+
+    func testConsecutiveVeryHotReadingsAskToReduceHeavyWork() {
+        let (window, latest) = history([75, 75, 75, 75, 75, 91, 91])
+        let result = ThermalDiagnosis.evaluate(snapshot: latest, activity: .empty, observations: window,
+                                               at: latest.sampledAt)
+        XCTAssertEqual(result.temperature.trajectory.veryHotSeconds, 10)
+        XCTAssertEqual(result.headline, "91.0°C · Reduce optional heavy work")
     }
 
     func testObservationWindowIsBoundedAndRejectsOutOfOrderSamples() {
@@ -252,6 +302,11 @@ final class ThermalInterpretationTests: XCTestCase {
         XCTAssertEqual(result.reviewStatus, "Elevated pressure")
     }
 
+    private func insight(temperature: Double, activity: ThermalActivitySummary) -> ThermalAppInsight {
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(temperature), activity: activity, at: now)
+        return ThermalAppInsight.evaluate(activity: activity, diagnosis: diagnosis, at: now)
+    }
+
     private func diagnose(cpu: Double) -> ThermalDiagnosis {
         ThermalDiagnosis.evaluate(snapshot: snapshot(cpu), activity: activity(cpu: 0), at: now)
     }
@@ -278,6 +333,6 @@ final class ThermalInterpretationTests: XCTestCase {
                 familyKey: "render-\(index)", name: "Render", executablePath: "/Applications/Render.app/Contents/MacOS/Render",
                 cpuPercent: cpu, gpuPercent: 0, measuredAt: index == 0 ? date : nil)
         }
-        return ThermalActivitySummary.build(samples: samples, now: date, processorCount: 10, coverage: .processInventory)
+        return ThermalActivitySummary.build(samples: samples, now: date, processorCount: 10)
     }
 }

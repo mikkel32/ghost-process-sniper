@@ -9,12 +9,9 @@ public struct ThermalDiagnosis: Equatable, Sendable {
 
     /// The platform's pressure state is retained independently of our review bands.
     public let state: State
-    /// Compatibility label for the platform signal. Use reviewStatus for the combined headline.
-    public let status: String
     public let reviewStatus: String
     public let headline: String
     public let explanation: String
-    public let nextStep: String
     public let coverageText: String
     public let isActivityFresh: Bool
     public let temperature: ThermalTemperatureAssessment
@@ -67,7 +64,15 @@ public struct ThermalDiagnosis: Equatable, Sendable {
             headline = "Your Mac is experiencing thermal pressure"
             explanation = "macOS reports elevated thermal conditions. Review demanding work even if the readable sensors show a lower temperature."
         case .checking, .normal:
-            if temperature.band == .unavailable {
+            if temperature.band == .unavailable, (0...15).contains(thermalAge), let reason = snapshot.unavailableReason {
+                // A fresh snapshot that names a reason is final for this Mac, not a reading on its way.
+                let unmapped = snapshot.mappingSource == nil
+                status = unmapped ? "Sensors unsupported" : "Sensors unavailable"
+                headline = unmapped
+                    ? "Temperature sensors aren't mapped for this Mac yet — showing macOS thermal pressure instead"
+                    : "Temperature sensors couldn't be read — showing macOS thermal pressure instead"
+                explanation = "\(reason). macOS thermal pressure still shows when the Mac is working to stay cool."
+            } else if temperature.band == .unavailable {
                 status = "Checking"
                 headline = "Waiting for a current temperature reading"
                 explanation = "Without a valid current sensor reading, the dashboard cannot assess the temperature. The macOS pressure report is shown separately."
@@ -82,7 +87,10 @@ public struct ThermalDiagnosis: Equatable, Sendable {
                 if cooling {
                     headline = "Cooling, but still \(temperature.readingText)"
                 } else if temperature.band == .veryHot {
-                    headline = "\(temperature.readingText) · Reduce optional heavy work"
+                    // Die sensors spike past 90°C for sub-second bursts; only a repeat is actionable.
+                    headline = temperature.trajectory.veryHotSeconds > 0
+                        ? "\(temperature.readingText) · Reduce optional heavy work"
+                        : "\(temperature.readingText) · Brief spike — watching the next readings"
                 } else if rising {
                     headline = "\(temperature.readingText) and rising · Review activity"
                 } else if temperature.trajectory.hotSeconds >= 60 {
@@ -99,17 +107,8 @@ public struct ThermalDiagnosis: Equatable, Sendable {
                 explanation = "\(pressure) \(activity)"
             }
         }
-        let nextStep = workload.nextStep(temperature: temperature,
-                                         pressureIsHigh: state == .warm || state == .serious || state == .critical)
-        let pressureStatus = switch state {
-        case .checking: "Checking"
-        case .normal: "Normal pressure"
-        case .warm: "Elevated pressure"
-        case .serious: "High pressure"
-        case .critical: "Critical pressure"
-        }
-        return Self(state: state, status: pressureStatus, reviewStatus: status, headline: headline, explanation: explanation,
-                    nextStep: nextStep, coverageText: workload.coverageText, isActivityFresh: workload.isFresh,
+        return Self(state: state, reviewStatus: status, headline: headline, explanation: explanation,
+                    coverageText: workload.coverageText, isActivityFresh: workload.isFresh,
                     temperature: temperature, pressureText: pressureText)
     }
 }

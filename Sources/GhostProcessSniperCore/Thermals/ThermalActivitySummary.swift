@@ -17,6 +17,14 @@ public struct ThermalContributor: Identifiable, Equatable, Sendable {
     public let cpuMeasuredProcessCount: Int
     public let gpuMeasuredProcessCount: Int
     public let processes: [ThermalProcessEvidence]
+    public let kind: ThermalWorkloadKind
+    /// The terminal a command-line job was started from, when one is known.
+    public let hostAppName: String?
+
+    public var knownSource: ThermalKnownSource? {
+        if case .knownSource(let source) = kind { return source }
+        return nil
+    }
 }
 
 /// A small value snapshot for the UI. Activity is evidence, not per-app heat.
@@ -41,7 +49,7 @@ public struct ThermalActivitySummary: Equatable, Sendable {
     private let gpuContributors: [ThermalContributor]
 
     public init(sampledAt: Date, contributors: [ThermalContributor], observedProcessCount: Int,
-                unavailableProcessCount: Int, coverage: ThermalActivityCoverage = .monitoredFamilies,
+                unavailableProcessCount: Int, coverage: ThermalActivityCoverage = .processInventory,
                 cpuObservedProcessCount: Int = 0, gpuObservedProcessCount: Int = 0,
                 recentContributors: [ThermalRecentContributor] = [], historySampleCount: Int = 0,
                 historySpanSeconds: TimeInterval = 0,
@@ -106,6 +114,32 @@ public struct ThermalActivitySummary: Equatable, Sendable {
         }
     }
 
+    /// The next instant a reading here expires, so a view can re-render exactly then
+    /// instead of on a fixed timer. Nil once everything has expired.
+    public func nextExpiry(after now: Date) -> Date? {
+        expiryDates(after: now).first
+    }
+
+    /// Every later expiry boundary, in order, for a view's explicit timeline.
+    public func expiryDates(after now: Date) -> [Date] {
+        var dates: Set<Date> = [sampledAt.addingTimeInterval(Self.maximumAge)]
+        for contributor in contributors { dates.formUnion(contributor.expiryDates(after: now)) }
+        for recent in recentContributors { dates.insert(recent.lastActiveAt.addingTimeInterval(ThermalActivityHistory.maximumAge)) }
+        return dates.filter { $0 > now }.sorted()
+    }
+
+    /// Every measured group, quiet ones included, so the history sees moderate long loads.
+    var measuredContributorsForHistory: [ThermalContributor] { measuredContributors }
+
+    /// The heaviest recent app, by decayed load, that was busy before this scan and is
+    /// quiet or unmeasured now.
+    public func earlierContributor(at now: Date) -> ThermalRecentContributor? {
+        recentContributors.first {
+            $0.lastActiveAt < sampledAt &&
+                (0...ThermalActivityHistory.maximumAge).contains(now.timeIntervalSince($0.lastActiveAt))
+        }
+    }
+
     func includingHistory(_ recent: [ThermalRecentContributor], sampleCount: Int,
                           spanSeconds: TimeInterval) -> Self {
         Self(sampledAt: sampledAt, contributors: contributors, observedProcessCount: observedProcessCount,
@@ -119,7 +153,7 @@ public struct ThermalActivitySummary: Equatable, Sendable {
         samples: [ThermalActivitySample],
         now: Date,
         processorCount: Int,
-        coverage: ThermalActivityCoverage = .monitoredFamilies
+        coverage: ThermalActivityCoverage = .processInventory
     ) -> ThermalActivitySummary {
         var unique: [ProcessIdentity: ThermalActivitySample] = [:]
         for sample in samples {
@@ -155,11 +189,13 @@ public struct ThermalActivitySummary: Equatable, Sendable {
             if cpuDate != nil { cpuObserved += 1 }
             if gpuDate != nil { gpuObserved += 1 }
             let measuredAt = max(cpuDate ?? .distantPast, gpuDate ?? .distantPast)
-            let appPath = applicationPath(sample.executablePath)
-            let key = appPath ?? sample.familyKey
-            let name = appPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? sample.name
-            var group = groups[key] ?? Accumulator(name: name, applicationPath: appPath,
-                familyKey: sample.familyKey, canInspectFamily: sample.canInspectFamily, measuredAt: measuredAt)
+            let assignment = sample.assignment ?? legacyAssignment(for: sample)
+            let key = assignment.groupKey
+            var group = groups[key] ?? Accumulator(name: assignment.displayName,
+                applicationPath: assignment.applicationPath, hostAppName: assignment.hostAppName,
+                kind: assignment.kind, familyKey: sample.familyKey,
+                canInspectFamily: sample.canInspectFamily, measuredAt: measuredAt)
+            if assignment.kind == .job { group.kind = .job }
             group.cpu += cpuDate == nil ? 0 : sample.cpuPercent
             group.gpu += gpuDate == nil ? 0 : sample.gpuPercent
             group.count += 1
@@ -198,14 +234,18 @@ public struct ThermalActivitySummary: Equatable, Sendable {
         }
         let allContributors = groups.compactMap { key, group -> ThermalContributor? in
             guard group.cpu.isFinite, group.gpu.isFinite else { return nil }
+            var kind = group.kind
+            if kind == .process && group.count > 1 { kind = .job }
+            var isSystemProcess = group.isSystemProcess
+            if case .knownSource = kind { isSystemProcess = true }
             return ThermalContributor(id: key, displayName: group.name, familyKey: group.familyKey,
                 cpuPercent: group.cpu, gpuPercent: group.gpu, processCount: group.count, measuredAt: group.measuredAt,
                 applicationPath: group.applicationPath, canInspectFamily: group.canInspectFamily,
-                isSystemProcess: group.isSystemProcess, cpuCapacityPercent: group.cpu / Double(max(1, processorCount)),
+                isSystemProcess: isSystemProcess, cpuCapacityPercent: group.cpu / Double(max(1, processorCount)),
                 cpuMeasuredAt: group.cpuMeasuredAt, gpuMeasuredAt: group.gpuMeasuredAt,
                 cpuMeasuredProcessCount: group.cpuMeasuredProcessCount,
                 gpuMeasuredProcessCount: group.gpuMeasuredProcessCount,
-                processes: group.processes)
+                processes: group.processes, kind: kind, hostAppName: group.hostAppName)
         }.sorted { $0.id < $1.id }
         let contributors = allContributors.filter { $0.cpuPercent >= 5 || $0.gpuPercent >= 5 }.sorted { lhs, rhs in
             // Compare the busier resource, never fabricate a percentage of heat.
@@ -226,14 +266,21 @@ public struct ThermalActivitySummary: Equatable, Sendable {
         return measuredAt
     }
 
-    private static func applicationPath(_ executable: String) -> String? {
-        guard let range = executable.range(of: ".app/", options: .caseInsensitive) else { return nil }
-        return String(executable[..<executable.index(before: range.upperBound)])
+    /// Samples built without the process tree group by bundle, else by family key.
+    private static func legacyAssignment(for sample: ThermalActivitySample) -> ThermalWorkloadAssignment {
+        if let appPath = ThermalWorkloadResolver.applicationPath(sample.executablePath) {
+            return ThermalWorkloadAssignment(groupKey: appPath, displayName: PathText.displayName(appPath),
+                                             applicationPath: appPath, hostAppName: nil, kind: .app)
+        }
+        return ThermalWorkloadAssignment(groupKey: sample.familyKey, displayName: sample.name,
+                                         applicationPath: nil, hostAppName: nil, kind: .process)
     }
 
     private struct Accumulator {
         let name: String
         let applicationPath: String?
+        let hostAppName: String?
+        var kind: ThermalWorkloadKind
         var familyKey: String
         var canInspectFamily: Bool
         var measuredAt: Date
@@ -261,4 +308,6 @@ struct ThermalActivitySample: Sendable {
     var gpuMeasuredAt: Date? = nil
     var canInspectFamily: Bool = true
     var isSystemProcess: Bool = false
+    /// The app, job or known source this process belongs to; nil keeps bundle-or-family grouping.
+    var assignment: ThermalWorkloadAssignment? = nil
 }

@@ -100,7 +100,8 @@ extension RadarConsoleSession {
         let now = Date()
         let band = thermalBandTracker.update(
             thermalState: ThermalPressureReading.current(at: now).state,
-            temperature: ThermalTemperatureAssessment.evaluate(snapshot: monitor.thermals, at: now),
+            temperature: ThermalTemperatureAssessment.evaluate(
+                snapshot: monitor.thermals, observations: monitor.thermalObservations, at: now),
             at: now
         )
         if band != overviewThermalBand { overviewThermalBand = band }

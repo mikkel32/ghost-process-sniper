@@ -47,7 +47,7 @@ final class ThermalDashboardTests: XCTestCase {
     }
 
     func testSystemServicesAreExplainedWithoutAStopRecommendation() {
-        let result = projection([process(1, cpu: 400, path: "/System/Library/WindowServer", system: true)])
+        let result = projection([process(1, cpu: 400, path: "/usr/libexec/syspolicyd", system: true)])
         XCTAssertEqual(result.contributors.first?.isSystemProcess, true)
         XCTAssertTrue(result.contributors.first?.suggestedAction.contains("does not recommend stopping") == true)
     }
@@ -65,11 +65,13 @@ final class ThermalDashboardTests: XCTestCase {
     }
 
     func testNormalPressureDoesNotClaimHardwareIsCold() {
-        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(celsius: 89),
-            activity: projection([process(1, cpu: 500)]), at: now)
+        let activity = projection([process(1, cpu: 500)])
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(celsius: 89), activity: activity, at: now)
         XCTAssertEqual(diagnosis.state, .normal)
-        XCTAssertEqual(diagnosis.status, "Normal pressure")
-        XCTAssertTrue(diagnosis.nextStep.contains("Example"))
+        XCTAssertEqual(diagnosis.pressureText, "macOS pressure: Normal")
+        XCTAssertEqual(diagnosis.reviewStatus, "Hot")
+        let insight = ThermalAppInsight.evaluate(activity: activity, diagnosis: diagnosis, at: now)
+        XCTAssertEqual(insight.title, "Start with Example")
     }
 
     func testThermalStateDrivesGuidanceWithoutUniversalCelsiusThresholds() {
@@ -96,14 +98,19 @@ final class ThermalDashboardTests: XCTestCase {
         let later = now.addingTimeInterval(13)
         let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(date: later), activity: activity, at: later)
         XCTAssertFalse(diagnosis.isActivityFresh)
-        XCTAssertFalse(diagnosis.nextStep.contains("Example"))
-        XCTAssertTrue(diagnosis.nextStep.contains("Scan now"))
+        let insight = ThermalAppInsight.evaluate(activity: activity, diagnosis: diagnosis, at: later)
+        XCTAssertEqual(insight.kind, .checking)
+        XCTAssertNil(insight.contributor)
+        XCTAssertTrue(insight.action.contains("Scan now"))
     }
 
     func testQuietSampleDoesNotClaimToExplainTemperature() {
-        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(state: "Serious"),
-            activity: projection([process(1, cpu: 0)]), at: now)
-        XCTAssertTrue(diagnosis.nextStep.contains("does not explain the temperature"))
+        let activity = projection([process(1, cpu: 0)])
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(state: "Serious"), activity: activity, at: now)
+        let insight = ThermalAppInsight.evaluate(activity: activity, diagnosis: diagnosis, at: now)
+        XCTAssertEqual(insight.kind, .unexplained)
+        XCTAssertEqual(insight.title, "No clear app contributor yet")
+        XCTAssertNil(insight.contributor)
     }
 
     func testSmallActivityIsNotDisplayedAsZero() {
@@ -114,10 +121,11 @@ final class ThermalDashboardTests: XCTestCase {
     }
 
     func testPartialQuietSampleDoesNotClaimThatAppsAreQuiet() {
-        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(),
-            activity: projection([process(1, cpu: 0), process(2, cpu: 100, status: .unavailable)]), at: now)
-        XCTAssertTrue(diagnosis.nextStep.contains("coverage is incomplete"))
-        XCTAssertFalse(diagnosis.nextStep.contains("No strongly active app"))
+        let activity = projection([process(1, cpu: 0), process(2, cpu: 100, status: .unavailable)])
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(), activity: activity, at: now)
+        let insight = ThermalAppInsight.evaluate(activity: activity, diagnosis: diagnosis, at: now)
+        XCTAssertTrue(insight.evidence.contains("could not be measured"))
+        XCTAssertFalse(insight.evidence.contains("little activity"))
     }
 
     func testWorkerPublishesRawActivityWhenThereAreNoCandidateFamilies() async {

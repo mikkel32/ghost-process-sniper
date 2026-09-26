@@ -42,7 +42,7 @@ public struct OverviewThermalBandTracker: Sendable {
         veryHotSince = isVeryHot ? (veryHotSince ?? now) : nil
         let veryHotSeconds = max(
             veryHotSince.map { now.timeIntervalSince($0) } ?? 0,
-            isVeryHot ? temperature.trajectory.hotSeconds : 0
+            isVeryHot ? temperature.trajectory.veryHotSeconds : 0
         )
         let throttling = thermalState == .serious || thermalState == .critical
         if throttling || veryHotSeconds >= Self.sustainedVeryHotSeconds {

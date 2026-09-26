@@ -24,6 +24,7 @@ public final class ProcessMonitor {
     public private(set) var systemPressure: SystemMemoryPressure = .unknown
     public private(set) var selfUsage: SelfResourceUsage = .unknown
     public private(set) var thermals: ThermalSnapshot = .unknown
+    public private(set) var thermalObservations = ThermalObservationWindow()
     public private(set) var thermalActivity: ThermalActivitySummary = .empty
     /// Every process in the latest sample, for search. Not observed: the
     /// console re-queries on each publish, and views never read it directly.
@@ -130,7 +131,8 @@ public final class ProcessMonitor {
         }
 
         do {
-            thermals = await thermalSampler.sample(now: now)
+            let sampled = await thermalSampler.sample(now: now)
+            if let next = ThermalSnapshotStore.update(thermals, thermalObservations, with: sampled, at: now) { (thermals, thermalObservations) = next }
             let request = RefreshRequest(
                 settings: settings,
                 currentFamilies: families,
@@ -197,8 +199,7 @@ public final class ProcessMonitor {
             now: now
         )
         let summary = pipeline.summary(for: scored.families)
-        let currentActivity = ThermalActivityAnalyzer.project(processes: processes, families: scored.families, now: now)
-        thermalActivity = injectedThermalHistory.record(currentActivity, at: now)
+        thermalActivity = injectedThermalHistory.recordProjection(of: processes, families: scored.families, at: now)
         recordSample(processes)
         let effectivePerformanceMode = effectiveSettings.resolvedPerformanceMode(
             summaryLevel: summary.level,

@@ -35,7 +35,7 @@ Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a 
 - **Leak and runaway detection.** Sustained memory growth, CPU burn, and GPU load are tracked over time with trend baselines and forecasts, so a single spike doesn't cry wolf.
 - **Process families.** Apps, helpers, dev servers, and the workers they spawn are grouped, so you see "Slack" or "vite dev" — not forty anonymous PIDs.
 - **Duplicate finder.** Spots overlapping copies of the same work, like identical dev servers or watchers left behind by old sessions.
-- **Real temperatures.** Measured CPU and GPU Celsius from hardware sensors (never invented per-app temperatures), plus *What's heating your Mac?*, which ties heat to the apps doing the work.
+- **Real temperatures.** Measured CPU and GPU Celsius from hardware sensors (verified on M1, M2, and Intel Macs; newer chips use catalog or auto-discovered sensor maps and say so), never invented per-app temperatures. *What's heating your Mac?* names the app or job doing the work and offers a stop preview when it is yours.
 - **Incident history.** A local timeline of leaks, spikes, and runaways, so recurring offenders stand out.
 - **Rules.** Notify, highlight, snooze, ignore, or suggest stopping matching families.
 - **Careful interventions.** Every stop knows what it interrupts: apps are asked to quit like ⌘Q so they can save, databases and Docker get time to shut down cleanly, and nothing that can lose data is forced without your say-so. Previews warn when nodemon, pm2, or launchd would just restart the process, pin exact PID + start-time identities, refuse recycled PIDs, and expire after 60 seconds.
@@ -114,15 +114,16 @@ That builds an optimized, ad-hoc-signed bundle at `dist/Ghost Process Sniper.app
 ## How it works
 
 ```text
-NativeProcessSampler (actor)      libproc / task_info probes, CPU·GPU·memory, SMC sensors
-    └─ RadarRefreshWorker (actor) families, duplicates, baselines, forecasts, rules
+NativeProcessSampler (actor)      libproc / task_info probes, CPU·GPU·memory
+    └─ RadarRefreshWorker (actor) families, duplicates, baselines, forecasts, rules, app activity
         └─ RadarStore (actor)     local SQLite timeline and settings
     └─ ProcessMonitor (MainActor) observable facade for the menu bar and console
+        └─ ThermalSampler (actor) read-only SMC temperature sensors
 ```
 
 The code is split into two targets: **`GhostProcessSniperCore`** (sampling, intelligence, persistence, interventions — no UI) and **`GhostProcessSniper`** (SwiftUI app, menu bar, console). Architecture rules — folder ownership, the core/UI boundary, SQLite isolation, file-size budgets — are enforced by `Scripts/check_architecture.py`.
 
-Further reading: [Architecture](Docs/Architecture.md) · [Development](Docs/Development.md) · [Releasing](Docs/Releasing.md) · [Performance measurements](Docs/Performance-2026-09-09.md) · [Temperature precision](Docs/Precision-2026-09-09.md) · [Thermal insight](Docs/Thermal-Insight-2026-09-11.md)
+Further reading: [Architecture](Docs/Architecture.md) · [Development](Docs/Development.md) · [Releasing](Docs/Releasing.md) · [Thermals](Docs/Thermals.md) · [Performance measurements](Docs/Performance.md)
 
 ## Contributing
 

@@ -8,9 +8,16 @@
     "GhostProcessSniper/Features/Interventions/KillPreviewSheet.swift": 635,
     "GhostProcessSniperCore/Sampling/ProcessSampler.swift": 917,
     "GhostProcessSniperCore/Intelligence/ProcessFamilyBuilder.swift": 828,
-    "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 656,
+    "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 657,
     "GhostProcessSniperCore/Domain/ScannerModels.swift": 695,
     "GhostProcessSniperCore/Configuration/SettingsPerformanceModels.swift": 771,
     "GhostProcessSniperCore/Intelligence/ForecastModels.swift": 767
+  },
+  "test_roots": {
+    "roots": ["Tests/GhostProcessSniperCoreTests", "Checks/GhostProcessSniperCoreChecks"],
+    "legacy_line_budgets": {
+      "Checks/GhostProcessSniperCoreChecks/main.swift": 3925,
+      "Tests/GhostProcessSniperCoreTests/AdaptiveIntelligenceTests.swift": 605
+    }
   }
 }

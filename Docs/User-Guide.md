@@ -47,7 +47,7 @@ A *family* groups related processes — an app and its helpers, or a dev server 
 
 ## Temperatures and "What's heating your Mac?"
 
-**Hardware temperatures** shows measured CPU and GPU Celsius separately from the macOS thermal state. These are the hottest readable sensors for each component, not invented per-process temperatures. The reader has model-specific mappings for M1, M2, and Intel Macs; the M1 Pro is live-tested. Unsupported, missing, invalid, or stale readings show **Unavailable**. Sensor access is read-only and needs no administrator helper.
+**Hardware temperatures** shows measured CPU and GPU Celsius separately from the macOS thermal state. These are the hottest readable sensors for each component, not invented per-process temperatures. Sensor maps for M1, M2, and Intel Macs are verified; M3 and M4 Macs use catalog maps, and newer Apple chips use sensors found on the Mac itself; the panel notes when a map is unverified. Unsupported, missing, invalid, or stale readings show **Unavailable** with the reason. Sensor access is read-only and needs no administrator helper.
 
 **What's heating your Mac?** puts the current temperature beside a named workload and a concrete next step. The panel distinguishes likely workload contributors, modest activity, incomplete evidence, and expired readings. Rows show real application icons, grouped helpers, CPU capacity, and reported GPU activity. CPU capacity uses all active logical processors; raw per-process CPU remains available in the detail sheet.
 
@@ -56,7 +56,9 @@ A *family* groups related processes — an app and its helpers, or a dev server 
 - **Inspect app** shows the current evidence and the sampled processes behind an app.
 - **Compare readings** saves a baseline. Change optional work yourself, then compare fresh CPU/GPU activity and temperatures after at least 15 seconds. The comparison expires after three minutes and never treats a missing app as zero load.
 
-None of these actions stop or pause apps. Activity is evidence, not a measurement of an application's temperature or heat share. See [Thermal insight and CPU clock correction](Thermal-Insight-2026-09-11.md).
+- **Stop …** appears for your own work when it can be stopped: on the card when the same app or job keeps showing up while the Mac is warm, and in its detail sheet. The label names the process family the stop will act on, which can be a helper rather than the app itself. It opens the usual stop preview; nothing stops until you confirm there. It is never offered for macOS services.
+
+Scan, Inspect, and Compare never stop or pause apps. Activity is evidence, not a measurement of an application's temperature or heat share. The ⓘ beside the panel title explains how to read the numbers; [Thermals](Thermals.md) documents the rules behind them.
 
 ## Duplicates, Incidents, Rules, Engine
 

@@ -22,6 +22,17 @@ public struct ThermalPressureReading: Equatable, Sendable {
         return Self(state: state, sampledAt: now)
     }
 
+    /// The display label snapshots have always carried for the platform signal.
+    var systemStateLabel: String {
+        switch state {
+        case .normal: "Nominal"
+        case .warm: "Elevated"
+        case .serious: "Serious"
+        case .critical: "Critical"
+        case .checking: "Unknown"
+        }
+    }
+
     func freshState(at now: Date) -> ThermalDiagnosis.State {
         (0...15).contains(now.timeIntervalSince(sampledAt)) ? state : .checking
     }

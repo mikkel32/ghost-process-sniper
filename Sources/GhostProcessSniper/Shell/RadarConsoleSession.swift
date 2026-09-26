@@ -27,7 +27,6 @@ final class RadarConsoleSession {
     /// what happened instead of "no longer running".
     private(set) var recentStops: [String: KillReport] = [:]
     private(set) var memoryPulse: [MemoryPulseSample] = []
-    private(set) var thermalHistory = ThermalTraceHistory()
     /// Set from the moment a stop is requested until its preview is ready.
     var preparingStop: PreparingStop?
     /// Changes only when the thermal panel should move on the Overview.
@@ -154,8 +153,6 @@ final class RadarConsoleSession {
     }
 
     func recordEngineSample() {
-        var updatedThermals = thermalHistory
-        if updatedThermals.append(monitor.thermals, at: Date()) { thermalHistory = updatedThermals }
         // Pulse points every few seconds are plenty for a 5-minute strip and
         // keep the chart from rebuilding on every refresh tick.
         let now = Date()
