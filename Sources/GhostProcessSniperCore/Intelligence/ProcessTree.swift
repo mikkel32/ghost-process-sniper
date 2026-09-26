@@ -39,10 +39,20 @@ struct ProcessTree {
         var visited = Set<Int32>()
         while let parent = byPID[current.parentPID], !visited.contains(parent.pid) {
             visited.insert(current.pid)
-            guard parent.userID == current.userID, shouldClimb(from: current, to: parent) else {
+            guard parent.userID == current.userID else { break }
+            if shouldClimb(from: current, to: parent) {
+                current = parent
+                continue
+            }
+            // A recipe shell is transparent: a compiler under make's `sh -c`
+            // climbs to make exactly as it would without the shell.
+            guard let launcher = byPID[parent.parentPID], !visited.contains(launcher.pid), launcher.userID == current.userID,
+                  ShellRole.isRecipeShell(parent, launcher: launcher), shouldClimb(from: current, to: launcher)
+            else {
                 break
             }
-            current = parent
+            visited.insert(parent.pid)
+            current = launcher
         }
         return current
     }

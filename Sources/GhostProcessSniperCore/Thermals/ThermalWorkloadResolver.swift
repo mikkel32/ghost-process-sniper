@@ -127,6 +127,11 @@ struct ThermalWorkloadResolver {
         var hops = 0
         var root = process
         while let parent = parent(of: root, visited: &visited, hops: &hops) {
+            // make and ninja run each recipe through `sh -c`: the build, not the shell, is the job.
+            if ShellRole.isRecipeShell(parent, launcher: processesByPID[parent.parentPID]) {
+                root = parent
+                continue
+            }
             if Self.isShell(parent.name) {
                 let host = terminalHost(above: parent, visited: &visited, hops: &hops)
                 return Self.job(root: root, host: host, kind: .job)

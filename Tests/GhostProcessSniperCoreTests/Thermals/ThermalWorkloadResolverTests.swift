@@ -26,6 +26,39 @@ final class ThermalWorkloadResolverTests: XCTestCase {
         XCTAssertTrue(insight.evidence.contains("95.1% of total CPU capacity"))
     }
 
+    /// make runs recipes through a non-interactive `sh -c`; those shells are
+    /// part of the build, not job boundaries.
+    func testRecipeShellsCollapseIntoTheMakeJob() throws {
+        var processes = terminalShell() + [process(603, parent: 602, name: "make", path: "/usr/bin/make", cpu: 1)]
+        for index in 0..<10 {
+            let shell = Int32(610 + index * 2)
+            let command = "c++ -O2 -c src/file\(index).cpp"
+            processes.append(process(shell, parent: 603, name: "sh", path: "/bin/sh", cpu: 0, command: "/bin/sh -c \(command)"))
+            processes.append(process(shell + 1, parent: shell, name: "c++", path: "/usr/bin/c++", cpu: 95, command: command))
+        }
+        let slack = "/Applications/Slack.app/Contents"
+        processes += [process(700, parent: 1, name: "Slack", path: "\(slack)/MacOS/Slack", cpu: 20),
+                      process(701, parent: 700, name: "Slack Helper (Renderer)",
+                              path: "\(slack)/Frameworks/Slack Helper (Renderer).app/Contents/MacOS/Slack Helper (Renderer)", cpu: 110)]
+        let result = projection(processes)
+        let job = try XCTUnwrap(result.contributors.first)
+        XCTAssertEqual(job.displayName, "make")
+        XCTAssertEqual(job.kind, .job)
+        XCTAssertEqual(job.processCount, 21)
+        XCTAssertEqual(job.cpuCapacityPercent, 95.1, accuracy: 0.001)
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(92), activity: result, at: now)
+        XCTAssertEqual(ThermalAppInsight.evaluate(activity: result, diagnosis: diagnosis, at: now).title, "Start with make")
+    }
+
+    /// A shell someone types into still ends the climb, whatever its argv.
+    func testInteractiveShellsStayJobBoundaries() {
+        let result = projection(terminalShell() + [
+            process(603, parent: 602, name: "bash", path: "/bin/bash", cpu: 0, command: "bash -i"),
+            process(604, parent: 603, name: "python3", path: "/usr/bin/python3", cpu: 90),
+        ])
+        XCTAssertEqual(result.contributors.first?.id, "job:604:2000199000.0")
+    }
+
     func testShortLivedCompilerChildrenKeepOneHistoryIdentity() {
         var history = ThermalActivityHistory()
         var current = ThermalActivitySummary.empty
@@ -188,10 +221,10 @@ final class ThermalWorkloadResolverTests: XCTestCase {
     }
 
     private func process(_ pid: Int32, parent: Int32, name: String, path: String, cpu: Double,
-                         start: UInt64 = 2_000_199_000, at date: Date? = nil) -> ProcessMetrics {
+                         start: UInt64 = 2_000_199_000, at date: Date? = nil, command: String? = nil) -> ProcessMetrics {
         ProcessMetrics(identity: ProcessIdentity(pid: pid, startTimeSeconds: start, startTimeMicroseconds: 0),
             parentPID: parent, userID: 501, ownerName: "fixture", name: name, executablePath: path,
-            commandLine: name, residentMemoryBytes: 1, physicalFootprintBytes: 1, virtualMemoryBytes: 1,
+            commandLine: command ?? name, residentMemoryBytes: 1, physicalFootprintBytes: 1, virtualMemoryBytes: 1,
             cpuPercent: cpu, totalProcessorSeconds: 1, threadCount: 1, isSystemProcess: false,
             sampledAt: date ?? now)
     }
