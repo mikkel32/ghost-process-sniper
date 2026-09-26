@@ -151,10 +151,7 @@ struct FamilyDetailConsoleView: View {
 }
 
 private enum FamilyDetailTab: String, CaseIterable, Identifiable {
-    case overview
-    case evidence
-    case processes
-    case details
+    case overview, evidence, processes, details
 
     var id: Self { self }
 
