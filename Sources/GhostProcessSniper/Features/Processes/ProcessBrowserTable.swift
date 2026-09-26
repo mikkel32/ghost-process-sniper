@@ -38,6 +38,8 @@ struct ProcessBrowserTable: View {
             }
             .width(min: 70, ideal: 90)
 
+            // PIDs carry no ranking worth a RadarSort case (and a Sort menu
+            // entry), so this column stays unsortable on purpose.
             TableColumn("PID") { row in
                 Text(String(row.pid))
                     .monospacedDigit()
