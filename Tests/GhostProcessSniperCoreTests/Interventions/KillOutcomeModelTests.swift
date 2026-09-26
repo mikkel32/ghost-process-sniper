@@ -60,6 +60,19 @@ final class KillOutcomeModelTests: XCTestCase {
         XCTAssertTrue(evaluation.recommendation.reasons.first?.contains("0 of 4") == true, "\(evaluation.recommendation.reasons)")
     }
 
+    func testUnclassifiedFamilyNeedsMoreThanFourNonExitsToBeStubborn() {
+        // Without a kind row the family's stops are its evidence only, not
+        // also its prior, so four ignored SIGTERMs are not yet proof.
+        let fourStops = Self.history(Array(repeating: Self.forced(), count: 4), kindToo: false)
+        let evaluation = PolicyFixture.evaluate(command: "cruncher", name: "cruncher", outcomes: fourStops)
+        XCTAssertEqual(evaluation.recommendation.strategy, .standard)
+        XCTAssertEqual(evaluation.profile.verificationSchedule.graceSeconds, 2)
+
+        let manyStops = Self.history(Array(repeating: Self.forced(), count: 20), kindToo: false)
+        XCTAssertEqual(PolicyFixture.evaluate(command: "cruncher", name: "cruncher", outcomes: manyStops).recommendation.strategy,
+                       .stubbornRunaway, "a family that keeps ignoring SIGTERM gets there on its own record")
+    }
+
     func testDataLossWorkloadsIgnoreStubbornEvidence() {
         let evaluation = PolicyFixture.evaluate(command: "npm install", name: "npm",
                                                 outcomes: Self.history(Array(repeating: Self.forced(grace: 4), count: 8)))

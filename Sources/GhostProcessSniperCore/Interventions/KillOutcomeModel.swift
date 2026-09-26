@@ -99,6 +99,11 @@ public struct KillOutcomeModel: Sendable {
         let (signature, kind) = posteriors(for: strategy, base: base)
         let priorStrategy = strategy == .stubbornRunaway ? base ?? strategy : strategy
         let baseRate = Self.defaultCleanRate(priorStrategy)
+        // The kind row also holds this family's own stops, so while few
+        // other families of the kind were stopped they shape the prior too.
+        // That is what lets four ignored SIGTERMs make a classified family
+        // stubborn; an unclassified one, with no kind row, must prove it
+        // over more stops before it is forced quickly.
         let priorRate = kind.hasEvidence
             ? (kind.cleanWeight + Self.priorStrength * baseRate) / (kind.totalWeight + Self.priorStrength)
             : baseRate
