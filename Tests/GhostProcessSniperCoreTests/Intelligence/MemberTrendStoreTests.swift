@@ -71,6 +71,30 @@ final class MemberTrendStoreTests: XCTestCase {
         XCTAssertLessThan(velocities.map(abs).max() ?? 0, 1)
     }
 
+    /// A family out of the candidates for two and a half minutes still has
+    /// samples in the trend window; a member that joined meanwhile must not
+    /// read as growth when it returns.
+    func testAFamilyReturningWithinTheTrendWindowKeepsItsChain() {
+        var velocities: [Double] = []
+        _ = run(ticks: 86, cadence: 3, world: { tick, date in
+            var world = [self.member(300, name: "ruby", path: "/usr/bin/ruby", command: "ruby app.rb", megabytes: 200, at: date)]
+            if tick < 20 || tick >= 70 {
+                world.append(self.member(200, megabytes: 250, at: date))
+            }
+            if tick >= 70 {
+                world.append(self.member(201, parent: 200, name: "worker", path: "/usr/local/bin/worker",
+                                         command: "worker", megabytes: 300, at: date))
+            }
+            return world
+        }, inspect: { tick, _, families in
+            if tick >= 70, let family = families.first(where: { $0.root.pid == 200 }) {
+                velocities.append(family.trend.memoryVelocityMegabytesPerMinute)
+            }
+        })
+        XCTAssertFalse(velocities.isEmpty)
+        XCTAssertLessThan(velocities.map(abs).max() ?? 0, 1)
+    }
+
     func testSlowLeakUnderJitterIsFoundWithinTwentyFiveMinutes() throws {
         var jitter = Fixture.Jitter(seed: 11)
         var leakingAt: Int?

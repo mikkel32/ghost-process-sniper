@@ -62,7 +62,7 @@ public struct FamilyCPUActivity: Equatable, Sendable {
 public struct ActivityLedger: Sendable {
     static let bucketLength: TimeInterval = 60
     static let bucketCount = 20
-    static let retention: TimeInterval = 120
+    static let retention = TrendWindow.defaultRetention
     /// A process is active when it used more than 1% of one core.
     static let activeCores = 0.01
 

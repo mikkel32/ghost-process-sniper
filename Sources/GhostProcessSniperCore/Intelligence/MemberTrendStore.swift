@@ -57,7 +57,9 @@ public struct MemberTrendStore: Sendable {
     static let fineCapacity = 60
     static let fineRetention: TimeInterval = 120
     static let coarseCapacity = 90
-    static let retention: TimeInterval = 120
+    /// As long as the trend window keeps a family's samples: a chain pruned
+    /// sooner would let a member change on return read as growth.
+    static let retention = TrendWindow.defaultRetention
     /// Members join a family's slope once they have this much history.
     static let maturitySamples = 4
     static let maturitySeconds: TimeInterval = 15

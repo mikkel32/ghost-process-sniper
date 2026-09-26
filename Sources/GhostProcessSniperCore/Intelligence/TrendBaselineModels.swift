@@ -291,6 +291,8 @@ public struct FamilyBaselineLearner: Sendable {
 }
 
 public struct TrendWindow: Sendable {
+    public static let defaultRetention: TimeInterval = 180
+
     private var signatureSamples: [String: [TrendSample]] = [:]
     private var latestMetrics: [String: TrendMetrics] = [:]
     private let retention: TimeInterval
@@ -298,7 +300,7 @@ public struct TrendWindow: Sendable {
     private var lastCleanupDate: Date?
     private var updatesSinceCleanup = 0
 
-    public init(retention: TimeInterval = 180, maxSamples: Int = 90) {
+    public init(retention: TimeInterval = defaultRetention, maxSamples: Int = 90) {
         self.retention = retention
         self.maxSamples = maxSamples
     }
