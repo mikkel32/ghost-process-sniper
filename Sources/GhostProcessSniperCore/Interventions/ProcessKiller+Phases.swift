@@ -246,9 +246,11 @@ extension ProcessKiller {
             await context.reactor.recordEarlyExitSavings(max(0, phase.waitAfterSeconds - result.waitedSeconds))
         }
         if isGraceful, !phase.isForce {
-            // The family's measured exit time, for the outcome model.
+            // The family's measured exit time, for the outcome model. With
+            // every target in a debugger nothing was waited on, so the wait
+            // measured no exit.
             report.graceWaitedSeconds = result.waitedSeconds
-            report.graceEndedEarly = result.endedEarly && !result.stoppedByUser
+            report.graceEndedEarly = result.endedEarly && !result.stoppedByUser && !group.isEmpty
         }
     }
 }
