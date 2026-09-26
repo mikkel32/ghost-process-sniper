@@ -1,226 +1,228 @@
 import AppKit
 import GhostProcessSniperCore
 import SwiftUI
+import UserNotifications
 
+/// Answers "what is hurting my Mac and what do I do" at a glance. The root
+/// reads nothing from the monitor; each part observes only its own slice, so
+/// a refresh redraws the temperature strip rather than the rows and menus.
 struct PopoverView: View {
     let monitor: ProcessMonitor
-
     let notifier: UserNotificationRadarNotifier
     let onOpenConsole: () -> Void
     let onOpenFamily: (String) -> Void
     let onOpenSettings: () -> Void
     let onQuit: () -> Void
-
-    @State private var isRefreshing = false
+    var refreshesOnAppear = true
 
     var body: some View {
         VStack(spacing: 12) {
-            header
-            HStack(spacing: 12) {
-                Label("CPU \(monitor.thermals.temperatureText(monitor.thermals.cpuCelsius))", systemImage: "cpu")
-                Spacer(minLength: 0)
-                Label("GPU \(monitor.thermals.temperatureText(monitor.thermals.gpuCelsius))", systemImage: "thermometer.medium")
-            }
-            .font(.callout.monospacedDigit().weight(.medium))
-            .padding(10)
-            .radarSurface(tint: RadarTheme.brand, cornerRadius: 10)
-            summary
-            topFamilies
-            popoverHealth
-            actions
+            PopoverVerdictBar(monitor: monitor)
+            PopoverStoreWarning(monitor: monitor)
+            PopoverCulprits(monitor: monitor, onOpenFamily: onOpenFamily)
+            PopoverVitals(monitor: monitor)
+            PopoverFooter(
+                notifier: notifier,
+                onOpenConsole: onOpenConsole,
+                onOpenSettings: onOpenSettings,
+                onQuit: onQuit
+            )
         }
         .padding(14)
         .frame(width: 380)
         .tint(RadarTheme.brand)
-        .background {
-            LinearGradient(
-                colors: [RadarTheme.accent(for: monitor.statusLevel).opacity(0.09), .clear],
-                startPoint: .topLeading,
-                endPoint: .center
-            )
-        }
+        .background { PopoverBackdrop(monitor: monitor) }
         .task {
-            await monitor.refresh()
+            if refreshesOnAppear {
+                await monitor.refresh()
+            }
         }
     }
+}
 
-    private var header: some View {
+private struct PopoverBackdrop: View {
+    let monitor: ProcessMonitor
+
+    var body: some View {
+        LinearGradient(
+            colors: [RadarTheme.accent(for: monitor.statusLevel).opacity(0.09), .clear],
+            startPoint: .topLeading,
+            endPoint: .center
+        )
+    }
+}
+
+private struct PopoverVerdictBar: View {
+    let monitor: ProcessMonitor
+
+    @State private var isRefreshing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let compact = monitor.consoleSnapshot.compact
+        let title = compact.intelligenceBrief.title
         HStack(spacing: 10) {
-            RadarBrandMark(level: monitor.statusLevel, size: 40)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("LIVE SYSTEM RADAR")
-                    .font(.caption.weight(.semibold))
-                    .tracking(1.1)
-                    .foregroundStyle(RadarTheme.accent(for: monitor.statusLevel))
-                Text("Ghost Process Sniper")
-                    .font(.headline.weight(.bold))
-                Text(headerSubtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            HStack(spacing: 9) {
+                Circle()
+                    .fill(RadarTheme.accent(for: compact.commandCenter.level))
+                    .frame(width: 9, height: 9)
+                Text(title.isEmpty ? compact.commandCenter.statusText : title)
+                    .font(.headline)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityValue(MenuBarStatusPresentation.compactStateText(summary: monitor.summary))
 
-            Spacer()
+            Spacer(minLength: 8)
 
             Button {
-                guard !isRefreshing else {
-                    return
-                }
-                isRefreshing = true
-                Task {
-                    let started = Date()
-                    await monitor.refresh()
-                    let elapsed = Date().timeIntervalSince(started)
-                    if elapsed < 0.7 {
-                        try? await Task.sleep(nanoseconds: UInt64((0.7 - elapsed) * 1_000_000_000))
-                    }
-                    isRefreshing = false
-                }
+                refresh()
             } label: {
                 Image(systemName: "dot.radiowaves.left.and.right")
-                    .symbolEffect(.variableColor.iterative, isActive: isRefreshing)
+                    .symbolEffect(.variableColor.iterative, isActive: isRefreshing && !reduceMotion)
             }
             .buttonStyle(.borderless)
             .disabled(isRefreshing)
             .accessibilityLabel(isRefreshing ? "Scanning processes" : "Scan now")
-            .help("Refresh")
+            .help("Scan now (⌘R)")
             .keyboardShortcut("r")
         }
-        .padding(.bottom, 2)
     }
 
-    private var summary: some View {
-        HStack(spacing: 8) {
-            RadarChip(title: "State", value: MenuBarStatusPresentation(state: monitor.publishedState).compactStateText, systemImage: RadarStyle.icon(for: monitor.summary.level), level: monitor.summary.level)
-            RadarChip(title: "Hot", value: "\(monitor.summary.hotCount)", systemImage: "flame", level: monitor.summary.hotCount > 0 ? .hot : .quiet)
-            RadarChip(title: "Memory", value: RadarFormat.bytes(monitor.summary.totalMemoryBytes), systemImage: "memorychip", level: .watch)
+    private func refresh() {
+        guard !isRefreshing else {
+            return
         }
-        .padding(5)
-        .radarSurface(tint: RadarTheme.accent(for: monitor.summary.level), cornerRadius: 14)
+        isRefreshing = true
+        Task {
+            let started = Date()
+            await monitor.refresh()
+            await RadarMotion.holdPerceptibly(since: started)
+            isRefreshing = false
+        }
+    }
+}
+
+private struct PopoverStoreWarning: View {
+    let monitor: ProcessMonitor
+
+    var body: some View {
+        if let message = monitor.storeError {
+            PopoverStoreWarningRow(message: message)
+        }
+    }
+}
+
+private struct PopoverStoreWarningRow: View {
+    let message: String
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("History is not being saved")
+                    .font(.caption.weight(.semibold))
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        } icon: {
+            Image(systemName: "externaldrive.badge.exclamationmark")
+                .foregroundStyle(.orange)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Reads only the content-gated console snapshot, so rows and their context
+/// menus rebuild when the findings change, not on every sample.
+private struct PopoverCulprits: View {
+    let monitor: ProcessMonitor
+    let onOpenFamily: (String) -> Void
+
+    var body: some View {
+        let compact = monitor.consoleSnapshot.compact
+        let risk = Array(compact.topRiskRows.prefix(3))
+        let warnings = Array(compact.warmingRows.prefix(2))
+        VStack(alignment: .leading, spacing: 6) {
+            if !risk.isEmpty {
+                rows(risk)
+            } else if !warnings.isEmpty {
+                Text("EARLY WARNINGS")
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.6)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                rows(warnings)
+            } else {
+                PopoverQuietState(familyCount: compact.allRows.count)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .radarSurface(tint: RadarTheme.accent(for: compact.commandCenter.level), cornerRadius: 14)
     }
 
-    private var topFamilies: some View {
-        RadarSection(title: "Top Radar", subtitle: "\(monitor.summary.familyCount) watched") {
-            VStack(spacing: 8) {
-                let items = monitor.consoleSnapshot.compact.topRiskRows
-
-                if items.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.title2)
-                            .foregroundStyle(.green.gradient)
-                        Text("All Quiet")
-                            .font(.subheadline.weight(.semibold))
-                        Text(monitor.storeError ?? "\(monitor.engineStatus.processText) processes sampled, nothing misbehaving")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.center)
+    private func rows(_ rows: [CompactSidebarRowModel]) -> some View {
+        VStack(spacing: 4) {
+            ForEach(rows) { row in
+                Button {
+                    onOpenFamily(row.id)
+                } label: {
+                    PopoverCulpritRow(row: row)
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button {
+                        onOpenFamily(row.id)
+                    } label: {
+                        Label("Show in Console", systemImage: "rectangle.3.group")
                     }
-                    .frame(maxWidth: .infinity, minHeight: 92)
-                } else {
-                    ForEach(items.prefix(3)) { item in
-                        Button {
-                            onOpenFamily(item.id)
-                        } label: {
-                            CompactPopoverFamilyRow(row: item)
+                    Menu {
+                        FamilySnoozeMenu { minutes in
+                            Task { await monitor.snooze(signatureID: row.id, minutes: minutes) }
                         }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button {
-                                onOpenFamily(item.id)
-                            } label: {
-                                Label("Show in Console", systemImage: "rectangle.3.group")
-                            }
-                            Menu {
-                                FamilySnoozeMenu { minutes in
-                                    Task { await monitor.snooze(signatureID: item.id, minutes: minutes) }
-                                }
-                            } label: {
-                                Label("Snooze", systemImage: "moon")
-                            }
-                            Button {
-                                Task { await monitor.ignore(signatureID: item.id) }
-                            } label: {
-                                Label("Ignore Family", systemImage: "eye.slash")
-                            }
-                        }
-                        if item.id != items.prefix(3).last?.id {
-                            Divider()
-                        }
+                    } label: {
+                        Label("Snooze", systemImage: "moon")
                     }
+                    Button {
+                        Task { await monitor.ignore(signatureID: row.id) }
+                    } label: {
+                        Label("Ignore Family", systemImage: "eye.slash")
+                    }
+                }
+                if row.id != rows.last?.id {
+                    Divider()
                 }
             }
         }
     }
+}
 
-    private var popoverHealth: some View {
-        HStack(spacing: 8) {
-            CompactRadarChip(title: "Refresh", value: monitor.engineStatus.refreshText, systemImage: "timer")
-            CompactRadarChip(
-                title: "Pressure",
-                value: monitor.systemPressure.isKnown ? monitor.systemPressure.level.label : "—",
-                systemImage: "gauge.with.needle",
-                level: monitor.systemPressure.level.ghostLevel
-            )
-            CompactRadarChip(title: "Backlog", value: monitor.engineStatus.backlogText, systemImage: "externaldrive")
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .radarSurface(tint: RadarTheme.brand, cornerRadius: 12)
-    }
+private struct PopoverQuietState: View {
+    let familyCount: Int
 
-    private var actions: some View {
+    var body: some View {
         HStack(spacing: 10) {
-            Button {
-                onOpenConsole()
-            } label: {
-                Label("Open Dashboard", systemImage: "rectangle.3.group")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
-            .keyboardShortcut("o")
-
-            Spacer()
-
-            Button {
-                Task { _ = await notifier.requestAuthorization() }
-            } label: {
-                Image(systemName: "bell.badge")
-            }
-            .buttonStyle(.borderless)
-            .help("Allow notifications")
-
-            Button(action: onOpenSettings) {
-                Image(systemName: "slider.horizontal.3")
-            }
-            .buttonStyle(.borderless)
-            .help("Settings")
-
-            Menu {
-                Button("Quit Ghost Process Sniper", action: onQuit)
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .menuStyle(.button)
-            .buttonStyle(.borderless)
-            .help("More")
+            Image(systemName: "checkmark.seal.fill")
+                .font(.title3)
+                .foregroundStyle(.green.gradient)
+                .accessibilityHidden(true)
+            Text(familyCount == 0 ? "Starting the first scan" : "\(familyCount) families watched, nothing misbehaving")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .radarSurface(tint: RadarTheme.brand, cornerRadius: 12)
-    }
-
-    private var headerSubtitle: String {
-        if let error = monitor.storeError {
-            return error
-        }
-        return MenuBarStatusPresentation.normalizedStatus(monitor.summary.statusText)
+        .padding(8)
     }
 }
 
-private struct CompactPopoverFamilyRow: View {
+private struct PopoverCulpritRow: View {
     let row: CompactSidebarRowModel
 
     @State private var isHovering = false
@@ -230,23 +232,29 @@ private struct CompactPopoverFamilyRow: View {
             Image(systemName: row.systemImage)
                 .foregroundStyle(RadarStyle.color(for: row.level))
                 .frame(width: 16)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(row.title)
-                        .font(.caption.weight(.semibold))
+                        .font(.callout.weight(.semibold))
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     ScoreCapsuleBadge(scoreText: row.statusText, level: row.level)
                 }
                 Text(row.subtitle)
-                    .font(.caption2)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(row.metricText)
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Image(systemName: "chevron.right")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.tertiary)
-                .opacity(isHovering ? 1 : 0)
+                .opacity(isHovering ? 1 : 0.5)
+                .accessibilityHidden(true)
         }
         .padding(.vertical, 5)
         .padding(.horizontal, 5)
@@ -256,5 +264,183 @@ private struct CompactPopoverFamilyRow: View {
             isHovering = hovering
         }
         .help(row.helpText)
+        .accessibilityElement(children: .combine)
     }
 }
+
+/// Temperatures change every sample and pressure only occasionally, so each
+/// is read by its own view.
+private struct PopoverVitals: View {
+    let monitor: ProcessMonitor
+
+    var body: some View {
+        HStack(spacing: 12) {
+            PopoverThermalReadings(monitor: monitor)
+            Spacer(minLength: 4)
+            PopoverPressureReading(monitor: monitor)
+        }
+        .font(.caption.monospacedDigit().weight(.medium))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .radarSurface(tint: RadarTheme.brand, cornerRadius: 12)
+    }
+}
+
+private struct PopoverThermalReadings: View {
+    let monitor: ProcessMonitor
+
+    var body: some View {
+        let thermals = monitor.thermals
+        HStack(spacing: 12) {
+            Label("CPU \(thermals.temperatureText(thermals.cpuCelsius))", systemImage: "cpu")
+            Label("GPU \(thermals.temperatureText(thermals.gpuCelsius))", systemImage: "thermometer.medium")
+        }
+        .lineLimit(1)
+    }
+}
+
+private struct PopoverPressureReading: View {
+    let monitor: ProcessMonitor
+
+    var body: some View {
+        let pressure = monitor.systemPressure
+        Label {
+            Text("Memory \(pressure.isKnown ? pressure.level.label : "—")")
+                .foregroundStyle(pressure.level == .nominal ? AnyShapeStyle(.primary) : AnyShapeStyle(RadarStyle.color(for: pressure.level.ghostLevel)))
+        } icon: {
+            Image(systemName: "memorychip")
+        }
+        .lineLimit(1)
+        .help("System memory pressure")
+    }
+}
+
+private struct PopoverFooter: View {
+    let notifier: UserNotificationRadarNotifier
+    let onOpenConsole: () -> Void
+    let onOpenSettings: () -> Void
+    let onQuit: () -> Void
+
+    @State private var notificationStatus: UNAuthorizationStatus?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: onOpenConsole) {
+                Label("Open Dashboard", systemImage: "rectangle.3.group")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .keyboardShortcut("o")
+
+            Spacer()
+
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Settings")
+            .help("Settings (⌘,)")
+
+            Menu {
+                if notificationStatus == .notDetermined {
+                    Button("Allow Notifications…") {
+                        Task {
+                            _ = await notifier.requestAuthorization()
+                            notificationStatus = await notifier.authorizationStatus()
+                        }
+                    }
+                    Divider()
+                } else if notificationStatus == .denied {
+                    Button("Open Notification Settings…") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    Divider()
+                }
+                Button("Quit Ghost Process Sniper", action: onQuit)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
+            .accessibilityLabel("More")
+            .help("More")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .radarSurface(tint: RadarTheme.brand, cornerRadius: 12)
+        .task {
+            notificationStatus = await notifier.authorizationStatus()
+        }
+    }
+}
+
+#if DEBUG
+// PreviewProvider rather than #Preview: the macro plugin is not guaranteed
+// under a command-line `swift build`. Fixtures use an in-memory monitor.
+struct PopoverView_Previews: PreviewProvider {
+    static var previews: some View {
+        popover(.quiet).previewDisplayName("Quiet")
+        popover(.earlyWarning).previewDisplayName("Early warning")
+        popover(.hot).previewDisplayName("Hot")
+        PopoverStoreWarningRow(message: "The radar database could not be opened.")
+            .padding(14)
+            .frame(width: 380)
+            .previewDisplayName("Store error")
+    }
+
+    private enum Scenario {
+        case quiet, earlyWarning, hot
+    }
+
+    @MainActor
+    private static func popover(_ scenario: Scenario) -> some View {
+        PopoverView(
+            monitor: monitor(scenario),
+            notifier: UserNotificationRadarNotifier(),
+            onOpenConsole: {},
+            onOpenFamily: { _ in },
+            onOpenSettings: {},
+            onQuit: {},
+            refreshesOnAppear: false
+        )
+    }
+
+    @MainActor
+    private static func monitor(_ scenario: Scenario) -> ProcessMonitor {
+        let monitor = ProcessMonitor(builder: ProcessFamilyBuilder(currentUserID: 501), store: nil)
+        let start = Date()
+        for step in 0..<6 {
+            let now = start.addingTimeInterval(Double(step) * 5)
+            let helper = process(502, "python3", memoryMB: 90, cpu: 0.5, startedAt: start.addingTimeInterval(-120), at: now)
+            let main: ProcessMetrics = switch scenario {
+            case .quiet: process(501, "node", memoryMB: 180, cpu: 1, startedAt: start.addingTimeInterval(-120), at: now)
+            // A dev server left running for days reads as forgotten.
+            case .earlyWarning: process(501, "vite", memoryMB: 300, cpu: 0.2, startedAt: start.addingTimeInterval(-3 * 86_400), at: now)
+            case .hot: process(501, "node", memoryMB: 900, cpu: 45, startedAt: start.addingTimeInterval(-120), at: now)
+            }
+            monitor.ingest([main, helper], now: now)
+        }
+        return monitor
+    }
+
+    private static func process(
+        _ pid: Int32,
+        _ name: String,
+        memoryMB: UInt64,
+        cpu: Double,
+        startedAt: Date,
+        at date: Date
+    ) -> ProcessMetrics {
+        ProcessMetrics(
+            identity: ProcessIdentity(pid: pid, startTimeSeconds: UInt64(startedAt.timeIntervalSince1970), startTimeMicroseconds: 0),
+            parentPID: 1, userID: 501, ownerName: "you", name: name,
+            executablePath: "/usr/local/bin/\(name)", commandLine: "\(name) server.js",
+            residentMemoryBytes: memoryMB * 1_048_576, physicalFootprintBytes: memoryMB * 1_048_576,
+            virtualMemoryBytes: memoryMB * 2_097_152, cpuPercent: cpu, totalProcessorSeconds: 100,
+            threadCount: 8, isSystemProcess: false, sampledAt: date
+        )
+    }
+}
+#endif

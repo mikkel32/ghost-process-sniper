@@ -114,11 +114,7 @@ final class RadarConsoleSession {
         Task {
             let started = Date()
             await monitor.refresh()
-            // Hold the scanning indicator long enough to be perceptible.
-            let elapsed = Date().timeIntervalSince(started)
-            if elapsed < 0.7 {
-                try? await Task.sleep(nanoseconds: UInt64((0.7 - elapsed) * 1_000_000_000))
-            }
+            await RadarMotion.holdPerceptibly(since: started)
             isRefreshing = false
         }
     }

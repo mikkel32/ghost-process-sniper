@@ -7,6 +7,15 @@ enum RadarMotion {
     static func reading(_ reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .smooth(duration: 0.32)
     }
+
+    /// Keeps a scanning indicator up long enough to be seen after a fast refresh.
+    static func holdPerceptibly(since started: Date, minimum: TimeInterval = 0.7) async {
+        let remaining = minimum - Date().timeIntervalSince(started)
+        guard remaining > 0 else {
+            return
+        }
+        try? await Task.sleep(for: .seconds(remaining))
+    }
 }
 
 /// Applied to a handful of dashboard sections, never to each process row.

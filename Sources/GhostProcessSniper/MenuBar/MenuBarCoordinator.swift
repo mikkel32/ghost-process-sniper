@@ -228,7 +228,8 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
             return
         }
 
-        if NSApp.currentEvent?.type == .rightMouseUp {
+        if let event = NSApp.currentEvent,
+           event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
             showStatusMenu()
             return
         }
@@ -243,9 +244,8 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         let popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
-        popover.contentSize = NSSize(width: 380, height: 540)
         popover.delegate = self
-        popover.contentViewController = NSHostingController(
+        let hosting = NSHostingController(
             rootView: PopoverView(
                 monitor: monitor,
                 notifier: notifier,
@@ -267,6 +267,9 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
                 onQuit: { NSApp.terminate(nil) }
             )
         )
+        // The popover hugs its content; the triage list changes height.
+        hosting.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = hosting
 
         self.popover = popover
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
