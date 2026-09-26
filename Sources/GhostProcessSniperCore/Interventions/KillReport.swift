@@ -44,6 +44,13 @@ public struct KillReport: Equatable, Sendable {
     public var zombieParentName: String?
     /// Survivors already exiting in the kernel, held up by disk or network I/O.
     public var stuckExitingPIDs: [Int32] = []
+    /// Processes that started after the stop was approved. Stopped with the
+    /// rest, or, with force held, only reported (state `.locked`).
+    public var lateTargets: [KillTarget] = []
+    /// Processes frozen with SIGSTOP right before SIGKILL.
+    public var frozenCount = 0
+    /// New processes kept appearing faster than the force stage could look.
+    public var forkStorm = false
 
     public var partiallySucceeded: Bool {
         !gracefulPIDs.isEmpty || !forcedPIDs.isEmpty
@@ -65,6 +72,14 @@ public struct KillReport: Equatable, Sendable {
         var parts = [outcomeSummary]
         if !signalDeniedPIDs.isEmpty {
             parts.append("macOS refused to stop \(pidLabel) \(refused); it is protected by security software or a system policy.")
+        }
+        let keptRunning = lateTargets.filter { $0.state == .locked }
+        if !keptRunning.isEmpty {
+            let names = keptRunning.map { "\($0.name) (PID \($0.pid))" }.joined(separator: ", ")
+            parts.append("Kept running after \(displayName) stopped: \(names).")
+        }
+        if forkStorm {
+            parts.append("It kept starting new processes; Ghost froze and stopped \(frozenCount) of them. Check that nothing starts it again.")
         }
         parts += stuckExitingPIDs.sorted().map {
             "PID \($0) is stuck finishing its exit in the kernel (hung disk or network I/O); it disappears when that I/O completes."
@@ -127,6 +142,7 @@ public struct KillReport: Equatable, Sendable {
             "Verification modes: \(reactorReport.verificationModeCounts.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ").ifEmpty("none"))",
             "Signal waves: \(reactorReport.signalWaves.count), arena reuse \(reactorReport.arenaReuseCount)",
             "Calibrated reclaim: \(RadarFormat.bytes(calibratedReclaimBytes))",
+            "Late: \(lateTargets.map { "\($0.pid) \($0.state.rawValue)" }.joined(separator: ", ").ifEmpty("none")), frozen \(frozenCount)\(forkStorm ? ", fork storm" : "")",
             "Force skipped: \(skipForceRequested ? "yes" : "no")\(appStillOpen ? ", app still open" : "")\(isForceFollowUp ? " (force follow-up)" : "")",
             "Refused by macOS: \(signalDeniedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Respawned: \(respawnedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))\(respawnedBy.map { " by \($0)" } ?? "")",

@@ -148,8 +148,8 @@ final class KillForceHoldTests: XCTestCase {
             forceKillDelay: 2
         )
 
-        XCTAssertEqual(table.signals(to: 300), [SIGKILL])
-        XCTAssertEqual(table.signals(to: 301), [SIGTERM, SIGKILL])
+        XCTAssertEqual(table.signals(to: 300), [SIGSTOP, SIGKILL])
+        XCTAssertEqual(table.signals(to: 301), [SIGTERM, SIGSTOP, SIGKILL])
         XCTAssertEqual(report.attempts.filter { $0.pid == 300 && $0.signalName == "SIGKILL" }.map(\.stage), ["forced"])
         XCTAssertTrue(report.survivorPIDs.isEmpty)
         XCTAssertFalse(report.appStillOpen)
@@ -171,7 +171,7 @@ final class KillForceHoldTests: XCTestCase {
         let report = await table.killer().kill(plan: plan, forceKillDelay: 1)
 
         XCTAssertEqual(report.strategyUsed, .gentleDevServer)
-        XCTAssertEqual(table.log.map(\.signal), [SIGINT, SIGTERM, SIGKILL])
+        XCTAssertEqual(table.log.map(\.signal), [SIGINT, SIGTERM, SIGSTOP, SIGKILL])
         XCTAssertEqual(table.elapsedSeconds, 1.2 + 0.45, accuracy: 0.08, "the approved waits, not the fresh standard ones")
     }
 
@@ -209,7 +209,7 @@ final class KillForceHoldTests: XCTestCase {
 
         XCTAssertEqual(followUp.targetIdentities, [app.identity])
         XCTAssertEqual(table.quitRequests.count, 1, "the quit request is not repeated")
-        XCTAssertEqual(table.signals(to: 300), [SIGKILL])
+        XCTAssertEqual(table.signals(to: 300), [SIGSTOP, SIGKILL], "frozen, then forced; nothing polite")
         XCTAssertEqual(table.elapsedSeconds, waitedBefore, accuracy: 0.001, "no grace period the second time")
         XCTAssertTrue(forced.isForceFollowUp)
         XCTAssertEqual(forced.forcedPIDs, [300])

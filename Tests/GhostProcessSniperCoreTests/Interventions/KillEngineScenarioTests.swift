@@ -54,7 +54,7 @@ final class KillEngineScenarioTests: XCTestCase {
 
         let report = await killer(table).kill(plan: plan(worker), forceKillDelay: 0.05)
 
-        XCTAssertEqual(table.log.map(\.signal), [SIGTERM, SIGKILL])
+        XCTAssertEqual(table.log.map(\.signal), [SIGTERM, SIGSTOP, SIGKILL], "frozen, then forced")
         XCTAssertEqual(report.forcedPIDs, [720])
         XCTAssertTrue(report.survivorPIDs.isEmpty)
         XCTAssertEqual(report.targetResults.first { $0.pid == 720 }?.state, .forceKilled)

@@ -83,6 +83,8 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
     private var sentLog: [Sent] = []
     private var quitLog: [Sent] = []
     private var seenRequests: [KillSnapshotRequest] = []
+    private var snapshotSpawner: (@Sendable (Int) -> [KillProcessLite])?
+    private var failingFromSnapshot: Int?
 
     init(start: Date = Date(timeIntervalSince1970: 1_000_000)) {
         self.start = start
@@ -92,6 +94,17 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
         lock.withLock {
             entries[lite.identity] = Entry(lite: lite, behaviour: behaviour, stopped: lite.status == Self.stoppedStatus)
         }
+    }
+
+    /// Starts the processes `spawn` returns right before snapshot number
+    /// `index` (the first is 0) is taken, like a fork racing the listing.
+    func onSnapshot(_ spawn: @escaping @Sendable (_ index: Int) -> [KillProcessLite]) {
+        lock.withLock { snapshotSpawner = spawn }
+    }
+
+    /// Every snapshot from number `index` on throws.
+    func failSnapshots(from index: Int) {
+        lock.withLock { failingFromSnapshot = index }
     }
 
     // MARK: - Clock
@@ -144,8 +157,15 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
     // MARK: - KillSnapshotProviding
 
     func snapshot(request: KillSnapshotRequest) async throws -> KillProcessSnapshot {
-        lock.withLock {
+        try lock.withLock {
+            let index = seenRequests.count
             seenRequests.append(request)
+            if let failing = failingFromSnapshot, index >= failing {
+                throw ProcessSamplerError.listFailed
+            }
+            for lite in snapshotSpawner?(index) ?? [] {
+                entries[lite.identity] = Entry(lite: lite, behaviour: Behaviour(), stopped: false)
+            }
             var processes = listedLocked()
             if request.policy == .verify,
                request.verificationMode == .targetOnly,

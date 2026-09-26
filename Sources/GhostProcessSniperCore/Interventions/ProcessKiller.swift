@@ -9,6 +9,7 @@ public final class ProcessKiller: Sendable {
     /// Bounds the waits; tests move it with their sleeper instead of the wall.
     let clock: @Sendable () -> Date
     let outcomeClassifier = KillOutcomeClassifier()
+    let protection: KillProtectionPolicy
     private let reclaimEstimator = KillReclaimEstimator()
     private let preflightBuilder: KillPreflightBuilder
 
@@ -32,6 +33,7 @@ public final class ProcessKiller: Sendable {
         }
         self.signaler = signaler
         self.currentUserID = currentUserID
+        self.protection = protection
         self.preflightBuilder = KillPreflightBuilder(
             currentUserID: currentUserID,
             usesDarwinProcessNamespace: signaler.usesDarwinProcessNamespace,
@@ -197,7 +199,10 @@ public final class ProcessKiller: Sendable {
                     if skipForce { return true }
                     return await forceHeldCheck?() == true
                 },
-                eventSink: eventSink
+                eventSink: eventSink,
+                known: Set((preflight.targets + preflight.locked + preflight.stale + preflight.recycled + preflight.exited).map(\.identity)),
+                bornAfter: plan.approvedAt ?? preflightSnapshot.sampledAt,
+                adoptsLateMembers: plan.scope != .singleRoot
             )
             let walk = try await walk(runProfile.phases, targets: targets, context: context, report: &report)
 
@@ -214,9 +219,15 @@ public final class ProcessKiller: Sendable {
                 exitedIdentities = Set(finalVerification.exited.map(\.identity))
             }
             report.appStillOpen = walk.quitAcceptedPID.map(report.survivorPIDs.contains) ?? false
-            report.targetResults.append(contentsOf: targets.map {
-                outcomeClassifier.classify(target: $0, report: report, exitedIdentities: exitedIdentities)
-            })
+            let finished = report
+            let results = (targets + walk.adopted).map {
+                outcomeClassifier.classify(target: $0, report: finished, exitedIdentities: exitedIdentities)
+            }
+            report.targetResults.append(contentsOf: results)
+            // Late processes keep saying where they came from.
+            report.lateTargets = zip(walk.adopted, results.suffix(walk.adopted.count)).map {
+                $0.updating(state: $1.state, reason: $0.reason)
+            } + walk.reportedLate
             report.realizedMemoryReclaimBytes = reclaimEstimator.realizedEstimate(
                 from: preflight.preview.reclaimEstimate,
                 targets: report.targetResults

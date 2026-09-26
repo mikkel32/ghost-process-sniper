@@ -126,6 +126,9 @@ extension ProcessKiller {
             try signaler.send(signal: signal, to: target.identity)
             let attempt = KillAttempt(pid: target.pid, signal: signal, stage: stage, succeeded: true)
             report.attempts.append(attempt)
+            // A freeze only holds the process for force; the force stage
+            // announces it once for all of them.
+            guard stage != "freeze" else { return .sent }
             appendEvent(.signaled, operationID: operationID, pid: target.pid, signalName: attempt.signalName, targetState: stage == "forced" ? .forceKilled : .stopping, message: message ?? "\(attempt.signalName) sent to \(target.name).", report: &report, eventSink: eventSink)
             if stage == "forced" {
                 if !report.forcedPIDs.contains(target.pid) {
@@ -190,6 +193,8 @@ extension ProcessKiller {
         let exited: [KillTarget]
         /// Live targets already exiting in the kernel, held up by I/O.
         let exiting: [KillTarget]
+        /// The whole process table, when this pass listed it.
+        let arena: KillGraphArena?
     }
 
     func verify(
@@ -251,7 +256,8 @@ extension ProcessKiller {
             live: live,
             recycled: recycled,
             exited: exited,
-            exiting: exiting
+            exiting: exiting,
+            arena: mode == .targetOnly ? nil : snapshot.liteArena
         )
     }
 

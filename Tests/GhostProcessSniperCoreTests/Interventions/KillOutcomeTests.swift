@@ -46,7 +46,7 @@ final class KillOutcomeTests: XCTestCase {
         let report = await table.killer().kill(plan: .fixture(root, members: [root, child]), forceKillDelay: 0.2)
 
         XCTAssertEqual(table.signals(to: 611), [SIGTERM], "a zombie has nothing left to kill")
-        XCTAssertEqual(table.signals(to: 610), [SIGTERM, SIGKILL])
+        XCTAssertEqual(table.signals(to: 610), [SIGTERM, SIGSTOP, SIGKILL])
         XCTAssertTrue(report.survivorPIDs.isEmpty)
         XCTAssertEqual(report.targetResults.first { $0.pid == 611 }?.state, .terminated)
     }

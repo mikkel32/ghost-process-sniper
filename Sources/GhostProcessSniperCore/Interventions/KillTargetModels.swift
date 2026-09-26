@@ -85,6 +85,7 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
     public let reason: String
     public let isRoot: Bool
     public let condition: KillTargetCondition
+    public let processGroupID: Int32
 
     public var pid: Int32 { identity.pid }
 
@@ -99,7 +100,8 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
         state: KillTargetState,
         reason: String,
         isRoot: Bool,
-        condition: KillTargetCondition = .running
+        condition: KillTargetCondition = .running,
+        processGroupID: Int32 = 0
     ) {
         self.identity = identity
         self.parentPID = parentPID
@@ -112,6 +114,7 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
         self.reason = reason
         self.isRoot = isRoot
         self.condition = condition
+        self.processGroupID = processGroupID
     }
 
     public init(process: ProcessMetrics, depth: Int, state: KillTargetState, reason: String, rootIdentity: ProcessIdentity) {
@@ -141,7 +144,8 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
             state: state,
             reason: reason,
             isRoot: process.identity == rootIdentity,
-            condition: KillTargetCondition(status: process.status, flags: process.flags)
+            condition: KillTargetCondition(status: process.status, flags: process.flags),
+            processGroupID: process.processGroupID
         )
     }
 
@@ -173,7 +177,8 @@ public struct KillTarget: Identifiable, Equatable, Sendable {
             state: state,
             reason: reason,
             isRoot: isRoot,
-            condition: condition
+            condition: condition,
+            processGroupID: processGroupID
         )
     }
 }

@@ -13,6 +13,10 @@ public struct KillPlan: Equatable, Sendable {
     public let killHistory: KillHistorySummary?
     public let approvedIdentities: Set<ProcessIdentity>?
     public let approvalExpiresAt: Date?
+    /// When the user approved the preview. Children born after it that
+    /// descend from an approved process stop with it; older ones were
+    /// shown in the preview, or deliberately left out of it.
+    public let approvedAt: Date?
     /// The phases and waits the user approved in the preview. Confirm runs
     /// them as they are; it only ever lengthens the first wait.
     public let approvedProfile: KillStrategyProfile?
@@ -36,6 +40,7 @@ public struct KillPlan: Equatable, Sendable {
         killHistory: KillHistorySummary? = nil,
         approvedIdentities: Set<ProcessIdentity>? = nil,
         approvalExpiresAt: Date? = nil,
+        approvedAt: Date? = nil,
         approvedProfile: KillStrategyProfile? = nil,
         isForceFollowUp: Bool = false,
         workload: KillWorkloadProfile? = nil,
@@ -52,6 +57,7 @@ public struct KillPlan: Equatable, Sendable {
         self.killHistory = killHistory
         self.approvedIdentities = approvedIdentities
         self.approvalExpiresAt = approvalExpiresAt
+        self.approvedAt = approvedAt
         self.approvedProfile = approvedProfile
         self.isForceFollowUp = isForceFollowUp
         self.workload = workload
@@ -63,11 +69,16 @@ public struct KillPlan: Equatable, Sendable {
         strategyCalibrations[strategy] ?? .empty
     }
 
-    public func binding(to identities: [ProcessIdentity], expiresAt: Date, profile: KillStrategyProfile? = nil) -> KillPlan {
+    public func binding(
+        to identities: [ProcessIdentity],
+        expiresAt: Date,
+        profile: KillStrategyProfile? = nil,
+        approvedAt: Date = Date()
+    ) -> KillPlan {
         KillPlan(rootIdentity: rootIdentity, targetIdentities: targetIdentities, protectedPIDs: protectedPIDs,
                  displayName: displayName, gracefulSignal: gracefulSignal, scope: scope,
                  createdAt: createdAt, familyMetadata: familyMetadata, killHistory: killHistory,
-                 approvedIdentities: Set(identities), approvalExpiresAt: expiresAt,
+                 approvedIdentities: Set(identities), approvalExpiresAt: expiresAt, approvedAt: approvedAt,
                  approvedProfile: profile, workload: workload, strategyCalibrations: strategyCalibrations)
     }
 
@@ -79,7 +90,7 @@ public struct KillPlan: Equatable, Sendable {
         return KillPlan(rootIdentity: rootIdentity, targetIdentities: survivors, protectedPIDs: protectedPIDs,
                         displayName: displayName, gracefulSignal: gracefulSignal, scope: scope,
                         createdAt: now, familyMetadata: familyMetadata, killHistory: killHistory,
-                        approvedIdentities: Set(survivors), approvalExpiresAt: now.addingTimeInterval(30),
+                        approvedIdentities: Set(survivors), approvalExpiresAt: now.addingTimeInterval(30), approvedAt: now,
                         approvedProfile: .forceNow, isForceFollowUp: true, workload: workload,
                         strategyCalibrations: strategyCalibrations)
     }

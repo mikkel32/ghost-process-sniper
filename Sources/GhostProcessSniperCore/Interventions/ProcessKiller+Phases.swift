@@ -13,6 +13,12 @@ struct KillPhaseContext: Sendable {
     let stopWaitingCheck: (@Sendable () async -> Bool)?
     let forceHeld: @Sendable () async -> Bool
     let eventSink: (@Sendable (KillOperationEvent) -> Void)?
+    /// Every process the confirm snapshot sorted, stopped or not.
+    let known: Set<ProcessIdentity>
+    /// Processes born after this are new to the stop.
+    let bornAfter: Date
+    /// False for a single-process stop: its new children are only reported.
+    let adoptsLateMembers: Bool
 }
 
 struct KillPhaseWalk {
@@ -20,6 +26,12 @@ struct KillPhaseWalk {
     let remaining: [KillTarget]
     /// The app that accepted the quit request.
     let quitAcceptedPID: Int32?
+    /// Processes born during the stop that were stopped with the rest.
+    let adopted: [KillTarget]
+    /// Processes born during the stop that were only reported.
+    let reportedLate: [KillTarget]
+    /// When the last signal went out; a restart must come after it.
+    let lastSignalAt: Date
 }
 
 extension ProcessKiller {
@@ -34,7 +46,11 @@ extension ProcessKiller {
     ) async throws -> KillPhaseWalk {
         var remaining = targets
         var live = targets
+        var known = context.known
+        var adopted: [KillTarget] = []
+        var reportedLate: [KillTarget] = []
         var quitAccepted: Int32?
+        var lastSignalAt = clock()
         for (index, phase) in phases.enumerated() {
             if index > 0 {
                 guard !live.isEmpty else { break }
@@ -54,20 +70,37 @@ extension ProcessKiller {
             }
             guard !recipients.isEmpty else { continue }
             let stage = phase.isForce ? "forced" : index == 0 ? "graceful" : "secondary"
+            let dropped: Set<ProcessIdentity>
             if phase.isForce {
                 appendEvent(.forcePending, operationID: context.operationID,
                             message: "\(live.count) same-identity target\(live.count == 1 ? "" : "s") still live.",
                             report: &report, eventSink: context.eventSink)
-            }
-            let dropped = await deliver(phase, to: recipients, stage: stage, context: context,
+                let started = Date()
+                let attemptsBefore = report.attempts.count
+                let force = try await forceTree(live, anchors: remaining, known: &known, context: context, report: &report)
+                await context.reactor.recordWave(signalWave(
+                    stage: stage, signalName: phase.signalName, targets: force.frozen, startedAt: started,
+                    attempts: report.attempts.dropFirst(attemptsBefore).filter { $0.stage == stage }
+                ))
+                adopted += force.newborn
+                remaining += force.newborn
+                live += force.newborn
+                dropped = force.dropped
+            } else {
+                dropped = await deliver(phase, to: recipients, stage: stage, context: context,
                                         report: &report, quitAccepted: &quitAccepted)
+            }
+            lastSignalAt = clock()
             remaining.removeAll { dropped.contains($0.identity) }
             live.removeAll { dropped.contains($0.identity) }
             guard !live.isEmpty else { break }
 
             await waitForExit(of: live, phase: phase, isGraceful: index == 0, context: context, report: &report)
             let verifyStage = phase.isForce ? "post-force" : index == 0 ? "pre-force" : "post-secondary"
-            let mode = KillVerificationPlanner().mode(stage: verifyStage, hints: await context.reactor.hintSnapshot())
+            var mode = KillVerificationPlanner().mode(stage: verifyStage, hints: await context.reactor.hintSnapshot())
+            // A small tree is cheap to list whole, and only a whole list
+            // shows what it started while it was asked to stop.
+            if !phase.isForce, live.count < 64 { mode = .completeArena }
             let verification = try await verify(stage: verifyStage, plan: context.plan, targets: live,
                                                 operationStart: context.operationStart, mode: mode, reactor: context.reactor)
             report.verificationPasses.append(verification.pass)
@@ -76,8 +109,25 @@ extension ProcessKiller {
             appendEvent(.verified, operationID: context.operationID,
                         message: "\(verifyStage.prefix(1).uppercased())\(verifyStage.dropFirst()) verification: \(verification.pass.livePIDs.count) live, \(verification.pass.recycledPIDs.count) recycled.",
                         report: &report, eventSink: context.eventSink)
+
+            if !phase.isForce, let arena = verification.arena {
+                let late = lateMembers(in: arena, anchors: remaining, known: known, context: context)
+                guard !late.isEmpty else { continue }
+                known.formUnion(late.map(\.identity))
+                if context.adoptsLateMembers, await !context.forceHeld() {
+                    adopted += late
+                    remaining += late
+                    live += late
+                    appendEvent(.targetUpdated, operationID: context.operationID,
+                                message: "\(late.count) process\(late.count == 1 ? "" : "es") started during the stop; stopping \(late.count == 1 ? "it" : "them") too.",
+                                report: &report, eventSink: context.eventSink)
+                } else {
+                    reportedLate += late.map { $0.updating(state: .locked, reason: "Kept running after \(context.plan.displayName) stopped") }
+                }
+            }
         }
-        return KillPhaseWalk(remaining: remaining, quitAcceptedPID: quitAccepted)
+        return KillPhaseWalk(remaining: remaining, quitAcceptedPID: quitAccepted, adopted: adopted,
+                             reportedLate: reportedLate, lastSignalAt: lastSignalAt)
     }
 
     /// Sends one phase's action and returns the targets it can never reach:

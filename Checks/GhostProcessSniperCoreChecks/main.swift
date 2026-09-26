@@ -2453,7 +2453,7 @@ private func processKillerEscalatesSurvivingIdentities() async throws {
 
     try check(report.gracefulPIDs == [20], "killer should send graceful termination")
     try check(report.forcedPIDs == [20], "killer should escalate surviving identity")
-    try check(signaler.sent == [Signal(pid: 20, signal: SIGTERM), Signal(pid: 20, signal: SIGKILL)], "killer should send SIGTERM then SIGKILL")
+    try check(signaler.sent == [Signal(pid: 20, signal: SIGTERM), Signal(pid: 20, signal: SIGSTOP), Signal(pid: 20, signal: SIGKILL)], "killer should send SIGTERM, then freeze and SIGKILL")
 }
 
 private func processKillerRejectsRecycledPID() async throws {
