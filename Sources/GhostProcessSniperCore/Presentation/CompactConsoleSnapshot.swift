@@ -170,7 +170,7 @@ public struct OverviewCommandCenterModel: Equatable, Sendable {
         updatedText = engineStatus.updatedText
         level = summary.level
         // Memory is informational here; host pressure tints it in the app.
-        // Engine timing lives on the Engine page, not the user dashboard.
+        // Engine timing lives in Settings › Diagnostics, not the user dashboard.
         chips = [
             FamilyMetricCard(title: "Families", value: "\(summary.familyCount)", systemImage: "rectangle.stack",
                              destination: .families, actionTitle: "Browse all"),

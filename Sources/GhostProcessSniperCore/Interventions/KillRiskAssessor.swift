@@ -433,3 +433,15 @@ private struct Fingerprint {
         return managed.contains(where: path.hasPrefix) || managed.dropFirst(4).contains(where: path.contains)
     }
 }
+
+// The duplicate cull plan asks the same questions of a copy before offering
+// to stop it, so the plan and the stop preview agree.
+extension KillRiskAssessor {
+    static func isLaunchdManagedService(path: String) -> Bool {
+        Fingerprint(name: "", path: path, command: "").isLaunchdManagedService
+    }
+
+    static func isAppMainBinary(path: String, name: String) -> Bool {
+        Fingerprint(name: name, path: path, command: "").isAppMainBinary
+    }
+}

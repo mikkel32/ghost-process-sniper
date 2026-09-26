@@ -5,7 +5,6 @@
     "GhostProcessSniperCore": ["Domain", "Configuration", "Monitoring", "Sampling", "Thermals", "Intelligence", "Persistence", "Search", "Presentation", "Diagnostics", "Interventions", "Cleanup"]
   },
   "legacy_line_budgets": {
-    "GhostProcessSniper/Features/Processes/FamilyDetailConsoleView.swift": 777,
     "GhostProcessSniper/Features/Interventions/KillPreviewSheet.swift": 635,
     "GhostProcessSniperCore/Persistence/RadarStore.swift": 1072,
     "GhostProcessSniperCore/Sampling/ProcessSampler.swift": 917,

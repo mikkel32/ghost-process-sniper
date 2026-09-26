@@ -134,6 +134,9 @@ struct RadarConsoleView: View {
             ConsolePreferences.familySort = value
             session.updateFocusedFamilies()
         }
+        .onChange(of: session.state.familySortAscending) { _, _ in
+            session.scheduleQueryUpdate()
+        }
         .onChange(of: session.state.incidentQuery.filter) { _, _ in
             session.scheduleQueryUpdate()
         }
@@ -195,11 +198,13 @@ struct RadarConsoleView: View {
 
     private func scheduleToastDismiss() {
         toastDismissTask?.cancel()
-        guard session.toast != nil else {
+        guard let toast = session.toast else {
             return
         }
+        // A toast with Undo stays long enough to reach the button.
+        let delay: UInt64 = toast.action == nil ? 2_600_000_000 : 6_000_000_000
         toastDismissTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_600_000_000)
+            try? await Task.sleep(nanoseconds: delay)
             guard !Task.isCancelled else {
                 return
             }
@@ -218,7 +223,7 @@ struct RadarConsoleView: View {
         switch session.state.focusedSelection {
         case .overview, .processes, .family, .duplicates:
             true
-        case .incidents, .rules, .engine:
+        case .incidents, .rules:
             false
         }
     }

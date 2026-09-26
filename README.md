@@ -89,7 +89,7 @@ Click the menu-bar scope for a summary; **Open Dashboard** opens the console:
 | **Rules** | How the radar should treat specific apps or commands. |
 | **Engine** | How much the radar itself costs, plus diagnostics for bug reports. |
 
-Handy shortcuts: **⌘F** search (**↩** opens the best match) · **⌘R** scan now · **⌘1–⌘6** switch sections · **⌥⌘I** inspector · **⌘,** settings.
+Handy shortcuts: **⌘F** search (**↩** opens the best match) · **⌘R** scan now · **⌘1–⌘5** switch sections · **⌥⌘I** inspector · **⌘,** settings.
 
 The [user guide](Docs/User-Guide.md) covers every panel, the temperature tools, and exactly how a safe stop works.
 

@@ -98,9 +98,9 @@ Waiting always ends as soon as the processes exit, so long grace periods only co
 | --- | --- |
 | Search all processes | ⌘F |
 | Scan now | ⌘R |
-| Overview | ⌘1 |
-| Duplicates / Incidents / Rules / Engine | ⌘2 / ⌘3 / ⌘4 / ⌘5 |
-| All Processes | ⌘6 |
+| Overview / All Processes | ⌘1 / ⌘2 |
+| Duplicates / Incidents / Rules | ⌘3 / ⌘4 / ⌘5 |
+| Back / Forward | ⌘[ / ⌘] |
 | Next / previous matching family | ⌘↓ / ⌘↑ |
 | Inspector for a selected family | ⌥⌘I |
 | Settings | ⌘, |

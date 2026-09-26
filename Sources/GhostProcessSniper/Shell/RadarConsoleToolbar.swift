@@ -9,7 +9,7 @@ struct RadarConsoleToolbar: ToolbarContent {
         switch session.state.focusedSelection {
         case .overview, .processes, .family, .duplicates:
             true
-        case .incidents, .rules, .engine:
+        case .incidents, .rules:
             false
         }
     }
@@ -67,7 +67,7 @@ struct RadarConsoleToolbar: ToolbarContent {
 
                     Divider()
 
-                    Picker("Sort", selection: $session.state.familySort) {
+                    Picker("Sort", selection: $session.state.familySortInNaturalDirection) {
                         ForEach(RadarSort.allCases, id: \.self) { sort in
                             Text(sort.label).tag(sort)
                         }
