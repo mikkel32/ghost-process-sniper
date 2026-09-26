@@ -136,7 +136,8 @@ public struct KillWorkloadProfile: Equatable, Sendable {
         let below = processes.map { process in
             KillWorkloadProcess(pid: process.pid, parentPID: process.parentPID, name: process.name,
                                 executablePath: process.executablePath, commandLine: process.commandLine,
-                                listeningPorts: process.listeningPorts)
+                                listeningPorts: process.listeningPorts, identity: process.identity,
+                                cpuPercent: process.cpuPercent, memoryBytes: process.memoryBytes)
         }
         return KillWorkloadProfile(processes: chain + below, ancestors: Array(ancestors[(index + 1)...]), parentIsLaunchd: false)
     }

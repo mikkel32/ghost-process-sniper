@@ -28,6 +28,26 @@ final class KillTargetAdvisorTests: XCTestCase {
         XCTAssertTrue(supervisorPreview.alternatives.isEmpty)
     }
 
+    func testSupervisorStopKeepsTheRadarNumbersOfItsApps() async throws {
+        let (table, server) = supervisedServer()
+        let workload = KillWorkloadProfile(
+            processes: [KillWorkloadProcess(pid: 500, parentPID: 499, name: "node", executablePath: "/usr/local/bin/node",
+                                            commandLine: "node /app/node_modules/.bin/vite", isRoot: true,
+                                            identity: server.identity, cpuPercent: 180, memoryBytes: 900_000_000)],
+            ancestors: [pm2],
+            parentIsLaunchd: false
+        )
+        let plan = KillPlan(rootIdentity: server.identity, targetIdentities: [server.identity], protectedPIDs: [],
+                            displayName: "vite", workload: workload)
+        let preview = await killer(table).preview(plan: plan, forceKillDelay: 2)
+        let alternative = try XCTUnwrap(preview.alternatives.first { $0.kind == .stopSupervisor })
+
+        let app = alternative.plan.workload?.processes.first { $0.pid == 500 }
+        XCTAssertEqual(app?.identity, server.identity)
+        XCTAssertEqual(app?.cpuPercent, 180, "the kill snapshot cannot measure CPU; the radar's reading is all there is")
+        XCTAssertEqual(app?.memoryBytes, 900_000_000)
+    }
+
     func testRespawnedLastStopPreselectsTheSupervisor() async throws {
         let (table, server) = supervisedServer()
         let respawned = KillOutcomePosterior.empty.updating(
