@@ -74,7 +74,7 @@ public struct KillTargetAdvisor: Sendable {
         risk: KillRiskAssessment,
         currentUserID: UInt32
     ) -> KillAlternative? {
-        guard let supervisor = risk.supervisor, let pid = supervisor.pid, Self.restartsOnExit(supervisor.kind) else { return nil }
+        guard let supervisor = risk.supervisor, let pid = supervisor.pid, supervisor.kind.restartPolicy == .onExit else { return nil }
         let stopping = Set(targets.map(\.identity))
         guard let process = liveAncestor(pid, of: plan.rootIdentity, in: arena),
               process.userID == currentUserID, !stopping.contains(process.identity),
@@ -138,13 +138,5 @@ public struct KillTargetAdvisor: Sendable {
             isPreselected: false,
             plan: plan.targetingOnly(dominant.identity, name: dominant.name)
         )
-    }
-
-    /// Whether stopping the supervisor, not its child, is what lasts.
-    public static func restartsOnExit(_ kind: KillSupervisorKind) -> Bool {
-        switch kind {
-        case .pm2, .forever, .supervisord, .launchd: true
-        case .nodemon, .watchexec, .cargoWatch, .air, .tsxWatch, .entr, .overmind: false
-        }
     }
 }

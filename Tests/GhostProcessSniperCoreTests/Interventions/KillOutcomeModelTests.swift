@@ -266,6 +266,18 @@ final class KillOutcomeObservationTests: XCTestCase {
         XCTAssertFalse(report.graceEndedEarly, "nothing was waited on, so nothing exited early")
         XCTAssertTrue(KillOutcomeObservation(report: report).censored)
     }
+
+    func testForcedDebuggedStopIsNotLearned() async {
+        let table = FakeProcessTable()
+        let debugged = KillProcessLite.fake(pid: 760, name: "cruncher", flags: KillProcessLite.tracedFlag)
+        table.add(debugged, .ignoresTermination)
+
+        let report = await table.killer().kill(plan: .fixture(debugged), forceKillDelay: 5)
+
+        XCTAssertEqual(report.forcedPIDs, [760])
+        XCTAssertTrue(report.graceWatchedNothing)
+        XCTAssertEqual(KillOutcomeObservation(report: report).outcome, .excluded, "a debugger held it, not its own shutdown")
+    }
 }
 
 final class KillOutcomeStoreTests: XCTestCase {

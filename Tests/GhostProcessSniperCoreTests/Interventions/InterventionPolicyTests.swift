@@ -103,4 +103,13 @@ final class InterventionPolicyTests: XCTestCase {
         XCTAssertEqual(PolicyFixture.evaluate(command: "npm install", name: "npm").decisionScore.readiness(hasTargets: true), .caution)
         XCTAssertEqual(PolicyFixture.evaluate(command: "cruncher", name: "cruncher").decisionScore.readiness(hasTargets: false), .locked)
     }
+
+    func testScoreClampsOnlyWhatItShows() {
+        let caution = KillDecisionFactor(kind: .whyWait, title: "Tree drift", detail: "", weight: -12)
+        let score = KillDecisionScore(value: -20, confidence: 0.5, factors: [caution])
+        XCTAssertEqual(score.value, 0)
+        XCTAssertEqual(score.removing { $0.title == "Tree drift" }.value, 0, "taking a reason back starts from the true score, -20")
+        XCTAssertEqual(score.adding([KillDecisionFactor(kind: .whyKill, title: "Likely reclaim", detail: "", weight: 30)]).value, 10)
+        XCTAssertEqual(KillDecisionScore(value: 130, confidence: 2, factors: []).value, 100)
+    }
 }

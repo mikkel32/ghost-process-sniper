@@ -80,17 +80,25 @@ public struct KillDecisionFactor: Identifiable, Codable, Equatable, Sendable {
 }
 
 public struct KillDecisionScore: Codable, Equatable, Sendable {
-    public let value: Double
+    /// Unclamped, so taking a reason back restores the true score; only the
+    /// shown `value` is held to 0...100.
+    private let unclamped: Double
     public let confidence: Double
     public let factors: [KillDecisionFactor]
 
     public static let empty = KillDecisionScore(value: 0, confidence: 0, factors: [])
 
+    private enum CodingKeys: String, CodingKey {
+        case unclamped = "value", confidence, factors
+    }
+
     public init(value: Double, confidence: Double, factors: [KillDecisionFactor]) {
-        self.value = min(100, max(0, value))
+        self.unclamped = value
         self.confidence = min(1, max(0, confidence))
         self.factors = factors
     }
+
+    public var value: Double { min(100, max(0, unclamped)) }
 
     public var whyKill: [KillDecisionFactor] {
         factors.filter { $0.kind == .whyKill }
@@ -103,14 +111,14 @@ public struct KillDecisionScore: Codable, Equatable, Sendable {
     /// The same score with more reasons, their weights applied.
     func adding(_ extra: [KillDecisionFactor]) -> KillDecisionScore {
         guard !extra.isEmpty else { return self }
-        return KillDecisionScore(value: value + extra.reduce(0) { $0 + $1.weight }, confidence: confidence, factors: factors + extra)
+        return KillDecisionScore(value: unclamped + extra.reduce(0) { $0 + $1.weight }, confidence: confidence, factors: factors + extra)
     }
 
     /// The same score without some reasons, their weights taken back.
     func removing(where isRemoved: (KillDecisionFactor) -> Bool) -> KillDecisionScore {
         let removed = factors.filter(isRemoved)
         guard !removed.isEmpty else { return self }
-        return KillDecisionScore(value: value - removed.reduce(0) { $0 + $1.weight }, confidence: confidence,
+        return KillDecisionScore(value: unclamped - removed.reduce(0) { $0 + $1.weight }, confidence: confidence,
                                  factors: factors.filter { !isRemoved($0) })
     }
 

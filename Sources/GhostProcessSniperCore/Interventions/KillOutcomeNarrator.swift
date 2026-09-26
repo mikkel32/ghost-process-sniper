@@ -42,9 +42,13 @@ public struct KillOutcomeNarrator: Sendable {
         }
         if !report.respawnedPIDs.isEmpty {
             let by = report.respawnedBy ?? "a supervisor"
-            let advice = report.respawnedBy == "launchd"
-                ? "Quit the app or disable the login item that owns it."
-                : "Stop \(report.respawnedBy ?? "the supervisor") instead."
+            let advice = if let job = report.launchdBootout?.job ?? report.launchdJob {
+                "Run \(job.keepStoppedCommand) to keep it stopped."
+            } else if report.respawnedBy == "launchd" {
+                "Quit the app or disable the login item that owns it."
+            } else {
+                "Stop \(report.respawnedBy ?? "the supervisor") instead."
+            }
             return ("Stopped \(name), but \(by) started it again (\(Self.pidList(report.respawnedPIDs))).", advice)
         }
         let survivors = Self.targets(in: report, state: .survived)
@@ -58,8 +62,13 @@ public struct KillOutcomeNarrator: Sendable {
                 return ("\(running) \(verb) still running.",
                         "It may be waiting on you, such as a save prompt; force-stop only if you are sure.")
             }
-            let forced = !report.forcedPIDs.isEmpty ? ", even after a force stop" : ""
-            return ("\(running) \(verb) still running\(forced).", nil)
+            guard !report.forcedPIDs.isEmpty else {
+                return ("\(running) \(verb) still running.", "Open a new preview to force-stop what is left.")
+            }
+            // A process finishing its exit in the kernel has its own fact.
+            let stuck = Set(report.survivorPIDs).isSubset(of: report.stuckExitingPIDs)
+            return ("\(running) \(verb) still running, even after a force stop.",
+                    stuck ? nil : "If anything is still running in a minute, open a new preview to try again.")
         }
         let stopped = Self.targets(in: report, state: .terminated) + Self.targets(in: report, state: .forceKilled)
         if report.partiallySucceeded {
