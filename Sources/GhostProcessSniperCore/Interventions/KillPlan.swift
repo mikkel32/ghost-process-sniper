@@ -19,6 +19,9 @@ public struct KillPlan: Equatable, Sendable {
     /// Outcome posteriors per strategy, for this family and its kind, so a
     /// strategy is only tuned by its own history.
     public let strategyCalibrations: KillOutcomeHistory
+    /// Whether confirming boots the root's launchd job out instead of
+    /// signalling a process launchd would restart.
+    public let launchdStop: KillLaunchdStop
 
     public init(
         rootIdentity: ProcessIdentity,
@@ -34,7 +37,8 @@ public struct KillPlan: Equatable, Sendable {
         approvalExpiresAt: Date? = nil,
         approvedStrategy: KillStrategy? = nil,
         workload: KillWorkloadProfile? = nil,
-        strategyCalibrations: KillOutcomeHistory = .empty
+        strategyCalibrations: KillOutcomeHistory = .empty,
+        launchdStop: KillLaunchdStop = .none
     ) {
         self.rootIdentity = rootIdentity
         self.targetIdentities = targetIdentities
@@ -50,14 +54,31 @@ public struct KillPlan: Equatable, Sendable {
         self.approvedStrategy = approvedStrategy
         self.workload = workload
         self.strategyCalibrations = strategyCalibrations
+        self.launchdStop = launchdStop
     }
 
-    public func binding(to identities: [ProcessIdentity], expiresAt: Date, strategy: KillStrategy? = nil) -> KillPlan {
+    public func binding(
+        to identities: [ProcessIdentity],
+        expiresAt: Date,
+        strategy: KillStrategy? = nil,
+        launchdStop: KillLaunchdStop = .none
+    ) -> KillPlan {
         KillPlan(rootIdentity: rootIdentity, targetIdentities: targetIdentities, protectedPIDs: protectedPIDs,
                  displayName: displayName, gracefulSignal: gracefulSignal, scope: scope,
                  createdAt: createdAt, familyMetadata: familyMetadata, killHistory: killHistory,
                  approvedIdentities: Set(identities), approvalExpiresAt: expiresAt,
-                 approvedStrategy: strategy, workload: workload, strategyCalibrations: strategyCalibrations)
+                 approvedStrategy: strategy, workload: workload, strategyCalibrations: strategyCalibrations,
+                 launchdStop: launchdStop)
+    }
+
+    /// The same plan with the root's launchd job attached to its workload.
+    public func withLaunchdJob(_ job: LaunchdJob) -> KillPlan {
+        KillPlan(rootIdentity: rootIdentity, targetIdentities: targetIdentities, protectedPIDs: protectedPIDs,
+                 displayName: displayName, gracefulSignal: gracefulSignal, scope: scope,
+                 createdAt: createdAt, familyMetadata: familyMetadata, killHistory: killHistory,
+                 approvedIdentities: approvedIdentities, approvalExpiresAt: approvalExpiresAt,
+                 approvedStrategy: approvedStrategy, workload: workload?.withLaunchdJob(job),
+                 strategyCalibrations: strategyCalibrations, launchdStop: launchdStop)
     }
 
     public func targetingOnly(_ process: ProcessMetrics) -> KillPlan {

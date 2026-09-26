@@ -137,7 +137,8 @@ struct KillPreflightBuilder: Sendable {
             watcherAvailable: !targets.isEmpty && usesDarwinProcessNamespace,
             arenaStats: arena.stats,
             riskAssessment: policy.risk,
-            alternatives: advisor.alternatives(plan: plan, arena: arena, targets: targets, risk: policy.risk, currentUserID: currentUserID)
+            alternatives: advisor.alternatives(plan: plan, arena: arena, targets: targets, risk: policy.risk, currentUserID: currentUserID),
+            launchdJob: plan.workload?.launchdJob
         )
         return KillPreflight(preview: preview, targets: targets, locked: locked, stale: stale, recycled: recycled)
     }

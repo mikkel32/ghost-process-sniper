@@ -29,6 +29,8 @@ public struct KillPreview: Equatable, Sendable {
     /// Better stops than this one: the supervisor that restarts it, or only
     /// the helper that holds most of it.
     public let alternatives: [KillAlternative]
+    /// The launchd job that runs the root, when launchd started it.
+    public let launchdJob: LaunchdJob?
 
     public var targetIdentities: [ProcessIdentity] { targets.map(\.identity) }
     public var targetPIDs: [Int32] { targets.map(\.pid) }
@@ -45,6 +47,12 @@ public struct KillPreview: Equatable, Sendable {
     public var recommendedGraceSeconds: TimeInterval { strategyProfile.verificationSchedule.graceSeconds }
     public var verificationPlanText: String { Self.verificationPlanText }
     public var recommendedAlternative: KillAlternative? { alternatives.first(where: \.isRecommended) }
+    /// launchd restarts the root, and the job is known by its live PID, so
+    /// stopping the job itself is the stop that lasts.
+    public var offersLaunchdStop: Bool {
+        guard let launchdJob, launchdJob.keepAlive, launchdJob.pid == rootPID else { return false }
+        return canKill
+    }
 
     public var canKill: Bool {
         !targets.isEmpty && readiness != .locked
@@ -83,7 +91,8 @@ public struct KillPreview: Equatable, Sendable {
         watcherAvailable: Bool = false,
         arenaStats: KillGraphArenaStats = .empty,
         riskAssessment: KillRiskAssessment = .none,
-        alternatives: [KillAlternative] = []
+        alternatives: [KillAlternative] = [],
+        launchdJob: LaunchdJob? = nil
     ) {
         self.displayName = displayName
         self.rootPID = rootPID
@@ -107,5 +116,6 @@ public struct KillPreview: Equatable, Sendable {
         self.arenaStats = arenaStats
         self.riskAssessment = riskAssessment
         self.alternatives = alternatives
+        self.launchdJob = launchdJob
     }
 }

@@ -40,6 +40,8 @@ public struct KillReport: Equatable, Sendable {
     /// target exited (rather than running out): the family's exit time.
     public var graceWaitedSeconds: TimeInterval = 0
     public var graceEndedEarly = false
+    /// The launchd job booted out instead of signalling the root.
+    public var launchdBootout: LaunchdBootout?
 
     public var partiallySucceeded: Bool {
         !gracefulPIDs.isEmpty || !forcedPIDs.isEmpty
@@ -105,6 +107,7 @@ public struct KillReport: Equatable, Sendable {
             "Signal waves: \(reactorReport.signalWaves.count), arena reuse \(reactorReport.arenaReuseCount)",
             "Calibrated reclaim: \(RadarFormat.bytes(calibratedReclaimBytes))",
             "Force skipped: \(skipForceRequested ? "yes" : "no")",
+            "launchd: \(launchdBootout.map { "\($0.accepted ? "booted out" : "bootout failed (\($0.status))") \($0.job.domainTarget)\($0.disabled ? ", disabled" : "")" } ?? "not used")",
             "Respawned: \(respawnedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))\(respawnedBy.map { " by \($0)" } ?? "")",
             "Graceful: \(gracefulPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Forced: \(forcedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",

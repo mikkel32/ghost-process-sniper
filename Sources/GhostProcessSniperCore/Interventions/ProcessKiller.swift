@@ -7,6 +7,7 @@ public final class ProcessKiller: Sendable {
     let currentUserID: UInt32
     let sleeper: @Sendable (UInt64) async -> Void
     let outcomeClassifier = KillOutcomeClassifier()
+    let launchdResolver: LaunchdJobResolver?
     private let reclaimEstimator = KillReclaimEstimator()
     private let preflightBuilder: KillPreflightBuilder
 
@@ -17,7 +18,8 @@ public final class ProcessKiller: Sendable {
         currentUserID: UInt32 = UInt32(geteuid()),
         sleeper: @escaping @Sendable (UInt64) async -> Void = { nanoseconds in
             try? await Task.sleep(nanoseconds: nanoseconds)
-        }
+        },
+        launchdResolver: LaunchdJobResolver? = nil
     ) {
         if let snapshotProvider {
             self.snapshotProvider = snapshotProvider
@@ -33,6 +35,9 @@ public final class ProcessKiller: Sendable {
             usesDarwinProcessNamespace: signaler.usesDarwinProcessNamespace
         )
         self.sleeper = sleeper
+        // Fakes run no launchctl unless tests pass their own.
+        let native = signaler.usesDarwinProcessNamespace
+        self.launchdResolver = launchdResolver ?? (native ? LaunchdJobResolver(userID: currentUserID) : nil)
     }
 
     public func preview(plan: KillPlan, forceKillDelay: TimeInterval = 2) async -> KillPreview {
@@ -48,6 +53,7 @@ public final class ProcessKiller: Sendable {
         snapshotPolicy: KillSnapshotPolicy,
         profile: KillEscalationProfile
     ) async -> KillPreview {
+        let plan = await withLaunchdJob(plan)
         do {
             let snapshot = try await snapshotProvider.snapshot(
                 request: KillSnapshotRequest(plan: plan, policy: snapshotPolicy)
@@ -102,6 +108,7 @@ public final class ProcessKiller: Sendable {
         let verificationPlanner = KillVerificationPlanner()
         let graceCoordinator = KillGraceCoordinator()
         var watcherTask: Task<Void, Never>?
+        let plan = await withLaunchdJob(plan)
         do {
             await reactor.beginPhase("confirm-preflight")
             let preflightSnapshot = try await snapshotProvider.snapshot(
@@ -190,6 +197,7 @@ public final class ProcessKiller: Sendable {
             for target in targets {
                 appendEvent(.targetUpdated, operationID: operationID, pid: target.pid, targetState: .ready, message: "Queued \(target.name).", report: &report, eventSink: eventSink)
             }
+            let launchdStoppedPID = await bootOutLaunchdJob(plan: plan, targets: targets, operationID: operationID, report: &report, eventSink: eventSink)
             if gracefulSignal == KillSignalPhase.quitRequest {
                 // A quitting app saves its state and closes its own helpers;
                 // signalling them now would race that. Anything left after
@@ -200,12 +208,12 @@ public final class ProcessKiller: Sendable {
                     asked = await requestQuit(app, operationID: operationID, report: &report, eventSink: eventSink)
                 }
                 if !asked {
-                    for target in targets {
+                    for target in targets where target.pid != launchdStoppedPID {
                         send(SIGTERM, to: target, stage: "graceful", operationID: operationID, report: &report, eventSink: eventSink)
                     }
                 }
             } else {
-                for target in targets {
+                for target in targets where target.pid != launchdStoppedPID {
                     send(gracefulSignal, to: target, stage: "graceful", operationID: operationID, report: &report, eventSink: eventSink)
                 }
             }
