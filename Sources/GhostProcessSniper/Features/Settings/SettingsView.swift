@@ -3,21 +3,20 @@ import GhostProcessSniperCore
 import SwiftUI
 import UserNotifications
 
+/// The root body reads only `monitor.settings`; live values such as the
+/// performance mode are read by the small views that show them, so a
+/// refresh does not re-evaluate the whole tab host.
 struct SettingsView: View {
     let monitor: ProcessMonitor
 
     @State private var selectedSection: SettingsSection = .protection
     @State private var launchAtLogin = false
     @State private var launchAtLoginError: String?
-    @State private var notificationStatus = "Not checked"
+    @State private var notificationStatus: UNAuthorizationStatus?
 
     var body: some View {
         VStack(spacing: 0) {
-            SettingsHeader(
-                profile: monitor.resolvedThresholdProfile,
-                activePerformanceMode: monitor.performanceMetrics.mode,
-                familyCount: monitor.summary.familyCount
-            )
+            SettingsHeader(monitor: monitor)
 
             Divider()
 
@@ -30,6 +29,7 @@ struct SettingsView: View {
                     AlertsSettingsTab(
                         monitor: monitor,
                         notificationStatus: notificationStatus,
+                        notificationsAvailable: notificationCenterAvailable,
                         requestNotifications: { await requestNotifications() },
                         openNotificationSettings: openNotificationSettings
                     )
@@ -60,7 +60,6 @@ struct SettingsView: View {
             )
         }
         .task {
-            launchAtLogin = LaunchAtLoginController.isEnabled
             await refreshNotificationStatus()
         }
         .onChange(of: monitor.settings) { _, _ in
@@ -82,20 +81,9 @@ struct SettingsView: View {
 
     private func refreshNotificationStatus() async {
         guard notificationCenterAvailable else {
-            notificationStatus = "Unavailable in unbundled build"
             return
         }
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        await MainActor.run {
-            notificationStatus = switch settings.authorizationStatus {
-            case .authorized: "Allowed"
-            case .denied: "Denied"
-            case .notDetermined: "Not asked"
-            case .provisional: "Provisional"
-            case .ephemeral: "Ephemeral"
-            @unknown default: "Unknown"
-            }
-        }
+        notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
     private func openNotificationSettings() {
@@ -114,17 +102,16 @@ private enum SettingsSection: String, Hashable {
 }
 
 private struct SettingsHeader: View {
-    let profile: ResolvedThresholdProfile
-    let activePerformanceMode: RadarPerformanceMode
-    let familyCount: Int
+    let monitor: ProcessMonitor
 
     var body: some View {
+        let profile = monitor.resolvedThresholdProfile
         HStack(spacing: 14) {
             RadarBrandMark(level: .quiet, size: 46)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("GHOST PROCESS SNIPER")
-                    .font(.system(size: 9, weight: .black))
+                    .font(.caption2.weight(.bold))
                     .tracking(1.25)
                     .foregroundStyle(RadarTheme.brand)
                 Text(profile.title)
@@ -142,7 +129,7 @@ private struct SettingsHeader: View {
                     systemImage: profile.isAdaptive ? "wand.and.stars" : "slider.horizontal.3",
                     color: profile.isAdaptive ? RadarTheme.brand : .orange
                 )
-                Text("\(familyCount) families · \(activePerformanceMode.label)")
+                Text("\(monitor.summary.familyCount) families · \(monitor.performanceMetrics.mode.label)")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
             }

@@ -23,23 +23,7 @@ struct PerformanceSettingsTab: View {
                 }
                 .toggleStyle(.switch)
 
-                HStack(spacing: 10) {
-                    SettingsMetricTile(
-                        title: "Active mode",
-                        value: monitor.performanceMetrics.mode.label,
-                        systemImage: monitor.performanceMetrics.mode.systemImage
-                    )
-                    SettingsMetricTile(
-                        title: "Next sample",
-                        value: monitor.engineDiagnostics.nextRefreshText,
-                        systemImage: "clock.arrow.2.circlepath"
-                    )
-                    SettingsMetricTile(
-                        title: "Last refresh",
-                        value: monitor.engineDiagnostics.refreshCostText,
-                        systemImage: "timer"
-                    )
-                }
+                LiveEngineTiles(monitor: monitor)
 
                 if !monitor.settings.adaptivePerformance {
                     Divider()
@@ -62,32 +46,67 @@ struct PerformanceSettingsTab: View {
                 }
             }
 
-            SettingsCard(
-                title: "Engine health",
-                subtitle: monitor.engineDiagnostics.statusLine,
-                systemImage: "stethoscope",
-                accent: .teal
-            ) {
-                HStack(spacing: 10) {
-                    SettingsMetricTile(title: "Average", value: monitor.engineDiagnostics.averageCostText, systemImage: "chart.bar")
-                    SettingsMetricTile(title: "Pressure", value: monitor.engineDiagnostics.pressureText, systemImage: "thermometer.medium")
-                    SettingsMetricTile(title: "Backlog", value: monitor.engineDiagnostics.storeBacklogText, systemImage: "tray.full")
-                }
+            EngineHealthCard(monitor: monitor)
+        }
+    }
+}
 
-                DisclosureGroup("Technical diagnostics") {
-                    VStack(spacing: 7) {
-                        SettingsDiagnosticRow("Forensics", monitor.engineDiagnostics.forensicsText)
-                        SettingsDiagnosticRow("Scanner lanes", monitor.engineDiagnostics.scannerLaneText)
-                        SettingsDiagnosticRow("Deadline", monitor.engineDiagnostics.deadlineText)
-                        SettingsDiagnosticRow("Probe cost", monitor.engineDiagnostics.scannerCostText)
-                        SettingsDiagnosticRow("Smoothness", monitor.engineDiagnostics.smoothnessText)
-                        SettingsDiagnosticRow("Cache", monitor.engineDiagnostics.cacheText)
-                        SettingsDiagnosticRow("Store coalescing", monitor.engineDiagnostics.storeCoalescingText)
-                    }
-                    .padding(.top, 6)
-                }
-                .font(.callout)
+/// Live engine readings change every refresh; keeping them out of the tab's
+/// body keeps the Picker and Slider above from re-evaluating each tick.
+private struct LiveEngineTiles: View {
+    let monitor: ProcessMonitor
+
+    var body: some View {
+        HStack(spacing: 10) {
+            SettingsMetricTile(
+                title: "Active mode",
+                value: monitor.performanceMetrics.mode.label,
+                systemImage: monitor.performanceMetrics.mode.systemImage
+            )
+            SettingsMetricTile(
+                title: "Next sample",
+                value: monitor.engineDiagnostics.nextRefreshText,
+                systemImage: "clock.arrow.2.circlepath"
+            )
+            SettingsMetricTile(
+                title: "Last refresh",
+                value: monitor.engineDiagnostics.refreshCostText,
+                systemImage: "timer"
+            )
+        }
+    }
+}
+
+private struct EngineHealthCard: View {
+    let monitor: ProcessMonitor
+
+    var body: some View {
+        let diagnostics = monitor.engineDiagnostics
+        SettingsCard(
+            title: "Engine health",
+            subtitle: diagnostics.statusLine,
+            systemImage: "stethoscope",
+            accent: .teal
+        ) {
+            HStack(spacing: 10) {
+                SettingsMetricTile(title: "Average", value: diagnostics.averageCostText, systemImage: "chart.bar")
+                SettingsMetricTile(title: "Pressure", value: diagnostics.pressureText, systemImage: "thermometer.medium")
+                SettingsMetricTile(title: "Backlog", value: diagnostics.storeBacklogText, systemImage: "tray.full")
             }
+
+            DisclosureGroup("Technical diagnostics") {
+                VStack(spacing: 7) {
+                    SettingsDiagnosticRow("Forensics", diagnostics.forensicsText)
+                    SettingsDiagnosticRow("Scanner lanes", diagnostics.scannerLaneText)
+                    SettingsDiagnosticRow("Deadline", diagnostics.deadlineText)
+                    SettingsDiagnosticRow("Probe cost", diagnostics.scannerCostText)
+                    SettingsDiagnosticRow("Smoothness", diagnostics.smoothnessText)
+                    SettingsDiagnosticRow("Cache", diagnostics.cacheText)
+                    SettingsDiagnosticRow("Store coalescing", diagnostics.storeCoalescingText)
+                }
+                .padding(.top, 6)
+            }
+            .font(.callout)
         }
     }
 }
