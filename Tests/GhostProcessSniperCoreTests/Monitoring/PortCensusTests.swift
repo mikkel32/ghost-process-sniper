@@ -17,6 +17,17 @@ final class PortCensusTests: XCTestCase {
         XCTAssertEqual(plan.portCensusIdentities, Set(dev.members.map(\.identity)))
     }
 
+    func testAPlainAppIsNotDeveloperWork() {
+        let app = classified(RefreshPerformanceFixture.process(9, pid: 4_000), devConfidence: 0.1,
+                             DevClassification(kind: .unknownHeavy, confidence: 0.2, reason: "Heavy or watched process"))
+        let weak = classified(RefreshPerformanceFixture.process(10, pid: 4_100), devConfidence: 0.1,
+                              DevClassification(kind: .nodeServer, confidence: 0.3, reason: "node"))
+        let strong = classified(RefreshPerformanceFixture.process(11, pid: 4_200), devConfidence: 0.1,
+                                DevClassification(kind: .nodeServer, confidence: 0.9, reason: "vite"))
+        let demand = FamilySamplingDemand(families: [app, weak, strong], focusedKeys: [])
+        XCTAssertEqual(demand.devIdentities, [strong.root.identity], "every family is classified; only real evidence counts")
+    }
+
     func testCensusSlotsAreBoundedAndRotate() {
         let dev = devFamily(pids: (0..<10).map { 3_000 + Int32($0) })
         var scheduler = RadarScheduler(pressureProvider: { .nominal })
@@ -93,6 +104,16 @@ final class PortCensusTests: XCTestCase {
         XCTAssertEqual(cache.entry(for: identity)?.isPortsOnly, true)
         XCTAssertNil(cache.negativeEntry(for: identity, now: now, maxAge: 120),
                      "a census must not block the first full read")
+    }
+
+    private func classified(_ root: ProcessMetrics, devConfidence: Double, _ classification: DevClassification) -> ProcessFamily {
+        let base = RefreshPerformanceFixture.family(root)
+        return ProcessFamily(root: base.root, members: base.members,
+            totalResidentMemoryBytes: base.totalResidentMemoryBytes,
+            totalPhysicalFootprintBytes: base.totalPhysicalFootprintBytes,
+            totalCPUPercent: base.totalCPUPercent, devConfidence: devConfidence, commandHints: [],
+            trend: base.trend, score: base.score, ownedIdentities: base.ownedIdentities, protectedPIDs: [],
+            classification: classification)
     }
 
     private func devFamily(pids: [Int32]) -> ProcessFamily {

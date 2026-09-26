@@ -134,8 +134,8 @@ final class RadarSchedulerTests: XCTestCase {
         }
         XCTAssertTrue(tick(.hot, at: 301), "a build hot in bursts still settles after five minutes")
 
-        _ = tick(.quiet, at: 310)
-        _ = tick(.quiet, at: 330)
+        XCTAssertTrue(tick(.quiet, at: 310), "held at Hot, it is still settled")
+        XCTAssertFalse(tick(.quiet, at: 330), "held at Watch nothing is hot, but the clock is kept")
         XCTAssertFalse(tick(.quiet, at: 350), "once the hold has stepped all the way down the family really cooled")
         XCTAssertFalse(tick(.hot, at: 351), "so its five minutes start again")
     }
