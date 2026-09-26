@@ -108,6 +108,9 @@ public actor RadarRefreshWorker {
     private var scheduler = RadarScheduler()
     private var averageRefreshMilliseconds = 0.0
     private var lastIncidentRefreshDate: Date?
+    /// The store flush the incident list was last read after. Incidents are
+    /// only written by a flush, so until the next one a re-read is identical.
+    private var incidentsReadAtFlush: Date?
     private var spikeRing = SpikeRingBuffer(limit: 8)
     private var thermalHistory = ThermalActivityHistory()
 
@@ -226,13 +229,16 @@ public actor RadarRefreshWorker {
 
         do {
             currentStoreHealth = try await store?.enqueue(model: model, settings: request.settings, now: request.now) ?? .empty
-            if shouldRefreshIncidents(
-                summary: summary,
+            if Self.shouldRereadIncidents(
+                lastReadAt: lastIncidentRefreshDate,
+                readAtFlush: incidentsReadAtFlush,
+                storeFlush: currentStoreHealth.lastFlushDate,
                 performanceMode: scheduler.currentPerformanceMode,
                 now: request.now
             ) {
                 currentIncidents = try await store?.recentIncidents() ?? []
                 lastIncidentRefreshDate = request.now
+                incidentsReadAtFlush = currentStoreHealth.lastFlushDate
             }
         } catch {
             storeError = error.localizedDescription
@@ -368,15 +374,16 @@ public actor RadarRefreshWorker {
         )
     }
 
-    private func shouldRefreshIncidents(
-        summary: RadarSummary,
+    /// Re-reads after every flush, and on a slow timer as a safety net for
+    /// anything else that touches the incident table.
+    static func shouldRereadIncidents(
+        lastReadAt: Date?,
+        readAtFlush: Date?,
+        storeFlush: Date?,
         performanceMode: RadarPerformanceMode,
         now: Date
     ) -> Bool {
-        if summary.level >= .hot || summary.hotCount > 0 {
-            return true
-        }
-        guard let lastIncidentRefreshDate else {
+        guard let lastReadAt, storeFlush == readAtFlush else {
             return true
         }
         let quietInterval: TimeInterval = switch performanceMode {
@@ -384,6 +391,6 @@ public actor RadarRefreshWorker {
         case .balanced: 15
         case .realtime: 5
         }
-        return now.timeIntervalSince(lastIncidentRefreshDate) >= quietInterval
+        return now.timeIntervalSince(lastReadAt) >= quietInterval
     }
 }
