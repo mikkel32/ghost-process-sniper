@@ -1,0 +1,24 @@
+{
+  "default_max_lines": 600,
+  "targets": {
+    "GhostProcessSniper": ["Application", "MenuBar", "Shell", "DesignSystem", "Features/Overview", "Features/Thermals", "Features/Processes", "Features/Interventions", "Features/Incidents", "Features/Duplicates", "Features/Rules", "Features/Engine", "Features/Settings"],
+    "GhostProcessSniperCore": ["Domain", "Configuration", "Monitoring", "Sampling", "Thermals", "Intelligence", "Persistence", "Presentation", "Diagnostics", "Interventions", "Cleanup"]
+  },
+  "legacy_line_budgets": {
+    "GhostProcessSniper/Features/Processes/FamilyDetailConsoleView.swift": 888,
+    "GhostProcessSniper/DesignSystem/SharedRadarViews.swift": 846,
+    "GhostProcessSniper/Features/Overview/RadarOverviewView.swift": 839,
+    "GhostProcessSniper/Features/Interventions/KillPreviewSheet.swift": 715,
+    "GhostProcessSniperCore/Persistence/RadarStore.swift": 1591,
+    "GhostProcessSniperCore/Interventions/ProcessKiller.swift": 1263,
+    "GhostProcessSniperCore/Interventions/KillModels.swift": 1073,
+    "GhostProcessSniperCore/Sampling/ProcessSampler.swift": 920,
+    "GhostProcessSniperCore/Interventions/KillInterventionModels.swift": 989,
+    "GhostProcessSniperCore/Intelligence/ProcessFamilyBuilder.swift": 855,
+    "GhostProcessSniperCore/Monitoring/ProcessMonitor.swift": 790,
+    "GhostProcessSniperCore/Domain/ScannerModels.swift": 782,
+    "GhostProcessSniperCore/Configuration/SettingsPerformanceModels.swift": 771,
+    "GhostProcessSniperCore/Intelligence/ForecastModels.swift": 767,
+    "GhostProcessSniperCore/Monitoring/RadarEngine.swift": 621
+  }
+}

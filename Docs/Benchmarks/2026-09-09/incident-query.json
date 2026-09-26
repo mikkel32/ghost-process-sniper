@@ -1,0 +1,38 @@
+{
+  "rows": 120000,
+  "signatures_queried": 400,
+  "sqlite_version": "3.50.4",
+  "before": {
+    "milliseconds": [
+      24.657625,
+      24.097416,
+      23.630167,
+      25.396791,
+      26.562292,
+      24.064125,
+      24.585584
+    ],
+    "median_ms": 24.585584,
+    "approximate_vm_steps": 441000,
+    "query_plan": [
+      "SEARCH incidents USING INDEX incidents_signature_active (signature_id=?)"
+    ]
+  },
+  "after": {
+    "milliseconds": [
+      2.064792,
+      2.281792,
+      2.159166,
+      2.071959,
+      2.06,
+      2.130041,
+      2.072708
+    ],
+    "median_ms": 2.072708,
+    "approximate_vm_steps": 202000,
+    "query_plan": [
+      "SEARCH incidents USING COVERING INDEX incidents_signature_started (signature_id=? AND started_at>?)"
+    ]
+  },
+  "identical_results": true
+}

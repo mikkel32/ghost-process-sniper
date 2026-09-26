@@ -9,3 +9,8 @@ DerivedData/
 *.tmp
 *.log
 logs/
+
+# Python infrastructure checks
+__pycache__/
+*.pyc
+*.pyo

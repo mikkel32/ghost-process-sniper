@@ -4,129 +4,135 @@ import GhostProcessSniperCore
 
 @main
 struct CoreChecks {
+    @MainActor
     static func main() async throws {
-        try await nativeSamplerSeesCurrentProcess()
-        try await nativeKillSnapshotProviderUsesLitePath()
-        try await nativeSamplerDefersForensicsWhenPlanRequestsIt()
-        try await nativeSamplerUsesBSDFirstCheapGraph()
-        try classifierScoresDevProcesses()
-        try classifierProducesProcessKinds()
-        try duplicateDetectorCapturesSmallSameUserProcesses()
-        try duplicateDetectorIgnoresSingletonsAndSystemBundles()
-        try duplicateDetectorSeparatesIndependentRootsFromInternalHelpers()
-        try familyBuilderGroupsElectronStyleFamilies()
-        try familyBuilderKeepsRadarUsefulInDevMode()
-        try familyBuilderPromotesGenericHardwareOffenders()
-        try familyBuilderSurfacesGPUHardwareSignals()
-        try ghostScoreInfersTypedComponents()
-        try triageViewModelsFilterAndSort()
-        try incidentQueryFiltersAndSorts()
-        try ruleDraftRejectsDuplicates()
-        try radarCommandRouterRespectsSelection()
-        try radarCommandCoordinatorNavigatesFamilies()
-        try consoleSnapshotPrecomputesStableRows()
-        try consoleDerivedSnapshotCachesRows()
-        try compactDefaultsAndEngineIsolationBehave()
-        try consoleSnapshotSurfacesPredictiveQueues()
-        try ruleMatchPreviewCountsLiveFamilies()
-        try trendWindowComputesLeakVelocity()
-        try riskForecasterPredictsETAAndState()
-        try riskForecasterSuppressesQuietNoise()
-        try riskForecasterDetectsStaleAndRecurringFamilies()
-        try riskForecasterDetectsLeakAcceleration()
-        try trendWindowRegressionResistsEndpointSpikes()
-        try riskForecasterDiscountsNoisyImminentForecasts()
-        try memoryPatternAnalyzerClassifiesShapes()
-        try riskForecasterTreatsSawtoothAsChurn()
-        try systemPressureBoostsLargeFamilies()
-        try familyVerdictSynthesizesJudgment()
-        try riskForecasterRequiresSustainedCPUEvidence()
-        try startupGraceDelaysLeakCalls()
-        try decliningFamiliesEaseOff()
-        try selfUsageMonitorMeasuresOwnCost()
-        try scannerDeadlineAndCachesBehave()
-        try scannerHealthFeedsDiagnostics()
-        try gpuUsageTrackerComputesDeltaPercent()
-        try spikeRingBufferBoundsReports()
-        try samplerExecutionPlanScalesAndCounts()
-        try radarPublishPayloadSkipsUnchangedContentRebuild()
-        try consoleDerivedSnapshotCacheReadsArePure()
-        try menuBarStatusPresentationIsIconOnlyAndCompact()
-        try menuBarPresentationKeepsDiagnosticsOutOfTitle()
-        try await refreshGateCoalescesOverlappingRequests()
-        try await radarRefreshWorkerPublishesStableOutcome()
-        try radarSchedulerAdaptsCadence()
-        try radarSchedulerFocusesSelectedFamilies()
-        try radarPipelineDiffsAndHoldsLevels()
-        try familyScoringCacheReusesUnchangedFamilies()
-        try await MainActor.run {
-            try monitorPublishesRadarSummary()
+        var failures: [String] = []
+        var completed = 0
+        func run(_ name: String, _ action: @MainActor () async throws -> Void) async {
+            do { try await action() } catch {
+                let failure = "\(name): \(error)"
+                failures.append(failure)
+                print("FAILED: " + failure)
+            }
+            completed += 1
         }
-        try await MainActor.run {
-            try monitorPublishedStateObserversCanBeRemoved()
+        await run("nativeSamplerSeesCurrentProcess") { try await nativeSamplerSeesCurrentProcess() }
+        await run("nativeKillSnapshotProviderUsesLitePath") { try await nativeKillSnapshotProviderUsesLitePath() }
+        await run("nativeSamplerDefersForensicsWhenPlanRequestsIt") { try await nativeSamplerDefersForensicsWhenPlanRequestsIt() }
+        await run("nativeSamplerUsesBSDFirstCheapGraph") { try await nativeSamplerUsesBSDFirstCheapGraph() }
+        await run("classifierScoresDevProcesses") { try classifierScoresDevProcesses() }
+        await run("classifierProducesProcessKinds") { try classifierProducesProcessKinds() }
+        await run("duplicateDetectorCapturesSmallSameUserProcesses") { try duplicateDetectorCapturesSmallSameUserProcesses() }
+        await run("duplicateDetectorIgnoresSingletonsAndSystemBundles") { try duplicateDetectorIgnoresSingletonsAndSystemBundles() }
+        await run("duplicateDetectorSeparatesIndependentRootsFromInternalHelpers") { try duplicateDetectorSeparatesIndependentRootsFromInternalHelpers() }
+        await run("familyBuilderGroupsElectronStyleFamilies") { try familyBuilderGroupsElectronStyleFamilies() }
+        await run("familyBuilderKeepsRadarUsefulInDevMode") { try familyBuilderKeepsRadarUsefulInDevMode() }
+        await run("familyBuilderPromotesGenericHardwareOffenders") { try familyBuilderPromotesGenericHardwareOffenders() }
+        await run("familyBuilderSurfacesGPUHardwareSignals") { try familyBuilderSurfacesGPUHardwareSignals() }
+        await run("ghostScoreInfersTypedComponents") { try ghostScoreInfersTypedComponents() }
+        await run("triageViewModelsFilterAndSort") { try triageViewModelsFilterAndSort() }
+        await run("incidentQueryFiltersAndSorts") { try incidentQueryFiltersAndSorts() }
+        await run("ruleDraftRejectsDuplicates") { try ruleDraftRejectsDuplicates() }
+        await run("radarCommandRouterRespectsSelection") { try radarCommandRouterRespectsSelection() }
+        await run("radarCommandCoordinatorNavigatesFamilies") { try radarCommandCoordinatorNavigatesFamilies() }
+        await run("consoleSnapshotPrecomputesStableRows") { try consoleSnapshotPrecomputesStableRows() }
+        await run("consoleDerivedSnapshotCachesRows") { try consoleDerivedSnapshotCachesRows() }
+        await run("compactDefaultsAndEngineIsolationBehave") { try compactDefaultsAndEngineIsolationBehave() }
+        await run("consoleSnapshotSurfacesPredictiveQueues") { try consoleSnapshotSurfacesPredictiveQueues() }
+        await run("ruleMatchPreviewCountsLiveFamilies") { try ruleMatchPreviewCountsLiveFamilies() }
+        await run("trendWindowComputesLeakVelocity") { try trendWindowComputesLeakVelocity() }
+        await run("riskForecasterPredictsETAAndState") { try riskForecasterPredictsETAAndState() }
+        await run("riskForecasterSuppressesQuietNoise") { try riskForecasterSuppressesQuietNoise() }
+        await run("riskForecasterDetectsStaleAndRecurringFamilies") { try riskForecasterDetectsStaleAndRecurringFamilies() }
+        await run("riskForecasterDetectsLeakAcceleration") { try riskForecasterDetectsLeakAcceleration() }
+        await run("trendWindowRegressionResistsEndpointSpikes") { try trendWindowRegressionResistsEndpointSpikes() }
+        await run("riskForecasterDiscountsNoisyImminentForecasts") { try riskForecasterDiscountsNoisyImminentForecasts() }
+        await run("memoryPatternAnalyzerClassifiesShapes") { try memoryPatternAnalyzerClassifiesShapes() }
+        await run("riskForecasterTreatsSawtoothAsChurn") { try riskForecasterTreatsSawtoothAsChurn() }
+        await run("systemPressureBoostsLargeFamilies") { try systemPressureBoostsLargeFamilies() }
+        await run("familyVerdictSynthesizesJudgment") { try familyVerdictSynthesizesJudgment() }
+        await run("riskForecasterRequiresSustainedCPUEvidence") { try riskForecasterRequiresSustainedCPUEvidence() }
+        await run("startupGraceDelaysLeakCalls") { try startupGraceDelaysLeakCalls() }
+        await run("decliningFamiliesEaseOff") { try decliningFamiliesEaseOff() }
+        await run("selfUsageMonitorMeasuresOwnCost") { try selfUsageMonitorMeasuresOwnCost() }
+        await run("scannerDeadlineAndCachesBehave") { try scannerDeadlineAndCachesBehave() }
+        await run("scannerHealthFeedsDiagnostics") { try scannerHealthFeedsDiagnostics() }
+        await run("gpuUsageTrackerComputesDeltaPercent") { try gpuUsageTrackerComputesDeltaPercent() }
+        await run("spikeRingBufferBoundsReports") { try spikeRingBufferBoundsReports() }
+        await run("samplerExecutionPlanScalesAndCounts") { try samplerExecutionPlanScalesAndCounts() }
+        await run("radarPublishPayloadSkipsUnchangedContentRebuild") { try radarPublishPayloadSkipsUnchangedContentRebuild() }
+        await run("consoleDerivedSnapshotCacheReadsArePure") { try consoleDerivedSnapshotCacheReadsArePure() }
+        await run("menuBarStatusPresentationIsIconOnlyAndCompact") { try menuBarStatusPresentationIsIconOnlyAndCompact() }
+        await run("menuBarPresentationKeepsDiagnosticsOutOfTitle") { try menuBarPresentationKeepsDiagnosticsOutOfTitle() }
+        await run("refreshGateCoalescesOverlappingRequests") { try await refreshGateCoalescesOverlappingRequests() }
+        await run("radarRefreshWorkerPublishesStableOutcome") { try await radarRefreshWorkerPublishesStableOutcome() }
+        await run("radarSchedulerAdaptsCadence") { try radarSchedulerAdaptsCadence() }
+        await run("radarSchedulerFocusesSelectedFamilies") { try radarSchedulerFocusesSelectedFamilies() }
+        await run("radarPipelineDiffsAndHoldsLevels") { try radarPipelineDiffsAndHoldsLevels() }
+        await run("familyScoringCacheReusesUnchangedFamilies") { try familyScoringCacheReusesUnchangedFamilies() }
+        await run("monitorPublishesRadarSummary") { try monitorPublishesRadarSummary() }
+        await run("monitorPublishedStateObserversCanBeRemoved") { try monitorPublishedStateObserversCanBeRemoved() }
+        await run("monitorDiagnosticsOnlyPublishKeepsViewModelStable") { try monitorDiagnosticsOnlyPublishKeepsViewModelStable() }
+        await run("monitorPublishObserversCanMutateRegistrationDuringCallback") { try monitorPublishObserversCanMutateRegistrationDuringCallback() }
+        await run("radarStorePersistsSettingsRulesAndIncidents") { try await radarStorePersistsSettingsRulesAndIncidents() }
+        await run("radarStoreQueriesIncidentsAndTogglesRules") { try await radarStoreQueriesIncidentsAndTogglesRules() }
+        await run("radarStorePersistsForecastSnapshots") { try await radarStorePersistsForecastSnapshots() }
+        await run("radarStoreCoalescesRecommendationHistory") { try await radarStoreCoalescesRecommendationHistory() }
+        await run("monitorDebouncesSettingsPersistence") { try await monitorDebouncesSettingsPersistence() }
+        await run("radarStoreBatchesQueuedWrites") { try await radarStoreBatchesQueuedWrites() }
+        await run("radarStoreSkipsUnchangedSettingsAndBatchesContext") { try await radarStoreSkipsUnchangedSettingsAndBatchesContext() }
+        await run("radarStoreCachesQuietRuleContext") { try await radarStoreCachesQuietRuleContext() }
+        await run("radarIntelligenceEscalatesBaselineAnomalies") { try radarIntelligenceEscalatesBaselineAnomalies() }
+        await run("culpritAnalysisExplainsLikelyCause") { try culpritAnalysisExplainsLikelyCause() }
+        await run("radarRuleEngineMatchesAdvisoryRules") { try radarRuleEngineMatchesAdvisoryRules() }
+        await run("monitorPersistsIncidentsWithInjectedStore") { try await monitorPersistsIncidentsWithInjectedStore() }
+        await run("radarPipelineHandlesLargeSamplesWithinBudget") { try radarPipelineHandlesLargeSamplesWithinBudget() }
+        await run("consoleSnapshotContentRevisionAvoidsGeneratedAtInvalidation") { try consoleSnapshotContentRevisionAvoidsGeneratedAtInvalidation() }
+        await run("radarSnapshotSurfacesDuplicateRowsAndStableRevision") { try radarSnapshotSurfacesDuplicateRowsAndStableRevision() }
+        await run("radarPublishPayloadPrecomputesViewState") { try radarPublishPayloadPrecomputesViewState() }
+        await run("processKillerTerminatesKillPlanInTreeOrder") { try await processKillerTerminatesKillPlanInTreeOrder() }
+        await run("processKillerEscalatesSurvivingIdentities") { try await processKillerEscalatesSurvivingIdentities() }
+        await run("processKillerRejectsRecycledPID") { try await processKillerRejectsRecycledPID() }
+        await run("processKillerDeniesForeignProcesses") { try await processKillerDeniesForeignProcesses() }
+        await run("processKillerPreviewsKillPlan") { try await processKillerPreviewsKillPlan() }
+        await run("processKillerPreviewsNewOwnedDescendants") { try await processKillerPreviewsNewOwnedDescendants() }
+        await run("processKillerSkipsExitedTargetsBeforeEscalation") { try await processKillerSkipsExitedTargetsBeforeEscalation() }
+        await run("processKillerDetectsRecycledPIDDuringEscalation") { try await processKillerDetectsRecycledPIDDuringEscalation() }
+        await run("processKillerUsesCheapSnapshotPolicy") { try await processKillerUsesCheapSnapshotPolicy() }
+        await run("processKillerUsesDedicatedSnapshotProvider") { try await processKillerUsesDedicatedSnapshotProvider() }
+        await run("processKillerSkipForceReportsSurvivors") { try await processKillerSkipForceReportsSurvivors() }
+        await run("processKillerRecordsMultiPassVerification") { try await processKillerRecordsMultiPassVerification() }
+        await run("processKillerClassifiesExitedBeforeSignal") { try await processKillerClassifiesExitedBeforeSignal() }
+        await run("processKillerReportsReclaimEstimate") { try await processKillerReportsReclaimEstimate() }
+        await run("nativeKillSnapshotProviderUsesBSDGraphAndTargetMetrics") { try await nativeKillSnapshotProviderUsesBSDGraphAndTargetMetrics() }
+        await run("killGraphArenaIndexesAndSlicesOwnedFamily") { try killGraphArenaIndexesAndSlicesOwnedFamily() }
+        await run("nativeKillSnapshotProviderReturnsArenaStats") { try await nativeKillSnapshotProviderReturnsArenaStats() }
+        await run("killGraphArenaReusesIndexesAndCachesSlices") { try killGraphArenaReusesIndexesAndCachesSlices() }
+        await run("nativeKillSnapshotProviderSupportsTargetOnlyVerification") { try await nativeKillSnapshotProviderSupportsTargetOnlyVerification() }
+        await run("killPreviewUsesFreshCacheAndConfirmBypassesIt") { try await killPreviewUsesFreshCacheAndConfirmBypassesIt() }
+        await run("nativeKillSnapshotProviderLimitsProcessMetricConversion") { try await nativeKillSnapshotProviderLimitsProcessMetricConversion() }
+        await run("processKillerSurfacesProcessGroupNeighbors") { try await processKillerSurfacesProcessGroupNeighbors() }
+        await run("interventionPolicyEngineSimulatesStrategies") { try interventionPolicyEngineSimulatesStrategies() }
+        await run("interventionPolicyEngineAppliesCalibration") { try interventionPolicyEngineAppliesCalibration() }
+        await run("processKillerRecommendsGentleDevServerStrategy") { try await processKillerRecommendsGentleDevServerStrategy() }
+        await run("killHistoryChangesStrategyRecommendation") { try await killHistoryChangesStrategyRecommendation() }
+        await run("processKillerReactorUsesAdaptiveVerification") { try await processKillerReactorUsesAdaptiveVerification() }
+        await run("killGraceCoordinatorEndsEarlyOnExitEvidence") { try await killGraceCoordinatorEndsEarlyOnExitEvidence() }
+        await run("killInterventionReactorRecordsHintsWavesAndModes") { try await killInterventionReactorRecordsHintsWavesAndModes() }
+        await run("processKillerStreamsOperationEventsInOrder") { try await processKillerStreamsOperationEventsInOrder() }
+        await run("processKillerHonorsLiveSkipForceControl") { try await processKillerHonorsLiveSkipForceControl() }
+        await run("killOperationStateMachineRecordsExitEvents") { try await killOperationStateMachineRecordsExitEvents() }
+        await run("killOperationProgressViewModelCoalescesEvents") { try killOperationProgressViewModelCoalescesEvents() }
+        await run("fakeKillPreviewBenchmarksStayBounded") { try await fakeKillPreviewBenchmarksStayBounded() }
+        await run("radarStoreRecordsKillActions") { try await radarStoreRecordsKillActions() }
+        await run("radarStoreRecordsStructuredKillOperations") { try await radarStoreRecordsStructuredKillOperations() }
+        await run("radarStoreRecordsKillEventsAndLearning") { try await radarStoreRecordsKillEventsAndLearning() }
+        await run("radarStoreRecordsInterventionKernelTables") { try await radarStoreRecordsInterventionKernelTables() }
+        await run("radarStoreRecordsKillCalibrationAggregates") { try await radarStoreRecordsKillCalibrationAggregates() }
+        guard failures.isEmpty else {
+            throw CheckFailure(message: "\(failures.count) of \(completed) checks failed: " + failures.joined(separator: "; "))
         }
-        try await MainActor.run {
-            try monitorDiagnosticsOnlyPublishKeepsViewModelStable()
-        }
-        try await MainActor.run {
-            try monitorPublishObserversCanMutateRegistrationDuringCallback()
-        }
-        try await radarStorePersistsSettingsRulesAndIncidents()
-        try await radarStoreQueriesIncidentsAndTogglesRules()
-        try await radarStorePersistsForecastSnapshots()
-        try await radarStoreCoalescesRecommendationHistory()
-        try await monitorDebouncesSettingsPersistence()
-        try await radarStoreBatchesQueuedWrites()
-        try await radarStoreSkipsUnchangedSettingsAndBatchesContext()
-        try await radarStoreCachesQuietRuleContext()
-        try radarIntelligenceEscalatesBaselineAnomalies()
-        try culpritAnalysisExplainsLikelyCause()
-        try radarRuleEngineMatchesAdvisoryRules()
-        try await monitorPersistsIncidentsWithInjectedStore()
-        try radarPipelineHandlesLargeSamplesWithinBudget()
-        try consoleSnapshotContentRevisionAvoidsGeneratedAtInvalidation()
-        try radarSnapshotSurfacesDuplicateRowsAndStableRevision()
-        try radarPublishPayloadPrecomputesViewState()
-        try await processKillerTerminatesKillPlanInTreeOrder()
-        try await processKillerEscalatesSurvivingIdentities()
-        try await processKillerRejectsRecycledPID()
-        try await processKillerDeniesForeignProcesses()
-        try await processKillerPreviewsKillPlan()
-        try await processKillerPreviewsNewOwnedDescendants()
-        try await processKillerSkipsExitedTargetsBeforeEscalation()
-        try await processKillerDetectsRecycledPIDDuringEscalation()
-        try await processKillerUsesCheapSnapshotPolicy()
-        try await processKillerUsesDedicatedSnapshotProvider()
-        try await processKillerSkipForceReportsSurvivors()
-        try await processKillerRecordsMultiPassVerification()
-        try await processKillerClassifiesExitedBeforeSignal()
-        try await processKillerReportsReclaimEstimate()
-        try await nativeKillSnapshotProviderUsesBSDGraphAndTargetMetrics()
-        try killGraphArenaIndexesAndSlicesOwnedFamily()
-        try await nativeKillSnapshotProviderReturnsArenaStats()
-        try killGraphArenaReusesIndexesAndCachesSlices()
-        try await nativeKillSnapshotProviderSupportsTargetOnlyVerification()
-        try await killPreviewUsesFreshCacheAndConfirmBypassesIt()
-        try await nativeKillSnapshotProviderLimitsProcessMetricConversion()
-        try await processKillerSurfacesProcessGroupNeighbors()
-        try interventionPolicyEngineSimulatesStrategies()
-        try interventionPolicyEngineAppliesCalibration()
-        try await processKillerRecommendsGentleDevServerStrategy()
-        try await killHistoryChangesStrategyRecommendation()
-        try await processKillerReactorUsesAdaptiveVerification()
-        try await killGraceCoordinatorEndsEarlyOnExitEvidence()
-        try await killInterventionReactorRecordsHintsWavesAndModes()
-        try await processKillerStreamsOperationEventsInOrder()
-        try await processKillerHonorsLiveSkipForceControl()
-        try await killOperationStateMachineRecordsExitEvents()
-        try killOperationProgressViewModelCoalescesEvents()
-        try await fakeKillPreviewBenchmarksStayBounded()
-        try await radarStoreRecordsKillActions()
-        try await radarStoreRecordsStructuredKillOperations()
-        try await radarStoreRecordsKillEventsAndLearning()
-        try await radarStoreRecordsInterventionKernelTables()
-        try await radarStoreRecordsKillCalibrationAggregates()
-        print("GhostProcessSniperCoreChecks passed")
+        print("GhostProcessSniperCoreChecks passed (\(completed) checks)")
     }
 }
 
@@ -209,9 +215,10 @@ private func nativeSamplerUsesBSDFirstCheapGraph() async throws {
 
     try check(first.stats.bsdReadCount >= first.stats.processCount, "cheap graph scan should read BSD identity for sampled processes")
     try check(first.stats.taskInfoReadCount < max(1, first.stats.bsdReadCount), "quiet scan should avoid all-process task-info sweeps")
-    if first.stats.bsdReadCount < 2_000 {
-        try check(first.stats.pidBufferCopyCount == 0, "small and medium scans should not copy the PID buffer")
-    }
+    // Successful BSD reads can be fewer than enumerated PIDs due to exits,
+    // permissions, or the deadline. Assert against the selected scan strategy.
+    let expectedPIDCopies = first.stats.scannerWorkerCount > 1 ? 1 : 0
+    try check(first.stats.pidBufferCopyCount == expectedPIDCopies, "sequential scans should avoid PID copies; parallel scans should share exactly one snapshot")
     try check(second.stats.scratchpadReuseCount > 0, "sampler should reuse actor-owned scratch buffers")
     try check(second.stats.reusedRecordCount > 0 || second.stats.commandCacheHitCount > 0, "stable quiet refresh should reuse cached process records or telemetry")
 }
@@ -626,8 +633,26 @@ private func consoleSnapshotPrecomputesStableRows() throws {
     try check(snapshot.compact.layoutMode == .compact, "snapshot should build the compact console payload")
     try check(snapshot.compact.allRows.count == 2, "compact snapshot should precompute sidebar rows")
     try check(snapshot.compact.topRiskRows.first?.id == snapshot.families.first?.id, "compact risk queue should match smart-sorted family rows")
-    try check(snapshot.compact.commandCenter.statusText == summary.statusText, "compact command center should reuse stable summary text")
+    try check(snapshot.compact.commandCenter.statusText == "\(summary.hotCount) to review", "compact command center should show the measured review count instead of a raw forecast label")
     try check(snapshot.compact.detailModels[first.familyKey] != nil, "compact snapshot should precompute detail panels")
+
+    let watch = hotFamily(pid: 142, memory: 300_000_000, cpu: 5, score: GhostScore(value: 42, level: .watch, reasons: ["watch"]))
+    let quiet = hotFamily(pid: 143, memory: 100_000_000, cpu: 1, score: GhostScore(value: 8, level: .quiet, reasons: ["quiet"]))
+    let semantic = RadarConsoleSnapshot.build(
+        families: [first, second, watch, quiet],
+        summary: RadarSummary(statusText: "2 hot", level: .hot, familyCount: 4, hotCount: 2, totalMemoryBytes: 2_000_000_000, topFamilyName: "node"),
+        incidents: [],
+        rules: RadarRule.builtIns(settings: .aggressive),
+        metrics: .empty,
+        health: .starting,
+        storeHealth: .empty,
+        storeError: nil,
+        previous: nil,
+        generatedAt: Date(timeIntervalSince1970: 2)
+    )
+    try check(semantic.compact.topRiskRows.count == 2, "risk queue should contain only hot or leaking families")
+    try check(semantic.compact.topRiskRows.allSatisfy { $0.level >= .hot || $0.forecastState >= .leaking }, "risk queue should reject watch-only families")
+    try check(semantic.compact.warmingRows.allSatisfy { $0.level < .hot && $0.forecastState < .leaking }, "risk and warming queues should be mutually exclusive")
 }
 
 private func consoleDerivedSnapshotCachesRows() throws {
@@ -660,6 +685,13 @@ private func consoleDerivedSnapshotCachesRows() throws {
     try check(first.selectedCompactDetail?.familyKey == family.familyKey, "derived snapshot should precompute selected compact detail")
     try check(first.key == second.key && second.cacheHitCount == 1, "derived snapshot cache should preserve key and expose hits")
     try check(first.compactFamilyRows == second.compactFamilyRows, "derived snapshot cache should preserve compact rows")
+
+    var cache = ConsoleDerivedSnapshotCache()
+    _ = cache.update(snapshot: snapshot, incidents: [], state: state)
+    state.focusedSelection = .overview
+    let selectionOnlyUpdate = cache.update(snapshot: snapshot, incidents: [], state: state)
+    try check(cache.missCount == 1 && cache.hitCount == 1, "selection changes should reuse expensive derived projections")
+    try check(selectionOnlyUpdate.selectedPanel == nil, "selection-only cache hits should refresh selected detail in constant time")
 }
 
 private func compactDefaultsAndEngineIsolationBehave() throws {
@@ -728,7 +760,7 @@ private func consoleSnapshotSurfacesPredictiveQueues() throws {
         ),
         score: GhostScore(value: 12, level: .quiet, reasons: ["quiet dev process"])
     )
-    let forecast = FamilyRiskForecaster().forecast(
+    let forecast = forecastWithFreshMeasurements(
         family: base,
         settings: settings,
         now: Date(timeIntervalSince1970: 12_000)
@@ -790,7 +822,7 @@ private func riskForecasterPredictsETAAndState() throws {
         score: GhostScore(value: 18, level: .quiet, reasons: ["dev process warming"])
     )
 
-    let forecast = FamilyRiskForecaster().forecast(
+    let forecast = forecastWithFreshMeasurements(
         family: family,
         settings: settings,
         now: Date(timeIntervalSince1970: 12_500)
@@ -818,7 +850,7 @@ private func riskForecasterSuppressesQuietNoise() throws {
         score: GhostScore(value: 6, level: .quiet, reasons: ["quiet dev process"])
     )
 
-    let forecast = FamilyRiskForecaster().forecast(
+    let forecast = forecastWithFreshMeasurements(
         family: family,
         settings: settings,
         now: Date(timeIntervalSince1970: 13_000)
@@ -838,7 +870,7 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
         trend: .empty,
         score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"])
     )
-    let staleForecast = FamilyRiskForecaster().forecast(
+    let staleForecast = forecastWithFreshMeasurements(
         family: stale,
         settings: .aggressive,
         now: Date(timeIntervalSince1970: 20_000)
@@ -866,29 +898,38 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
         firstSeenAt: Date(timeIntervalSince1970: 1),
         lastSeenAt: Date(timeIntervalSince1970: 2)
     )
-    let recurring = recurringBase.enriched(baseline: baseline, recentIncidentCount: 1)
-    let recurringForecast = FamilyRiskForecaster().forecast(
+    let recurring = recurringBase.enriched(baseline: baseline, recentIncidentCount: 3)
+    let recurringForecast = forecastWithFreshMeasurements(
         family: recurring,
         settings: .aggressive,
         now: Date(timeIntervalSince1970: 20_000)
     )
-    try check(recurringForecast.state == .warming, "recurring families should warm before fixed thresholds")
-    try check(recurringForecast.recurrenceRisk >= 0.8, "recurrence risk should include baseline and recent incidents")
+    try check(recurringForecast.state == .quiet, "historical incidents alone must not escalate currently quiet measurements")
+    try check(recurringForecast.recurrenceRisk >= 0.59 && recurringForecast.recurrenceRisk <= 0.61, "recurrence risk should count distinct recent incidents once")
 }
 
 private func riskForecasterDetectsLeakAcceleration() throws {
+    let base = Date(timeIntervalSince1970: 20_840)
+    let samples = [100, 140, 220, 340, 500, 700].enumerated().map { index, megabytes in
+        TrendSample(
+            date: base.addingTimeInterval(Double(index) * 30),
+            memoryBytes: UInt64(megabytes) * 1_048_576,
+            cpuPercent: 4
+        )
+    }
     let family = forecastFamily(
         pid: 209,
-        memory: 240 * 1_048_576,
+        memory: 700 * 1_048_576,
         cpu: 4,
         trend: TrendMetrics(
             memoryVelocityMegabytesPerMinute: 20,
             cpuSlopePerMinute: 0,
-            memoryPoints: [100, 110, 130, 240].map { Double($0 * 1_048_576) }
+            memoryPoints: samples.map { Double($0.memoryBytes) },
+            samples: samples
         ),
         score: GhostScore(value: 12, level: .quiet, reasons: ["quiet dev process"])
     )
-    let forecast = FamilyRiskForecaster().forecast(
+    let forecast = forecastWithFreshMeasurements(
         family: family,
         settings: .aggressive,
         now: Date(timeIntervalSince1970: 21_000)
@@ -938,12 +979,12 @@ private func riskForecasterDiscountsNoisyImminentForecasts() throws {
         ),
         score: GhostScore(value: 18, level: .quiet, reasons: ["dev process warming"])
     )
-    let noisyForecast = FamilyRiskForecaster().forecast(
+    let noisyForecast = forecastWithFreshMeasurements(
         family: noisy,
         settings: settings,
         now: Date(timeIntervalSince1970: 12_500)
     )
-    try check(noisyForecast.horizon == .soon, "noisy trends should not claim an imminent breach")
+    try check(noisyForecast.horizon == .unknown && noisyForecast.etaSeconds == nil, "unreliable growth must not produce a threshold ETA")
 
     let steady = forecastFamily(
         pid: 211,
@@ -957,7 +998,7 @@ private func riskForecasterDiscountsNoisyImminentForecasts() throws {
         ),
         score: GhostScore(value: 18, level: .quiet, reasons: ["dev process warming"])
     )
-    let steadyForecast = FamilyRiskForecaster().forecast(
+    let steadyForecast = forecastWithFreshMeasurements(
         family: steady,
         settings: settings,
         now: Date(timeIntervalSince1970: 12_500)
@@ -1003,7 +1044,7 @@ private func riskForecasterTreatsSawtoothAsChurn() throws {
         ),
         score: GhostScore(value: 18, level: .quiet, reasons: ["dev process warming"])
     )
-    let forecast = FamilyRiskForecaster().forecast(
+    let forecast = forecastWithFreshMeasurements(
         family: family,
         settings: settings,
         now: Date(timeIntervalSince1970: 12_500)
@@ -1023,13 +1064,13 @@ private func systemPressureBoostsLargeFamilies() throws {
     let intelligence = RadarIntelligence()
     let now = Date(timeIntervalSince1970: 20_000)
     let nominal = intelligence.enrich(
-        family: family,
+        family: freshMeasurements(family, at: now),
         context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []),
         settings: .aggressive,
         now: now
     )
     let pressured = intelligence.enrich(
-        family: family,
+        family: freshMeasurements(family, at: now),
         context: RadarContext(
             baselines: [:],
             recentIncidentCounts: [:],
@@ -1064,7 +1105,7 @@ private func familyVerdictSynthesizesJudgment() throws {
         ),
         score: GhostScore(value: 18, level: .quiet, reasons: ["dev process warming"])
     )
-    let forecast = FamilyRiskForecaster().forecast(
+    let forecast = forecastWithFreshMeasurements(
         family: base,
         settings: settings,
         now: Date(timeIntervalSince1970: 12_500)
@@ -1104,22 +1145,26 @@ private func riskForecasterRequiresSustainedCPUEvidence() throws {
         trend: cpuTrend([3, 96, 4, 3, 4]),
         score: GhostScore(value: 8, level: .quiet, reasons: ["quiet dev process"])
     )
-    let spikyForecast = FamilyRiskForecaster().forecast(family: spiky, settings: .aggressive, now: now)
+    let spikyForecast = forecastWithFreshMeasurements(family: spiky, settings: .aggressive, now: now)
     try check(spikyForecast.state == .quiet, "one CPU spike in the window should not become runaway")
 
-    // Mostly-hot window should read as runaway even while the current
-    // reading has dipped below the threshold.
+    // A mostly-hot window that is still above threshold is sustained.
     let pegged = forecastFamily(
         pid: 231,
         parentPID: 999,
         memory: 200 * 1_048_576,
-        cpu: 70,
-        trend: cpuTrend([85, 90, 88, 86, 70]),
+        cpu: 90,
+        trend: cpuTrend([85, 90, 88, 86, 90]),
         score: GhostScore(value: 8, level: .quiet, reasons: ["quiet dev process"])
     )
-    let peggedForecast = FamilyRiskForecaster().forecast(family: pegged, settings: .aggressive, now: now)
-    try check(peggedForecast.state == .runaway, "a mostly-hot CPU window should be runaway even after a dip")
+    let peggedForecast = forecastWithFreshMeasurements(family: pegged, settings: .aggressive, now: now)
+    try check(peggedForecast.state == .runaway, "a currently hot and mostly-hot CPU window should be runaway")
     try check(peggedForecast.whyNow.contains("CPU held above threshold"), "sustained CPU should be explained")
+
+    let recovered = forecastFamily(pid: 235, parentPID: 999, memory: 200 * 1_048_576, cpu: 4,
+        trend: cpuTrend([90, 90, 90, 90, 4]), score: GhostScore(value: 8, level: .quiet, reasons: []))
+    let recoveredForecast = forecastWithFreshMeasurements(family: recovered, settings: .aggressive, now: now)
+    try check(recoveredForecast.state == .quiet, "old high CPU must not keep a currently recovered process runaway")
 }
 
 private func startupGraceDelaysLeakCalls() throws {
@@ -1140,7 +1185,7 @@ private func startupGraceDelaysLeakCalls() throws {
         trend: trend,
         score: GhostScore(value: 18, level: .quiet, reasons: ["dev process warming"])
     )
-    let freshForecast = FamilyRiskForecaster().forecast(family: fresh, settings: settings, now: now)
+    let freshForecast = forecastWithFreshMeasurements(family: fresh, settings: settings, now: now)
     try check(freshForecast.state == .warming, "a 60-second-old process should get startup grace instead of a leak call")
     try check(freshForecast.whyNow.contains("startup grace"), "grace window should be explained")
 
@@ -1151,7 +1196,7 @@ private func startupGraceDelaysLeakCalls() throws {
         trend: trend,
         score: GhostScore(value: 18, level: .quiet, reasons: ["dev process warming"])
     )
-    let matureForecast = FamilyRiskForecaster().forecast(family: mature, settings: settings, now: now)
+    let matureForecast = forecastWithFreshMeasurements(family: mature, settings: settings, now: now)
     try check(matureForecast.state >= .leaking, "grace must not suppress leaks in long-running processes")
 }
 
@@ -1168,7 +1213,7 @@ private func decliningFamiliesEaseOff() throws {
         ),
         score: GhostScore(value: 30, level: .watch, reasons: ["was elevated"])
     )
-    let forecast = FamilyRiskForecaster().forecast(
+    let forecast = forecastWithFreshMeasurements(
         family: base,
         settings: .aggressive,
         now: Date(timeIntervalSince1970: 12_500)
@@ -1563,7 +1608,7 @@ private func radarRefreshWorkerPublishesStableOutcome() async throws {
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 50_000_000
     let samples = [
-        sample(pid: 560, name: "node", commandLine: "node server.js", memory: 120_000_000, cpu: 45)
+        sample(pid: 560, name: "node", commandLine: "node server.js", memory: 120_000_000, cpu: 45, sampledAt: Date(timeIntervalSince1970: 9_500))
     ]
     let worker = RadarRefreshWorker(
         sampler: FakeSampler(samples: samples),
@@ -1632,8 +1677,8 @@ private func radarPipelineDiffsAndHoldsLevels() throws {
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 100_000_000
     let context = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: RadarRule.builtIns(settings: settings))
-    let hotProcesses = [sample(pid: 910, name: "node", commandLine: "node server.js", memory: 180_000_000, cpu: 90)]
-    let quietProcesses = [sample(pid: 910, name: "node", commandLine: "node server.js", memory: 10_000_000, cpu: 0)]
+    let hotProcesses = [sample(pid: 910, name: "node", commandLine: "node server.js", memory: 180_000_000, cpu: 90, sampledAt: Date(timeIntervalSince1970: 10_000))]
+    let quietProcesses = [sample(pid: 910, name: "node", commandLine: "node server.js", memory: 10_000_000, cpu: 0, sampledAt: Date(timeIntervalSince1970: 10_005))]
 
     let first = pipeline.run(processes: hotProcesses, settings: settings, context: context, now: Date(timeIntervalSince1970: 10_000))
     let second = pipeline.run(processes: quietProcesses, settings: settings, context: context, now: Date(timeIntervalSince1970: 10_005))
@@ -1672,8 +1717,8 @@ private func monitorPublishesRadarSummary() throws {
     )
     monitor.ingest(
         [
-            sample(pid: 300, name: "node", commandLine: "node api.js", memory: 150_000_000),
-            sample(pid: 301, name: "Safari", executablePath: "/Applications/Safari.app/Contents/MacOS/Safari", commandLine: "Safari", memory: 20_000_000)
+            sample(pid: 300, name: "node", commandLine: "node api.js", memory: 150_000_000, sampledAt: Date(timeIntervalSince1970: 3_000)),
+            sample(pid: 301, name: "Safari", executablePath: "/Applications/Safari.app/Contents/MacOS/Safari", commandLine: "Safari", memory: 20_000_000, sampledAt: Date(timeIntervalSince1970: 3_000))
         ],
         now: Date(timeIntervalSince1970: 3_000)
     )
@@ -1868,7 +1913,7 @@ private func radarStorePersistsForecastSnapshots() async throws {
         ),
         score: GhostScore(value: 18, level: .quiet, reasons: ["dev process warming"])
     )
-    let forecast = FamilyRiskForecaster().forecast(
+    let forecast = forecastWithFreshMeasurements(
         family: base,
         settings: settings,
         now: Date(timeIntervalSince1970: 7_600)
@@ -1911,7 +1956,7 @@ private func radarStoreCoalescesRecommendationHistory() async throws {
     )
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 500 * 1_048_576
-    let forecast = FamilyRiskForecaster().forecast(
+    let forecast = forecastWithFreshMeasurements(
         family: base,
         settings: settings,
         now: Date(timeIntervalSince1970: 7_700)
@@ -2041,7 +2086,7 @@ private func radarIntelligenceEscalatesBaselineAnomalies() throws {
     )
 
     let enriched = intelligence.enrich(
-        families: [family],
+        families: [freshMeasurements(family, at: Date(timeIntervalSince1970: 5_000))],
         context: context,
         settings: .aggressive,
         now: Date(timeIntervalSince1970: 5_000)
@@ -2151,7 +2196,7 @@ private func monitorPersistsIncidentsWithInjectedStore() async throws {
     var settings = ThresholdSettings.aggressive
     settings.memoryBytes = 50_000_000
     let monitor = ProcessMonitor(
-        sampler: FakeSampler(samples: [sample(pid: 550, name: "node", commandLine: "node server.js", memory: 120_000_000, cpu: 95)]),
+        sampler: FakeSampler(samples: [sample(pid: 550, name: "node", commandLine: "node server.js", memory: 120_000_000, cpu: 95, sampledAt: Date(timeIntervalSince1970: 6_000))]),
         builder: ProcessFamilyBuilder(currentUserID: 501),
         settings: settings,
         store: store
@@ -2170,19 +2215,19 @@ private func radarPipelineHandlesLargeSamplesWithinBudget() throws {
     settings.radarMode = .heavy
     let context = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: RadarRule.builtIns(settings: settings))
 
-    let twoThousand = syntheticProcesses(count: 2_000)
+    let twoThousand = syntheticProcesses(count: 2_000, sampledAt: Date(timeIntervalSince1970: 8_000))
     let startSmall = Date()
     _ = pipeline.run(processes: twoThousand, settings: settings, context: context, now: Date(timeIntervalSince1970: 8_000))
     let smallMS = Date().timeIntervalSince(startSmall) * 1_000
     try check(smallMS < 1500, "2k-process pipeline should stay within debug budget, got \(Int(smallMS))ms")
  
-    let tenThousand = syntheticProcesses(count: 10_000)
+    let tenThousand = syntheticProcesses(count: 10_000, sampledAt: Date(timeIntervalSince1970: 8_010))
     let startLarge = Date()
     _ = pipeline.run(processes: tenThousand, settings: settings, context: context, now: Date(timeIntervalSince1970: 8_010))
     let largeMS = Date().timeIntervalSince(startLarge) * 1_000
     try check(largeMS < 5_000, "10k-process pipeline should stay within debug budget, got \(Int(largeMS))ms")
  
-    let thirtyThousand = syntheticProcesses(count: 30_000)
+    let thirtyThousand = syntheticProcesses(count: 30_000, sampledAt: Date(timeIntervalSince1970: 8_020))
     let startHuge = Date()
     _ = pipeline.run(processes: thirtyThousand, settings: settings, context: context, now: Date(timeIntervalSince1970: 8_020))
     let hugeMS = Date().timeIntervalSince(startHuge) * 1_000
@@ -3885,7 +3930,7 @@ private func temporaryStoreURL() -> URL {
         .appendingPathComponent("GhostProcessSniper-\(UUID().uuidString).sqlite")
 }
 
-private func syntheticProcesses(count: Int) -> [ProcessMetrics] {
+private func syntheticProcesses(count: Int, sampledAt: Date = Date(timeIntervalSince1970: 1_000)) -> [ProcessMetrics] {
     (0..<count).map { index in
         let isDev = index % 7 == 0
         let name = isDev ? "node" : "worker-\(index)"
@@ -3898,7 +3943,8 @@ private func syntheticProcesses(count: Int) -> [ProcessMetrics] {
             executablePath: isDev ? "/usr/local/bin/node" : "/usr/bin/true",
             commandLine: isDev ? "node server-\(index).js" : "worker-\(index)",
             memory: UInt64(12_000_000 + (index % 97) * 1_000_000),
-            cpu: Double(index % 40)
+            cpu: Double(index % 40),
+            sampledAt: sampledAt
         )
     }
 }
@@ -3913,7 +3959,8 @@ private func sample(
     commandLine: String? = nil,
     memory: UInt64 = 64,
     cpu: Double = 0,
-    gpu: Double = 0
+    gpu: Double = 0,
+    sampledAt: Date = Date(timeIntervalSince1970: 1_000)
 ) -> ProcessMetrics {
     ProcessMetrics(
         identity: ProcessIdentity(pid: pid, startTimeSeconds: start, startTimeMicroseconds: 0),
@@ -3931,6 +3978,35 @@ private func sample(
         totalProcessorSeconds: 0,
         threadCount: 1,
         isSystemProcess: userID == 0,
-        sampledAt: Date(timeIntervalSince1970: 1_000)
+        sampledAt: sampledAt
     )
+}
+
+// Forecast-only fixtures explicitly represent measurements at the test clock.
+// Production stale/missing-sample rejection is tested in PrecisionTelemetryTests.
+private func forecastWithFreshMeasurements(family: ProcessFamily, settings: ThresholdSettings, now: Date) -> RiskForecast {
+    FamilyRiskForecaster().forecast(family: freshMeasurements(family, at: now), settings: settings, now: now)
+}
+
+private func freshMeasurements(_ family: ProcessFamily, at date: Date) -> ProcessFamily {
+    func measured(_ process: ProcessMetrics) -> ProcessMetrics {
+        ProcessMetrics(identity: process.identity, parentPID: process.parentPID, userID: process.userID,
+            ownerName: process.ownerName, name: process.name, executablePath: process.executablePath,
+            commandLine: process.commandLine, residentMemoryBytes: process.residentMemoryBytes,
+            physicalFootprintBytes: process.physicalFootprintBytes, virtualMemoryBytes: process.virtualMemoryBytes,
+            cpuPercent: process.cpuPercent, gpuUsagePercent: process.gpuUsagePercent,
+            totalProcessorSeconds: process.totalProcessorSeconds, threadCount: process.threadCount,
+            isSystemProcess: process.isSystemProcess, sampledAt: date, forensics: process.forensics)
+    }
+    return ProcessFamily(root: measured(family.root), members: family.members.map(measured),
+        totalResidentMemoryBytes: family.totalResidentMemoryBytes,
+        totalPhysicalFootprintBytes: family.totalPhysicalFootprintBytes, totalCPUPercent: family.totalCPUPercent,
+        totalGPUPercent: family.totalGPUPercent, devConfidence: family.devConfidence,
+        commandHints: family.commandHints, trend: family.trend, score: family.score,
+        ownedIdentities: family.ownedIdentities, protectedPIDs: family.protectedPIDs,
+        signature: family.signature, baseline: family.baseline, forensics: family.forensics,
+        suggestions: family.suggestions, alertState: family.alertState,
+        recentIncidentCount: family.recentIncidentCount, forecast: family.forecast,
+        lastScoredAt: date, classification: family.classification, duplicateCluster: family.duplicateCluster,
+        hardwareSignals: family.hardwareSignals)
 }

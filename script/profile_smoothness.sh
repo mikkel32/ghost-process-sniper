@@ -21,7 +21,9 @@ mkdir -p "$LOG_DIR"
 
 PID="$(pgrep -x "$PRODUCT_NAME" | head -n 1 || true)"
 if [[ -z "$PID" ]]; then
-  /usr/bin/open -n "$APP_BUNDLE"
+  # Smoothness regressions live in the console layer tree, not the tiny
+  # menu-bar surface, so launch the real dashboard for representative data.
+  /usr/bin/open -n "$APP_BUNDLE" --args --console
   sleep 1
   PID="$(pgrep -x "$PRODUCT_NAME" | head -n 1 || true)"
 fi
