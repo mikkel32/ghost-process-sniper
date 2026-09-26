@@ -96,6 +96,6 @@ The thermal panel never signals anything. `ThermalStopTarget` resolves the proce
 
 ## Tests
 
-`ThermalActivityTests`, `ThermalActivityHistoryTests`, `ThermalAppInsightTests`, `ThermalDashboardTests`, `ThermalInterpretationTests`, `ThermalObservationTraceTests`, `ThermalStopTargetTests`, `ThermalWorkloadResolverTests` and `SMCSensorCatalogTests` run on Linux as well as macOS; the SwiftUI views are covered by the macOS build.
+`ThermalActivityTests`, `ThermalActivityHistoryTests`, `ThermalAppInsightTests`, `ThermalDashboardTests`, `ThermalInterpretationTests`, `ThermalObservationTraceTests`, `ThermalStopTargetTests`, `ThermalWorkloadResolverTests` and `SMCSensorCatalogTests` need no sensors or live processes: they run on synthetic input in `swift test`. The SwiftUI views are covered by the macOS build.
 
 Background: [Apple: Keep your Mac laptop within acceptable operating temperatures](https://support.apple.com/en-us/102336) · [ProcessInfo.ThermalState](https://developer.apple.com/documentation/foundation/processinfo/thermalstate-swift.enum) · [WWDC19: Designing for adverse network and temperature conditions](https://developer.apple.com/videos/play/wwdc2019/422/) · [Stats sensor key registry](https://github.com/exelban/stats/blob/master/Modules/Sensors/values.swift)

@@ -1,6 +1,6 @@
 # Architecture
 
-Two production targets share the work. **`GhostProcessSniperCore`** samples processes, builds and scores families, persists history, prepares every display model, and stops processes; it has no UI and most of it is testable on Linux. **`GhostProcessSniper`** is the SwiftUI app inside an AppKit shell: the status item and popover, the console window, Settings, and notifications. Folders are responsibility boundaries inside those two targets, not separate modules; [Development](Development.md) has the ownership map and the automated checks.
+Two production targets share the work. **`GhostProcessSniperCore`** samples processes, builds and scores families, persists history, prepares every display model, and stops processes; it has no UI, so its behavior is covered by the XCTest suite and the core checks without launching the app. **`GhostProcessSniper`** is the SwiftUI app inside an AppKit shell: the status item and popover, the console window, Settings, and notifications. Folders are responsibility boundaries inside those two targets, not separate modules; [Development](Development.md) has the ownership map and the automated checks.
 
 ## Data flow
 
