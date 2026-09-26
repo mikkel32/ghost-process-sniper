@@ -192,8 +192,6 @@ public final class ProcessKiller: Sendable {
                     }
                 }
             }
-            let launchdStoppedPID = await bootOutLaunchdJob(plan: plan, targets: targets, operationID: operationID,
-                                                            report: &report, eventSink: eventSink)
             let context = KillPhaseContext(
                 plan: plan,
                 strategy: runProfile.strategy,
@@ -212,8 +210,7 @@ public final class ProcessKiller: Sendable {
                 bornAfter: plan.approvedAt ?? preflightSnapshot.sampledAt,
                 // A quitting app may start an updater or crash reporter on
                 // purpose; what it starts is reported, never stopped.
-                adoptsLateMembers: plan.scope != .singleRoot && runProfile.strategy != .quitApp,
-                launchdStoppedPID: launchdStoppedPID
+                adoptsLateMembers: plan.scope != .singleRoot && runProfile.strategy != .quitApp
             )
             let walk = try await walk(runProfile.phases, targets: targets, context: context, report: &report)
 
@@ -282,7 +279,8 @@ public final class ProcessKiller: Sendable {
             // hold the result back.
             if let supervisor = preflight.preview.riskAssessment.supervisor,
                report.survivorPIDs.isEmpty, report.partiallySucceeded, report.launchdBootout?.accepted != true {
-                respawned = await detectRespawn(of: targets, by: supervisor, since: walk.lastSignalAt, operationID: operationID,
+                respawned = await detectRespawn(of: targets, by: supervisor, since: walk.firstSignalAt,
+                                                excluding: Set((walk.adopted + walk.reportedLate).map(\.identity)), operationID: operationID,
                                                 report: &report, eventSink: eventSink)
             }
             report.realizedMemoryReclaimBytes = reclaimEstimator.realizedEstimate(

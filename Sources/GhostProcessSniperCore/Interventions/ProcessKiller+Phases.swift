@@ -20,9 +20,6 @@ struct KillPhaseContext: Sendable {
     /// False for a single-process stop or a quitting app: what they start
     /// is only reported.
     let adoptsLateMembers: Bool
-    /// The root whose launchd job was booted out: launchd already sent it
-    /// SIGTERM, so a first phase that would only repeat that leaves it alone.
-    let launchdStoppedPID: Int32?
 }
 
 struct KillPhaseWalk {
@@ -34,8 +31,9 @@ struct KillPhaseWalk {
     let adopted: [KillTarget]
     /// Processes born during the stop that were only reported.
     let reportedLate: [KillTarget]
-    /// When the last signal went out; a restart must come after it.
-    let lastSignalAt: Date
+    /// When the stop first acted; a supervisor's restart comes after it,
+    /// even one that happened during the grace wait before a force.
+    let firstSignalAt: Date
 }
 
 extension ProcessKiller {
@@ -54,7 +52,7 @@ extension ProcessKiller {
         var adopted: [KillTarget] = []
         var reportedLate: [KillTarget] = []
         var quitAccepted: Int32?
-        var lastSignalAt = clock()
+        let firstSignalAt = clock()
         for (index, phase) in phases.enumerated() {
             if index > 0 {
                 guard !live.isEmpty else { break }
@@ -72,15 +70,22 @@ extension ProcessKiller {
             if phase.reach == .rootOnly, !phase.isForce {
                 recipients = Self.rootAndOutsiders(of: recipients, tree: targets)
             }
-            let launchdStopped = index == 0 && !phase.isForce && live.contains { $0.pid == context.launchdStoppedPID }
             // launchd's SIGTERM stands in for a tree phase or another
             // SIGTERM. A root-only shutdown signal, such as a database's fast
-            // shutdown, still goes out; launchd will not restart the root.
-            if launchdStopped, phase.reach == .tree || phase.action == .signal(SIGTERM) {
-                recipients.removeAll { $0.pid == context.launchdStoppedPID }
+            // shutdown, goes out first instead, so the root is already
+            // stopping its own way when the bootout's SIGTERM arrives.
+            let bootsOut = index == 0 && context.plan.launchdStop != .none
+            let signalsRootFirst = !phase.isForce && phase.reach == .rootOnly && phase.action != .signal(SIGTERM)
+            var launchdStopped = false
+            if bootsOut, !signalsRootFirst,
+               let pid = await bootOutLaunchdJob(plan: context.plan, targets: targets, operationID: context.operationID,
+                                                 report: &report, eventSink: context.eventSink),
+               !phase.isForce, let root = live.first(where: { $0.pid == pid }) {
+                launchdStopped = true
+                recipients.removeAll { $0.pid == pid }
                 // Only signalled targets are resumed, and a paused root
                 // would hold launchd's SIGTERM for the whole wait.
-                if let root = live.first(where: { $0.pid == context.launchdStoppedPID }), root.condition == .suspended {
+                if root.condition == .suspended {
                     resume(root, operationID: context.operationID, report: &report, eventSink: context.eventSink)
                 }
             }
@@ -109,7 +114,10 @@ extension ProcessKiller {
                 dropped = await deliver(phase, to: recipients, stage: stage, context: context,
                                         report: &report, quitAccepted: &quitAccepted)
             }
-            lastSignalAt = clock()
+            if bootsOut, signalsRootFirst {
+                _ = await bootOutLaunchdJob(plan: context.plan, targets: targets, operationID: context.operationID,
+                                            report: &report, eventSink: context.eventSink)
+            }
             remaining.removeAll { dropped.contains($0.identity) }
             live.removeAll { dropped.contains($0.identity) }
             guard !live.isEmpty else { break }
@@ -146,7 +154,7 @@ extension ProcessKiller {
             }
         }
         return KillPhaseWalk(remaining: remaining, quitAcceptedPID: quitAccepted, adopted: adopted,
-                             reportedLate: reportedLate, lastSignalAt: lastSignalAt)
+                             reportedLate: reportedLate, firstSignalAt: firstSignalAt)
     }
 
     /// Sends one phase's action and returns the targets it can never reach:
@@ -229,8 +237,17 @@ extension ProcessKiller {
             case .carefulShutdown: "shut down cleanly"
             default: "exit"
             }
+            // The hold binds Ghost only: launchd kills a booted-out job that
+            // outlives its ExitTimeOut.
+            let bootout = report.launchdBootout.flatMap { $0.accepted ? $0.job : nil }
+            let ending = switch (held, bootout, bootout?.bootoutForceSeconds) {
+            case (false, _, _): "."
+            case (true, nil, _): "; nothing will be forced."
+            case (true, _?, let seconds?): "; Ghost won't force it, but launchd force-stops it after \(RadarFormat.seconds(seconds))."
+            case (true, _?, nil): "; neither Ghost nor launchd will force it."
+            }
             appendEvent(.graceWaiting, operationID: context.operationID,
-                        message: "Waiting up to \(RadarFormat.seconds(phase.waitAfterSeconds)) for \(context.plan.displayName) to \(verb)\(held ? "; nothing will be forced." : ".")",
+                        message: "Waiting up to \(RadarFormat.seconds(phase.waitAfterSeconds)) for \(context.plan.displayName) to \(verb)\(ending)",
                         waitSeconds: phase.waitAfterSeconds, deadline: clock().addingTimeInterval(phase.waitAfterSeconds),
                         report: &report, eventSink: context.eventSink)
         }

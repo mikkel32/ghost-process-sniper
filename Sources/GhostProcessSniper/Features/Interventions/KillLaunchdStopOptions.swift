@@ -7,6 +7,8 @@ import SwiftUI
 /// undo it by hand.
 struct KillLaunchdStopOptions: View {
     let job: LaunchdJob
+    /// "Never force-stop" is on; it cannot hold back launchd's own SIGKILL.
+    let forceHeld: Bool
     @Binding var stop: KillLaunchdStop
 
     var body: some View {
@@ -21,6 +23,13 @@ struct KillLaunchdStopOptions: View {
             Toggle("Keep it off after restart", isOn: keepsOff)
                 .disabled(stop == .none)
                 .padding(.leading, 20)
+            if forceHeld, stop != .none, let seconds = job.bootoutForceSeconds {
+                Label("launchd force-stops it if it is still running \(RadarFormat.seconds(seconds)) after the service stops. Never force-stop holds back Ghost, not launchd.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             command("Keep it off yourself", job.keepStoppedCommand)
             command("Undo", job.undoCommand)
         }

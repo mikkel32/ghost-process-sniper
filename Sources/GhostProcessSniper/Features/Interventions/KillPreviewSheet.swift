@@ -160,7 +160,7 @@ struct KillPreviewSheet: View {
         }
 
         if preview.offersLaunchdStop, let job = preview.launchdJob {
-            KillLaunchdStopOptions(job: job, stop: $launchdStop)
+            KillLaunchdStopOptions(job: job, forceHeld: skipForce, stop: $launchdStop)
         }
 
         KillEvidenceColumns(preview: preview)

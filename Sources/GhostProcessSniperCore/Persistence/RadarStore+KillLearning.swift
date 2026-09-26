@@ -47,8 +47,10 @@ extension RadarStore {
             try insertKillExitEvents(report: report)
             // Refused, expired and inspect-only stops sent nothing, and forcing
             // a held stop's survivors says nothing about how the strategy
-            // behaves; they stay audit-only.
-            guard !report.attempts.isEmpty, !report.isForceFollowUp, learnsFromOutcome else { return }
+            // behaves; they stay audit-only. So does a precision stop of one
+            // member: a hung worker says nothing about how the root stops.
+            let stopsOneMember = report.scopeUsed == .singleRoot && family.map { $0.root.pid != report.rootPID } == true
+            guard !report.attempts.isEmpty, !report.isForceFollowUp, learnsFromOutcome, !stopsOneMember else { return }
             let devKind = family?.classification?.kind.rawValue
             try insertKillOutcomeHistory(report: report, signatureID: record.signatureID, createdAt: date)
             try insertKillStrategyHistory(report: report, signatureID: record.signatureID, devKind: devKind, createdAt: date)

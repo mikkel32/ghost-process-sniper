@@ -12,14 +12,19 @@ public struct KillLaunchAgent: Equatable, Sendable {
     public let runAtLoad: Bool
     /// From a LaunchDaemons folder: a system-domain job.
     public let isDaemon: Bool
+    /// ExitTimeOut: how long launchd waits after its SIGTERM before SIGKILL.
+    /// Nil when the plist leaves it to the system default.
+    public let exitTimeOut: TimeInterval?
 
-    public init(label: String, plistPath: String, program: String?, keepAlive: Bool, runAtLoad: Bool, isDaemon: Bool) {
+    public init(label: String, plistPath: String, program: String?, keepAlive: Bool, runAtLoad: Bool, isDaemon: Bool,
+                exitTimeOut: TimeInterval? = nil) {
         self.label = label
         self.plistPath = plistPath
         self.program = program
         self.keepAlive = keepAlive
         self.runAtLoad = runAtLoad
         self.isDaemon = isDaemon
+        self.exitTimeOut = exitTimeOut
     }
 }
 
@@ -143,8 +148,13 @@ public final class KillLaunchAgentIndex: @unchecked Sendable {
         case is [String: Any]: true
         default: false
         }
+        let exitTimeOut: TimeInterval? = switch plist["ExitTimeOut"] {
+        case let seconds as Int: TimeInterval(max(0, seconds))
+        case let seconds as Double: max(0, seconds)
+        default: nil
+        }
         return KillLaunchAgent(label: label, plistPath: path, program: canonical, keepAlive: keepAlive,
-                               runAtLoad: plist["RunAtLoad"] as? Bool ?? false, isDaemon: isDaemon)
+                               runAtLoad: plist["RunAtLoad"] as? Bool ?? false, isDaemon: isDaemon, exitTimeOut: exitTimeOut)
     }
 
     static func canonicalPath(_ path: String) -> String {

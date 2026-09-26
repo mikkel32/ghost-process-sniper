@@ -48,10 +48,12 @@ final class LaunchAgentsFolder {
     }
 
     @discardableResult
-    func write(label: String, program: [String], keepAlive: Any? = nil, runAtLoad: Bool? = nil, file: String? = nil) -> String {
+    func write(label: String, program: [String], keepAlive: Any? = nil, runAtLoad: Bool? = nil, exitTimeOut: Int? = nil,
+               file: String? = nil) -> String {
         var plist: [String: Any] = ["Label": label, "ProgramArguments": program]
         if let keepAlive { plist["KeepAlive"] = keepAlive }
         if let runAtLoad { plist["RunAtLoad"] = runAtLoad }
+        if let exitTimeOut { plist["ExitTimeOut"] = exitTimeOut }
         let data = try! PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         let target = url.appendingPathComponent(file ?? "\(label).plist")
         try! data.write(to: target)

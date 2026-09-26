@@ -6,16 +6,19 @@ enum KillRespawnDetector {
     /// New processes with a stopped target's name, owned by the user,
     /// started at or after `start`, whose parent chain (at most three hops,
     /// to allow an `sh -c` in between) reaches the supervisor. A launchd
-    /// job's restart has launchd itself as its parent.
+    /// job's restart has launchd itself as its parent. Processes the stop
+    /// itself saw start, such as late members it left running, are not
+    /// restarts.
     static func respawned(
         in lites: [KillProcessLite],
         targets: [KillTarget],
         supervisor: KillSupervisor,
         since start: Date,
-        currentUserID: UInt32
+        currentUserID: UInt32,
+        excluding seen: Set<ProcessIdentity> = []
     ) -> [KillProcessLite] {
         let stoppedNames = Set(targets.map(\.name))
-        let stopped = Set(targets.map(\.identity))
+        let stopped = Set(targets.map(\.identity)).union(seen)
         let parents = Dictionary(lites.map { ($0.pid, $0.parentPID) }, uniquingKeysWith: { first, _ in first })
         let threshold = start.timeIntervalSince1970
         return lites.filter { process in
@@ -44,7 +47,8 @@ extension ProcessKiller {
     func detectRespawn(
         of targets: [KillTarget],
         by supervisor: KillSupervisor,
-        since lastSignal: Date,
+        since firstSignal: Date,
+        excluding seen: Set<ProcessIdentity>,
         operationID: KillOperationID,
         report: inout KillReport,
         eventSink: (@Sendable (KillOperationEvent) -> Void)?
@@ -65,7 +69,7 @@ extension ProcessKiller {
                 policy: .verify, includeHeavyMetricsForTargets: false, requiresCompleteGraph: true, conversionBudget: .targetsOnly
             )) else { return [] }
             let respawned = KillRespawnDetector.respawned(in: snapshot.liteArena.processes, targets: targets, supervisor: supervisor,
-                                                          since: lastSignal, currentUserID: currentUserID)
+                                                          since: firstSignal, currentUserID: currentUserID, excluding: seen)
             guard !respawned.isEmpty else { continue }
             report.respawnedPIDs = respawned.map(\.pid).sorted()
             report.respawnedBy = supervisor.name

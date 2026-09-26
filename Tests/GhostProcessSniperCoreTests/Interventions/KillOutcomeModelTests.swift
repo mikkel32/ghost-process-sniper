@@ -329,6 +329,29 @@ final class KillOutcomeStoreTests: XCTestCase {
         let audit = try await store.recentKillOperations()
         XCTAssertEqual(audit.map(\.displayName), ["PM2"])
     }
+
+    func testStopsOfOneMemberAreAuditedButNotLearnedByTheFamily() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("kill-outcomes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let family = RefreshPerformanceFixture.family(RefreshPerformanceFixture.process(5))
+            .enriched(classification: DevClassification(kind: .nodeServer, confidence: 1, reason: "test"))
+        let store = RadarStore(url: folder.appendingPathComponent("radar.sqlite"))
+        for index in 0..<4 {
+            var member = KillReport(displayName: "worker", rootPID: 7, gracefulPIDs: [], forcedPIDs: [7],
+                                    attempts: [KillAttempt(pid: 7, signal: SIGTERM, stage: "graceful", succeeded: true)],
+                                    scopeUsed: .singleRoot)
+            member.graceEndedEarly = false
+            member.graceWaitedSeconds = 2
+            member.strategyUsed = .standard
+            try await store.recordKillOperation(report: member, family: family, at: Date(timeIntervalSince1970: Double(10 + index)))
+        }
+
+        let history = try await store.killOutcomeHistory(signatureID: family.signature.id, devKind: "nodeServer")
+        XCTAssertEqual(history, .empty, "a hung worker's forced stops say nothing about how the family root stops")
+        let audit = try await store.recentKillOperations()
+        XCTAssertEqual(audit.count, 4)
+    }
 }
 
 /// A small deterministic generator, so the convergence test is repeatable.

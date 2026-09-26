@@ -16,7 +16,7 @@ final class KillRespawnDetectorTests: XCTestCase {
 
     func testProcessStartedJustBeforeTheStopIsNotReported() {
         let early = lite(901, parent: 499, start: 1_999, micro: 500_000)
-        XCTAssertTrue(respawned([early], by: pm2).isEmpty, "0.5 s before the last signal is not a restart")
+        XCTAssertTrue(respawned([early], by: pm2).isEmpty, "0.5 s before the first signal is not a restart")
     }
 
     func testRespawnThroughAShellIsReported() {
@@ -41,6 +41,36 @@ final class KillRespawnDetectorTests: XCTestCase {
         XCTAssertEqual(KillSupervisorKind.nodemon.restartPolicy, .onFileChange)
         XCTAssertEqual(KillSupervisorKind.watchexec.restartPolicy, .onFileChange)
         XCTAssertEqual(KillSupervisorKind.overmind.restartPolicy, .stopsSiblings)
+    }
+
+    /// pm2 restarts the root during the grace wait, and a child that
+    /// ignores SIGTERM then needs force: the restart came after the first
+    /// signal, not after the force, and must still be found.
+    func testRestartDuringTheGraceIsFoundWhenForceFollows() async {
+        let table = FakeProcessTable()
+        let root = KillProcessLite.fake(pid: 500, parent: 499, name: "node", start: 999_000)
+        let child = KillProcessLite.fake(pid: 501, parent: 500, name: "esbuild", start: 999_000)
+        let restarted = KillProcessLite.fake(pid: 777, parent: 499, name: "node", start: 1_000_000)
+        table.add(root, FakeProcessTable.Behaviour(onSignal: [SIGTERM: [.respawn(restarted, afterTicks: 1)]]))
+        table.add(child, .ignoresTermination)
+        let workload = KillWorkloadProfile(
+            processes: [
+                KillWorkloadProcess(pid: 500, parentPID: 499, name: "node", executablePath: "", commandLine: "node server.js", isRoot: true),
+                KillWorkloadProcess(pid: 501, parentPID: 500, name: "esbuild", executablePath: "", commandLine: "esbuild --service", isRoot: false)
+            ],
+            ancestors: [KillWorkloadAncestor(pid: 499, name: "node", executablePath: "/usr/local/bin/node",
+                                             commandLine: "PM2 v5.3.0: God Daemon (/Users/me/.pm2)")],
+            parentIsLaunchd: false)
+        let plan = KillPlan(rootIdentity: root.identity, targetIdentities: [child.identity, root.identity], protectedPIDs: [],
+                            displayName: "node", workload: workload)
+
+        let report = await table.killer().kill(plan: plan, forceKillDelay: 2)
+
+        XCTAssertEqual(report.forcedPIDs, [501], "the child needed force")
+        XCTAssertEqual(report.respawnedPIDs, [777], "pm2 restarted the app during the grace")
+        XCTAssertEqual(report.respawnedBy, "PM2")
+        XCTAssertEqual(KillOutcomeObservation(report: report).outcome, .respawned)
+        XCTAssertEqual(report.realizedMemoryReclaimBytes, child.residentMemoryBytes, "the restarted node took its memory straight back")
     }
 
     // MARK: - Fixtures

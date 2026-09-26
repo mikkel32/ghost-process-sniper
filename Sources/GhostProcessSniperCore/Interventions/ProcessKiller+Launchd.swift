@@ -19,7 +19,8 @@ extension ProcessKiller {
     /// Boots the root's launchd job out when the plan asks for it: launchd
     /// sends the root SIGTERM itself, honours its ExitTimeOut and does not
     /// start it again. Returns the root's PID when launchd took the request,
-    /// so the graceful wave leaves the root to launchd.
+    /// so a graceful wave that would only repeat launchd's SIGTERM leaves
+    /// the root to launchd.
     func bootOutLaunchdJob(
         plan: KillPlan,
         targets: [KillTarget],

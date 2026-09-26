@@ -136,6 +136,9 @@ extension RadarConsoleSession {
     /// and the scan refreshes once at the end rather than after every stop.
     func stopDuplicateCopies(_ run: DuplicateCullRun) async {
         guard run.phase == .choosing else { return }
+        // Quitting waits until the batch has handed its reports over.
+        monitor.beginStop()
+        defer { monitor.endStop() }
         let checked = run.begin()
         let sample = monitor.sampledProcesses
         let delay = monitor.settings.forceKillDelay
