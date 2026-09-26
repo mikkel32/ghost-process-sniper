@@ -162,7 +162,6 @@ final class KillTreeSweepTests: XCTestCase {
             .binding(to: identities, expiresAt: Date().addingTimeInterval(60), profile: .forceNow)
 
         let report = await ProcessKiller().kill(plan: plan, forceKillDelay: 1)
-        shell.waitUntilExit()
 
         XCTAssertGreaterThanOrEqual(report.frozenCount, 2)
         XCTAssertTrue(report.survivorPIDs.isEmpty, report.summary)
