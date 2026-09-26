@@ -18,7 +18,6 @@ struct GhostProcessSniperApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = MenuBarCoordinator()
-    private let metricKitSubscriber = RadarMetricKitSubscriber()
     // The notification center holds its delegate weakly.
     private var notificationRouter: NotificationRouter?
 
@@ -34,7 +33,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        metricKitSubscriber.start()
         coordinator.start()
         if ProcessInfo.processInfo.arguments.contains("--console") {
             coordinator.openConsole()
@@ -43,7 +41,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         coordinator.stop()
-        metricKitSubscriber.stop()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
