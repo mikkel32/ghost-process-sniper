@@ -66,6 +66,9 @@ public struct ActivityLedger: Sendable {
     static let retention = TrendWindow.defaultRetention
     /// A process is active when it used more than 1% of one core.
     static let activeCores = 0.01
+    /// Jitter between a read's span and the tick's wall time before the read
+    /// counts as spanning time the tick never saw.
+    static let spanSlack: TimeInterval = 5
 
     private struct ProcessEntry {
         var cpuSeconds: TimeInterval
@@ -75,6 +78,7 @@ public struct ActivityLedger: Sendable {
         var lastActiveAt: Date?
         var lastSeen: Date
         var tickDelta: Double
+        var tickSpan: TimeInterval
         var deltaTick: UInt64
     }
 
@@ -98,7 +102,7 @@ public struct ActivityLedger: Sendable {
             guard var entry = processes[process.identity] else {
                 processes[process.identity] = ProcessEntry(
                     cpuSeconds: process.totalProcessorSeconds, measuredAt: freshAt, firstSeen: now,
-                    measuredSince: nil, lastActiveAt: nil, lastSeen: now, tickDelta: 0, deltaTick: 0
+                    measuredSince: nil, lastActiveAt: nil, lastSeen: now, tickDelta: 0, tickSpan: 0, deltaTick: 0
                 )
                 continue
             }
@@ -107,6 +111,7 @@ public struct ActivityLedger: Sendable {
                 if let previous = entry.measuredAt, freshAt > previous {
                     let delta = max(0, process.totalProcessorSeconds - entry.cpuSeconds)
                     entry.tickDelta = delta
+                    entry.tickSpan = freshAt.timeIntervalSince(previous)
                     entry.deltaTick = tick
                     entry.measuredSince = entry.measuredSince ?? previous
                     if delta / freshAt.timeIntervalSince(previous) > Self.activeCores {
@@ -128,15 +133,46 @@ public struct ActivityLedger: Sendable {
     }
 
     public mutating func recordFamily(key: String, members: [ProcessMetrics], now: Date) -> FamilyCPUActivity {
+        let identities = Set(members.map(\.identity))
+        var family = families[key] ?? FamilyEntry(buckets: [], members: identities, lastRecordedAt: now)
+        let gap = min(30, max(0, now.timeIntervalSince(family.lastRecordedAt)))
+        let changes = family.members.symmetricDifference(identities).count
+        let start = Date(timeIntervalSince1970: (now.timeIntervalSince1970 / Self.bucketLength).rounded(.down) * Self.bucketLength)
+        if let last = family.buckets.last, last.start == start {
+            family.buckets[family.buckets.count - 1].wallSeconds += gap
+            family.buckets[family.buckets.count - 1].memberChanges += changes
+        } else {
+            family.buckets.append(CPUMinuteBucket(start: start, cpuSeconds: 0, wallSeconds: gap, dominantCPUSeconds: 0, memberChanges: changes))
+            if family.buckets.count > Self.bucketCount {
+                family.buckets.removeFirst(family.buckets.count - Self.bucketCount)
+            }
+        }
+
         var cpuSeconds = 0.0
         var dominant = 0.0
+        var spread: [(cpu: Double, dominant: Double)] = []
         var lastActiveAt: Date?
         var measuredSince: Date?
         for member in members {
             guard let entry = processes[member.identity] else { continue }
             if entry.deltaTick == tick {
-                cpuSeconds += entry.tickDelta
-                dominant = max(dominant, entry.tickDelta)
+                if entry.tickSpan <= gap + Self.spanSlack {
+                    cpuSeconds += entry.tickDelta
+                    dominant = max(dominant, entry.tickDelta)
+                } else if let end = entry.measuredAt {
+                    // A sparse read, or the first after sleep, covers minutes
+                    // this tick never saw: spread it at its average rate over
+                    // the minutes it covers, and drop what fell outside them.
+                    if spread.isEmpty { spread = Array(repeating: (0, 0), count: family.buckets.count) }
+                    let rate = entry.tickDelta / entry.tickSpan
+                    let begin = end.addingTimeInterval(-entry.tickSpan)
+                    for (index, bucket) in family.buckets.enumerated() {
+                        let overlap = min(end, bucket.start.addingTimeInterval(Self.bucketLength)).timeIntervalSince(max(begin, bucket.start))
+                        guard overlap > 0 else { continue }
+                        spread[index].cpu += rate * overlap
+                        spread[index].dominant = max(spread[index].dominant, rate * overlap)
+                    }
+                }
             }
             if let active = entry.lastActiveAt {
                 lastActiveAt = max(lastActiveAt ?? active, active)
@@ -146,23 +182,17 @@ public struct ActivityLedger: Sendable {
             }
         }
 
-        let identities = Set(members.map(\.identity))
-        var family = families[key] ?? FamilyEntry(buckets: [], members: identities, lastRecordedAt: now)
-        let gap = min(30, max(0, now.timeIntervalSince(family.lastRecordedAt)))
-        let changes = family.members.symmetricDifference(identities).count
-        let start = Date(timeIntervalSince1970: (now.timeIntervalSince1970 / Self.bucketLength).rounded(.down) * Self.bucketLength)
-        if let last = family.buckets.last, last.start == start {
-            family.buckets[family.buckets.count - 1].cpuSeconds += cpuSeconds
-            family.buckets[family.buckets.count - 1].wallSeconds += gap
-            family.buckets[family.buckets.count - 1].dominantCPUSeconds += dominant
-            family.buckets[family.buckets.count - 1].memberChanges += changes
-        } else {
-            family.buckets.append(CPUMinuteBucket(start: start, cpuSeconds: cpuSeconds, wallSeconds: gap,
-                                                  dominantCPUSeconds: dominant, memberChanges: changes))
-            if family.buckets.count > Self.bucketCount {
-                family.buckets.removeFirst(family.buckets.count - Self.bucketCount)
+        let current = family.buckets.count - 1
+        if !spread.isEmpty {
+            for (index, share) in spread.enumerated() where index != current {
+                family.buckets[index].cpuSeconds += share.cpu
+                family.buckets[index].dominantCPUSeconds += share.dominant
             }
+            cpuSeconds += spread[current].cpu
+            dominant = max(dominant, spread[current].dominant)
         }
+        family.buckets[current].cpuSeconds += cpuSeconds
+        family.buckets[current].dominantCPUSeconds += dominant
         family.members = identities
         family.lastRecordedAt = now
         families[key] = family

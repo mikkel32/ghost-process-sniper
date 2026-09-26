@@ -136,4 +136,55 @@ final class CPUBehaviorTests: XCTestCase {
         }
         XCTAssertEqual(activity.lastActiveAt, start.addingTimeInterval(59 * Self.cadence))
     }
+
+    /// A member outside the rich-read budget, read fresh every three minutes,
+    /// must not pile three minutes of CPU into the minute of its read.
+    func testSparseReadsSpreadOverTheMinutesTheyCover() throws {
+        var ledger = ActivityLedger()
+        let clock = Clock()
+        var activity = FamilyCPUActivity.empty
+        let start = Date(timeIntervalSince1970: 60_000)
+        var lastRead = start
+        for tick in 0..<200 {
+            let date = start.addingTimeInterval(Double(tick) * Self.cadence)
+            let read = process(510, name: "tool", path: "/usr/local/bin/tool", command: "tool", cpu: 100, clock: clock, at: date)
+            let fresh = tick % 60 == 0
+            if fresh { lastRead = date }
+            let worker = ProcessMetrics(
+                identity: read.identity, parentPID: read.parentPID, userID: read.userID, ownerName: read.ownerName, name: read.name,
+                executablePath: read.executablePath, commandLine: read.commandLine, residentMemoryBytes: read.residentMemoryBytes,
+                physicalFootprintBytes: read.physicalFootprintBytes, virtualMemoryBytes: read.virtualMemoryBytes, cpuPercent: 100,
+                totalProcessorSeconds: read.totalProcessorSeconds, threadCount: read.threadCount, isSystemProcess: false,
+                sampledAt: date, cpuMeasurementStatus: fresh ? .fresh : .cached(lastRead)
+            )
+            ledger.recordProcesses([worker], now: date)
+            activity = ledger.recordFamily(key: "tool", members: [worker], now: date)
+        }
+        let finished = activity.recentMinutes
+        XCTAssertGreaterThanOrEqual(finished.count, 8)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(finished.map(\.cores).max()), 1.1)
+        // Minutes a read covered hold one busy core; nothing was lost.
+        XCTAssertEqual(finished.dropFirst(3).first?.cores ?? 0, 1, accuracy: 0.05)
+    }
+
+    /// After the Mac sleeps, the first read spans the whole nap; only the
+    /// part inside the minute being observed lands in it.
+    func testReadAfterSleepDoesNotPileIntoOneMinute() {
+        var ledger = ActivityLedger()
+        let start = Date(timeIntervalSince1970: 60_000)
+        let asleep = start.addingTimeInterval(20 * 60)
+        var activity = FamilyCPUActivity.empty
+        for (date, seconds) in [(start, 0.0), (asleep, 600.0)] + (1..<20).map({ (asleep.addingTimeInterval(Double($0) * 3), 600 + Double($0) * 1.5) }) {
+            let worker = ProcessMetrics(
+                identity: ProcessIdentity(pid: 520, startTimeSeconds: 40_000, startTimeMicroseconds: 0), parentPID: 1, userID: 501,
+                ownerName: "dev", name: "tool", executablePath: "/usr/local/bin/tool", commandLine: "tool",
+                residentMemoryBytes: 0, physicalFootprintBytes: 0, virtualMemoryBytes: 0, cpuPercent: 50,
+                totalProcessorSeconds: seconds, threadCount: 1, isSystemProcess: false, sampledAt: date
+            )
+            ledger.recordProcesses([worker], now: date)
+            activity = ledger.recordFamily(key: "tool", members: [worker], now: date)
+        }
+        let current = activity.buckets.last
+        XCTAssertLessThanOrEqual(current?.cores ?? 0, 0.6)
+    }
 }
