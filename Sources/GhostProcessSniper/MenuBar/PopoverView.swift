@@ -381,13 +381,15 @@ private struct PopoverFooter: View {
 // under a command-line `swift build`. Fixtures use an in-memory monitor.
 struct PopoverView_Previews: PreviewProvider {
     static var previews: some View {
-        popover(.quiet).previewDisplayName("Quiet")
-        popover(.earlyWarning).previewDisplayName("Early warning")
-        popover(.hot).previewDisplayName("Hot")
-        PopoverStoreWarningRow(message: "The radar database could not be opened.")
-            .padding(14)
-            .frame(width: 380)
-            .previewDisplayName("Store error")
+        Group {
+            popover(.quiet).previewDisplayName("Quiet")
+            popover(.earlyWarning).previewDisplayName("Early warning")
+            popover(.hot).previewDisplayName("Hot")
+            PopoverStoreWarningRow(message: "The radar database could not be opened.")
+                .padding(14)
+                .frame(width: 380)
+                .previewDisplayName("Store error")
+        }
     }
 
     private enum Scenario {

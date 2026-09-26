@@ -42,7 +42,6 @@ final class RadarConsoleSession {
         self.openSettings = openSettings
         state.familySort = ConsolePreferences.familySort
         state.familyFilter = ConsolePreferences.familyFilter
-        state.showInspector = ConsolePreferences.showInspector
     }
 
     var selectedFamily: ProcessFamily? {
@@ -265,6 +264,8 @@ final class RadarConsoleSession {
 
     func toggleInspector() {
         state.showInspector.toggle()
+        // Remembered for the next family page, including after relaunch.
+        ConsolePreferences.showInspector = state.showInspector
     }
 
     func nextFamily() {

@@ -82,9 +82,9 @@ struct RadarConsoleView: View {
                 guard session.state.focusedSelection == selection else {
                     return
                 }
-                if selection.familyKey == nil {
-                    session.state.showInspector = false
-                }
+                // The inspector belongs to family pages; it reopens with the
+                // user's last explicit choice.
+                session.state.showInspector = selection.familyKey != nil && ConsolePreferences.showInspector
                 session.updateFocusedFamilies()
             }
         }
@@ -140,9 +140,6 @@ struct RadarConsoleView: View {
         }
         .onChange(of: session.state.incidentQuery.sort) { _, _ in
             session.scheduleQueryUpdate()
-        }
-        .onChange(of: session.state.showInspector) { _, value in
-            ConsolePreferences.showInspector = value
         }
     }
 
