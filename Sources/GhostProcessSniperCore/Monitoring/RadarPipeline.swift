@@ -189,43 +189,57 @@ public struct RadarPipeline: Sendable {
     }
 }
 
+/// Holds a Hot or Critical level until the family has read lower for
+/// `holdDuration`, then steps down one level at a time, each step held too,
+/// so a family oscillating around a threshold does not flap.
 struct RadarHysteresis: Sendable {
-    private var levels: [String: (level: GhostLevel, updatedAt: Date)] = [:]
+    private struct Held: Sendable {
+        var level: GhostLevel
+        /// When the current step started; nil when the level is not held.
+        var stepStartedAt: Date?
+    }
+
+    private var held: [String: Held] = [:]
     private let holdDuration: TimeInterval = 20
 
     mutating func apply(to families: [ProcessFamily], now: Date) -> [ProcessFamily] {
-        if levels.count > families.count + 64 {
+        if held.count > families.count + 64 {
             let activeKeys = Set(families.map(\.familyKey))
-            levels = levels.filter { activeKeys.contains($0.key) }
+            held = held.filter { activeKeys.contains($0.key) }
         }
         return families.map { family in
             let key = family.familyKey
-            guard let previous = levels[key] else {
-                levels[key] = (family.score.level, now)
+            let incoming = family.score.level
+            // A muted or unmeasurable family drops at once: the hold is for
+            // measured flicker, not for overriding the user or stale data.
+            let suppressed = family.alertState.kind == .ignored || family.alertState.kind == .snoozed ||
+                !family.coverage.isScorable
+            guard let previous = held[key], !suppressed, incoming < previous.level,
+                  previous.level >= .hot || previous.stepStartedAt != nil
+            else {
+                held[key] = Held(level: incoming, stepStartedAt: nil)
                 return family
             }
 
-            var level = family.score.level
-            if previous.level >= .hot,
-               family.score.level < .hot,
-               now.timeIntervalSince(previous.updatedAt) < holdDuration {
-                level = max(family.score.level, .watch)
+            var step = previous
+            let startedAt = previous.stepStartedAt ?? now
+            step.stepStartedAt = startedAt
+            if now.timeIntervalSince(startedAt) >= holdDuration {
+                let lower = GhostLevel(rawValue: previous.level.rawValue - 1) ?? incoming
+                step = Held(level: max(incoming, lower), stepStartedAt: now)
             }
-
-            if level != previous.level || now.timeIntervalSince(previous.updatedAt) >= holdDuration {
-                levels[key] = (level, now)
-            }
-
-            guard level != family.score.level else {
+            if step.level <= incoming {
+                held[key] = Held(level: incoming, stepStartedAt: nil)
                 return family
             }
+            held[key] = step
 
             let score = GhostScore(
                 value: family.score.value,
-                level: level,
+                level: step.level,
                 reasons: family.score.reasons + ["held briefly to avoid flicker"],
                 components: family.score.components,
-                heat: family.score.heat.replacing(level: level)
+                heat: family.score.heat.replacing(level: step.level)
             )
             return family.enriched(score: score)
         }
