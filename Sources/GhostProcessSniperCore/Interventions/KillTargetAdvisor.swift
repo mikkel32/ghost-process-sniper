@@ -140,7 +140,8 @@ public struct KillTargetAdvisor: Sendable {
         )
     }
 
-    static func restartsOnExit(_ kind: KillSupervisorKind) -> Bool {
+    /// Whether stopping the supervisor, not its child, is what lasts.
+    public static func restartsOnExit(_ kind: KillSupervisorKind) -> Bool {
         switch kind {
         case .pm2, .forever, .supervisord, .launchd: true
         case .nodemon, .watchexec, .cargoWatch, .air, .tsxWatch, .entr, .overmind: false

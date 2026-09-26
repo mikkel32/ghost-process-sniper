@@ -46,8 +46,13 @@ public struct KillProtectionPolicy: Sendable {
     /// the family's root can never be stopped, or nil.
     public func neverReason(forRoot root: ProcessMetrics, in sample: [ProcessMetrics]) -> String? {
         let parents = Dictionary(sample.map { ($0.pid, $0.parentPID) }, uniquingKeysWith: { first, _ in first })
-        return neverReason(pid: root.pid, name: root.name, isSystemProcess: root.isSystemProcess,
-                           selfAndAncestors: selfAndAncestors { parents[$0] })
+        return neverReason(forRoot: root) { parents[$0] }
+    }
+
+    /// The same, with the parent of each PID looked up by the caller.
+    public func neverReason(forRoot root: ProcessMetrics, parentOf: (Int32) -> Int32?) -> String? {
+        neverReason(pid: root.pid, name: root.name, isSystemProcess: root.isSystemProcess,
+                    selfAndAncestors: selfAndAncestors(parentOf: parentOf))
     }
 
     /// Ghost's PID and every process above it, which a stop of any of

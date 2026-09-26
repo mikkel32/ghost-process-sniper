@@ -85,6 +85,16 @@ public struct KillPlan: Equatable, Sendable {
                  launchdStop: launchdStop)
     }
 
+    /// The approved plan with the user's choice for the root's launchd job.
+    public func stoppingLaunchdJob(_ stop: KillLaunchdStop) -> KillPlan {
+        KillPlan(rootIdentity: rootIdentity, targetIdentities: targetIdentities, protectedPIDs: protectedPIDs,
+                 displayName: displayName, gracefulSignal: gracefulSignal, scope: scope,
+                 createdAt: createdAt, familyMetadata: familyMetadata, killHistory: killHistory,
+                 approvedIdentities: approvedIdentities, approvalExpiresAt: approvalExpiresAt, approvedAt: approvedAt,
+                 approvedProfile: approvedProfile, isForceFollowUp: isForceFollowUp, workload: workload,
+                 strategyCalibrations: strategyCalibrations, launchdStop: stop)
+    }
+
     /// The same plan with the root's launchd job attached to its workload.
     public func withLaunchdJob(_ job: LaunchdJob) -> KillPlan {
         KillPlan(rootIdentity: rootIdentity, targetIdentities: targetIdentities, protectedPIDs: protectedPIDs,

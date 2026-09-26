@@ -62,6 +62,21 @@ final class StopRiskMemoTests: XCTestCase {
         XCTAssertEqual(cache.assessmentCount, 2)
     }
 
+    func testFamilyGhostRunsInsideIsBlocked() {
+        let family = Self.electronFamily()
+        // Ghost was started from the family's first helper, as from a terminal.
+        let ghost = Self.process(990, parent: 901, name: "GhostProcessSniper", path: "/tmp/GhostProcessSniper",
+                                 command: "/tmp/GhostProcessSniper", cpu: 1)
+        var guarded = StopRiskCache(protection: KillProtectionPolicy(selfPID: 990))
+        var elsewhere = StopRiskCache(protection: KillProtectionPolicy(selfPID: 4_000))
+
+        let blocked = guarded.entry(for: family, sample: family.members + [ghost], revision: 1, liveFamilyKeys: [family.familyKey])
+        let free = elsewhere.entry(for: family, sample: family.members, revision: 1, liveFamilyKeys: [family.familyKey])
+
+        XCTAssertEqual(blocked.blockedReason, "Ghost runs inside Electron; stopping it would stop Ghost mid-way.")
+        XCTAssertNil(free.blockedReason)
+    }
+
     @MainActor
     func testMonitorPageAndPlanShareOneAssessment() async {
         let monitor = ProcessMonitor(builder: ProcessFamilyBuilder(currentUserID: 501), store: nil)

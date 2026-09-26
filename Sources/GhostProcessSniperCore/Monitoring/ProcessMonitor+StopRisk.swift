@@ -11,9 +11,17 @@ struct StopRiskCache {
         let revision: UInt64
         let workload: KillWorkloadProfile
         let risk: KillRiskAssessment
+        /// Why the root can never be stopped (Ghost runs inside it, or it
+        /// ends the login session); nil for an ordinary family.
+        let blockedReason: String?
     }
 
     private let assessor = KillRiskAssessor()
+    private let protection: KillProtectionPolicy
+
+    init(protection: KillProtectionPolicy = KillProtectionPolicy()) {
+        self.protection = protection
+    }
     private var entries: [String: Entry] = [:]
     private var index: KillSampleIndex?
     private var revision: UInt64?
@@ -50,7 +58,10 @@ struct StopRiskCache {
             risk = assessor.assess(workload)
             assessmentCount += 1
         }
-        let entry = Entry(key: key, revision: sampleRevision, workload: workload, risk: risk)
+        // Ghost's parent chain can change between samples (a reparented
+        // shell), so the floor is looked up on every sample, not memoized.
+        let blocked = protection.neverReason(forRoot: family.root) { sampleIndex.byPID[$0]?.parentPID }
+        let entry = Entry(key: key, revision: sampleRevision, workload: workload, risk: risk, blockedReason: blocked)
         entries[family.familyKey] = entry
         return entry
     }
@@ -73,6 +84,12 @@ public extension ProcessMonitor {
     /// preview alike, so both always agree.
     func stopRisk(for family: ProcessFamily) -> KillRiskAssessment {
         stopRiskEntry(for: family).risk
+    }
+
+    /// Why the family can never be stopped, such as Ghost running inside
+    /// it; the family page disables its stop button and says so.
+    func stopBlockedReason(for family: ProcessFamily) -> String? {
+        stopRiskEntry(for: family).blockedReason
     }
 
     internal func stopWorkload(for family: ProcessFamily) -> KillWorkloadProfile {
