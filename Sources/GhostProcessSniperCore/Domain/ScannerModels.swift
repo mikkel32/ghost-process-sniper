@@ -150,6 +150,9 @@ public struct ScannerCostLedger: Equatable, Sendable {
     public let skippedOptionalWorkCount: Int
     public let scannerTaskCount: Int
     public let tinyQueueSequentialCount: Int
+    public let usageReadCount: Int
+    public let usageFailedCount: Int
+    public let bsdDeniedCount: Int
 
     public init(
         cheapProbeCount: Int,
@@ -165,7 +168,10 @@ public struct ScannerCostLedger: Equatable, Sendable {
         workerCount: Int = 0,
         skippedOptionalWorkCount: Int = 0,
         scannerTaskCount: Int = 0,
-        tinyQueueSequentialCount: Int = 0
+        tinyQueueSequentialCount: Int = 0,
+        usageReadCount: Int = 0,
+        usageFailedCount: Int = 0,
+        bsdDeniedCount: Int = 0
     ) {
         self.cheapProbeCount = cheapProbeCount
         self.richMetricCount = richMetricCount
@@ -181,6 +187,9 @@ public struct ScannerCostLedger: Equatable, Sendable {
         self.skippedOptionalWorkCount = skippedOptionalWorkCount
         self.scannerTaskCount = scannerTaskCount
         self.tinyQueueSequentialCount = tinyQueueSequentialCount
+        self.usageReadCount = usageReadCount
+        self.usageFailedCount = usageFailedCount
+        self.bsdDeniedCount = bsdDeniedCount
     }
 
     public init(stats: SamplerStats) {
@@ -198,7 +207,10 @@ public struct ScannerCostLedger: Equatable, Sendable {
             workerCount: stats.scannerWorkerCount,
             skippedOptionalWorkCount: stats.skippedOptionalWorkCount,
             scannerTaskCount: stats.scannerTaskCount,
-            tinyQueueSequentialCount: stats.tinyQueueSequentialCount
+            tinyQueueSequentialCount: stats.tinyQueueSequentialCount,
+            usageReadCount: stats.usageReadCount,
+            usageFailedCount: stats.usageFailedCount,
+            bsdDeniedCount: stats.bsdDeniedCount
         )
     }
 }
@@ -286,7 +298,7 @@ public struct ScannerHealthSnapshot: Equatable, Sendable {
             forensicsNegativeCacheHitCount: stats.forensicsNegativeCacheHitCount,
             skippedPIDCount: stats.skippedPIDCount,
             costLedger: ScannerCostLedger(stats: stats),
-            optimizationReport: "Scanner \(Int(stats.elapsedMilliseconds.rounded()))ms / \(Int(budget.targetMilliseconds.rounded()))ms. \(laneSummary). BSD reads: \(stats.bsdReadCount). Task info: \(stats.taskInfoReadCount). Reused: \(stats.reusedRecordCount)."
+            optimizationReport: "Scanner \(Int(stats.elapsedMilliseconds.rounded()))ms / \(Int(budget.targetMilliseconds.rounded()))ms. \(laneSummary). BSD reads: \(stats.bsdReadCount). Task info: \(stats.taskInfoReadCount). Reused: \(stats.reusedRecordCount). Usage: \(stats.usageReadCount), failed \(stats.usageFailedCount). Other users' processes not visible: \(stats.bsdDeniedCount)."
         )
     }
 }

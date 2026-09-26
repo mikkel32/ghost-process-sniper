@@ -33,7 +33,6 @@ public struct SamplingPlan: Equatable, Sendable {
     public var commandRefreshInterval: TimeInterval
     public var includeForensicsFor: Set<ProcessIdentity>
     public var includeForensicsForPIDs: Set<Int32>
-    public var forceCommandRefresh: Bool
     public var allowsOptionalForensics: Bool
     public var maxForensicsPerRefresh: Int
     public var reason: String
@@ -43,16 +42,17 @@ public struct SamplingPlan: Equatable, Sendable {
     public var metricsEnrichmentBudget: Int
     /// Someone is looking at the radar, so latency matters more than overhead.
     public var uiVisible: Bool
+    /// Members of classified developer families: priority work without explicit demand.
+    public var hintedIdentities: Set<ProcessIdentity>
 
     public static func balanced(now: Date = Date()) -> SamplingPlan {
         let budget = ScannerBudget.budget(for: .balanced)
         return SamplingPlan(
             sampledAt: now,
             performanceMode: .balanced,
-            commandRefreshInterval: 10,
+            commandRefreshInterval: SamplingPlan.telemetryRefreshInterval,
             includeForensicsFor: [],
             includeForensicsForPIDs: [],
-            forceCommandRefresh: false,
             allowsOptionalForensics: true,
             maxForensicsPerRefresh: budget.maxForensicsRefreshes,
             reason: "balanced",
@@ -62,14 +62,19 @@ public struct SamplingPlan: Equatable, Sendable {
         )
     }
 
-    /// `lanePriorities` is ignored (nothing ever read it); it stays only so existing callers compile.
+    /// Telemetry refreshes on exec (a new kernel name) and when never read; this
+    /// age is only the safety net for processes that rewrite their own argv.
+    public static let telemetryRefreshInterval: TimeInterval = 600
+
+    /// `lanePriorities` and `forceCommandRefresh` are ignored (nothing needs
+    /// them any more); they stay only so existing callers compile.
     public init(
         sampledAt: Date,
         performanceMode: RadarPerformanceMode,
         commandRefreshInterval: TimeInterval,
         includeForensicsFor: Set<ProcessIdentity>,
         includeForensicsForPIDs: Set<Int32>,
-        forceCommandRefresh: Bool,
+        forceCommandRefresh: Bool = false,
         allowsOptionalForensics: Bool,
         maxForensicsPerRefresh: Int,
         reason: String,
@@ -78,14 +83,14 @@ public struct SamplingPlan: Equatable, Sendable {
         probePolicy: ProcessProbePolicy = .balanced,
         lanePriorities: [ScanLane] = [],
         metricsEnrichmentBudget: Int? = nil,
-        uiVisible: Bool = false
+        uiVisible: Bool = false,
+        hintedIdentities: Set<ProcessIdentity> = []
     ) {
         self.sampledAt = sampledAt
         self.performanceMode = performanceMode
         self.commandRefreshInterval = commandRefreshInterval
         self.includeForensicsFor = includeForensicsFor
         self.includeForensicsForPIDs = includeForensicsForPIDs
-        self.forceCommandRefresh = forceCommandRefresh
         self.allowsOptionalForensics = allowsOptionalForensics
         self.maxForensicsPerRefresh = maxForensicsPerRefresh
         self.reason = reason
@@ -94,6 +99,7 @@ public struct SamplingPlan: Equatable, Sendable {
         self.probePolicy = probePolicy
         self.metricsEnrichmentBudget = metricsEnrichmentBudget ?? max(4, (scannerBudget ?? ScannerBudget.budget(for: performanceMode)).maxTelemetryRefreshes * 2)
         self.uiVisible = uiVisible
+        self.hintedIdentities = hintedIdentities
     }
 }
 
@@ -121,6 +127,11 @@ public struct SamplerStats: Equatable, Sendable {
     public let reusedRecordCount: Int
     public let pidBufferCopyCount: Int
     public let scratchpadReuseCount: Int
+    /// Processes whose CPU and memory were read this tick.
+    public let usageReadCount: Int
+    public let usageFailedCount: Int
+    /// Other users' processes the kernel will not describe without privilege.
+    public let bsdDeniedCount: Int
 
     public static let empty = SamplerStats(
         processCount: 0,
@@ -154,7 +165,10 @@ public struct SamplerStats: Equatable, Sendable {
         taskInfoReadCount: Int = 0,
         reusedRecordCount: Int = 0,
         pidBufferCopyCount: Int = 0,
-        scratchpadReuseCount: Int = 0
+        scratchpadReuseCount: Int = 0,
+        usageReadCount: Int = 0,
+        usageFailedCount: Int = 0,
+        bsdDeniedCount: Int = 0
     ) {
         self.processCount = processCount
         self.commandRefreshCount = commandRefreshCount
@@ -179,6 +193,9 @@ public struct SamplerStats: Equatable, Sendable {
         self.reusedRecordCount = reusedRecordCount
         self.pidBufferCopyCount = pidBufferCopyCount
         self.scratchpadReuseCount = scratchpadReuseCount
+        self.usageReadCount = usageReadCount
+        self.usageFailedCount = usageFailedCount
+        self.bsdDeniedCount = bsdDeniedCount
     }
 }
 

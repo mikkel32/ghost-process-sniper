@@ -2,15 +2,21 @@ import Foundation
 
 public struct RadarScheduler: Sendable {
     private var lastInterval: TimeInterval = 1
-    private var lastPlan: SamplingPlan = .balanced(now: Date(timeIntervalSince1970: 0))
     private var systemPressure: SystemPressureLevel = .nominal
     private var effectivePerformanceMode: RadarPerformanceMode = .balanced
     private var cadenceStep: UInt64 = 0
+    private let pressureProvider: @Sendable () -> SystemPressureLevel
 
-    public init() {}
+    public init() {
+        pressureProvider = { Self.currentSystemPressure() }
+    }
+
+    init(pressureProvider: @escaping @Sendable () -> SystemPressureLevel) {
+        self.pressureProvider = pressureProvider
+    }
 
     public mutating func updateSystemPressure() -> SystemPressureLevel {
-        systemPressure = Self.currentSystemPressure()
+        systemPressure = pressureProvider()
         return systemPressure
     }
 
@@ -37,36 +43,35 @@ public struct RadarScheduler: Sendable {
             pids: demand.candidatePIDs,
             reason: demand.reason
         )
+        // CPU and memory are read for every process regardless; this only
+        // bounds thread and VM reads, so even a critical thermal state keeps
+        // the hot and focused cohort measured.
         let probePolicy = ProcessProbePolicy(
             richMetricIdentities: candidates.identities,
             richMetricPIDs: candidates.pids,
-            allowsRichMetrics: pressure != .critical
+            allowsRichMetrics: true
         )
+        let demandBudget = demand.hotFamilyCount * 4 + demand.focusedFamilyCount * 4
+        let metricsBudget = pressure == .critical
+            ? max(4, demandBudget)
+            : max(scannerBudget.maxTelemetryRefreshes, demandBudget)
 
-        let commandInterval: TimeInterval = switch mode {
-        case .batterySaver: popoverVisible ? 15 : 30
-        case .balanced: popoverVisible ? 8 : 20
-        case .realtime: 5
-        }
-
-        let plan = SamplingPlan(
+        return SamplingPlan(
             sampledAt: now,
             performanceMode: mode,
-            commandRefreshInterval: commandInterval,
+            commandRefreshInterval: SamplingPlan.telemetryRefreshInterval,
             includeForensicsFor: demand.forensicsIdentities,
             includeForensicsForPIDs: demand.forensicsPIDs,
-            forceCommandRefresh: popoverVisible && now.timeIntervalSince(lastPlan.sampledAt) >= commandInterval,
             allowsOptionalForensics: pressure.allowsOptionalForensics,
             maxForensicsPerRefresh: maxForensics,
             reason: candidates.reason,
             scannerBudget: scannerBudget,
             candidateSet: candidates,
             probePolicy: probePolicy,
-            metricsEnrichmentBudget: max(scannerBudget.maxTelemetryRefreshes, demand.hotFamilyCount * 4 + demand.focusedFamilyCount * 4),
-            uiVisible: popoverVisible
+            metricsEnrichmentBudget: metricsBudget,
+            uiVisible: popoverVisible,
+            hintedIdentities: demand.devIdentities
         )
-        lastPlan = plan
-        return plan
     }
 
     public mutating func nextInterval(

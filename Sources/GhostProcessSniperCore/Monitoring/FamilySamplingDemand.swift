@@ -9,8 +9,12 @@ struct FamilySamplingDemand: Sendable {
     private(set) var candidatePIDs = Set<Int32>()
     private(set) var forensicsIdentities = Set<ProcessIdentity>()
     private(set) var forensicsPIDs = Set<Int32>()
+    /// Members of classified developer families: priority work without explicit demand.
+    private(set) var devIdentities = Set<ProcessIdentity>()
     private(set) var hotFamilyCount = 0
     private(set) var focusedFamilyCount = 0
+
+    static let developerConfidence = 0.45
 
     var reason: String {
         if hotFamilyCount > 0 { return "hot-family" }
@@ -37,6 +41,9 @@ struct FamilySamplingDemand: Sendable {
             if isHot || isFocused {
                 forensicsPIDs.insert(family.root.pid)
                 forensicsIdentities.formUnion(family.members.lazy.map(\.identity))
+            }
+            if family.classification != nil || family.devConfidence >= Self.developerConfidence {
+                devIdentities.formUnion(family.members.lazy.map(\.identity))
             }
         }
     }

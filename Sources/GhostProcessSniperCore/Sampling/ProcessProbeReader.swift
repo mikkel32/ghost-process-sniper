@@ -1,100 +1,103 @@
 import Darwin
 import Foundation
 
-/// Reads the cheap identity graph before spending the bounded enrichment budget.
+struct RawProcessSample: Sendable {
+    let pid: pid_t
+    let liteRecord: ProcessLiteRecord
+    /// Raw `pbi_name`; empty when the kernel has none (the lite record then says `pid-N`).
+    let kernelName: String
+    let usage: ProbeUsage?
+    var task: ProbeTask?
+    /// 2 is explicit focus or alert demand, 1 a developer hint, 0 discovery.
+    let priority: Int
+}
+
+struct ProbeReadStats: Sendable {
+    var bsdReadCount = 0
+    var bsdDeniedCount = 0
+    var usageReadCount = 0
+    var usageFailedCount = 0
+    var taskInfoReadCount = 0
+    var expensiveCallCount = 0
+    var didHitDeadline = false
+}
+
+/// Reads the identity graph and the CPU and memory lane for every readable
+/// process, then spends the bounded task-info budget on thread and VM counts.
 enum ProcessProbeReader {
-    private static let developerNames: Set<String> = [
-        "node", "npm", "pnpm", "yarn", "bun", "vite", "deno", "python", "python3",
-        "ruby", "rails", "java", "gradle", "mvn", "docker", "com.docker.backend",
-        "colima", "ollama", "swift", "swift-frontend", "swift-build", "xcodebuild",
-        "electron", "uvicorn", "gunicorn", "webpack", "next"
-    ]
+    static func read(
+        _ pids: [pid_t],
+        count: Int,
+        plan: SamplingPlan,
+        source: any ProcessProbeSource,
+        deadline: TickDeadline,
+        pass: UInt64,
+        known: ProcessScanCache,
+        hints: inout DeveloperNameHints,
+        samples: inout [RawProcessSample],
+        priorities: inout [Int]
+    ) -> ProbeReadStats {
+        samples.removeAll(keepingCapacity: true)
+        priorities.removeAll(keepingCapacity: true)
+        samples.reserveCapacity(count)
+        priorities.reserveCapacity(count)
+        var stats = ProbeReadStats()
 
-    static func read(_ pids: [pid_t], startIndex: Int, endIndex: Int,
-                     plan: SamplingPlan, deadline: SamplerDeadline, pass: UInt64, budget: Int) -> ParallelProbeResult {
-        var samples: [RawProcessSample] = []
-        var priorities: [Int] = []
-        samples.reserveCapacity(max(0, endIndex - startIndex))
-        priorities.reserveCapacity(max(0, endIndex - startIndex))
-        var skipped = 0
-        var expired = false
-        var taskReads = 0
-        var expensiveCalls = 0
-
-        for index in startIndex..<endIndex {
-            if deadline.isExpired() {
-                expired = true
-                skipped += endIndex - index
-                break
-            }
+        // Mandatory and never deadline-bound: a dropped tail would be the
+        // oldest processes, and their families would lose members and history.
+        for index in 0..<count {
             let pid = pids[index]
             guard pid > 0 else { continue }
-            var info = proc_bsdinfo()
-            let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
-            guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { continue }
-            let identity = ProcessIdentity(pid: Int32(pid), startTimeSeconds: info.pbi_start_tvsec,
-                startTimeMicroseconds: info.pbi_start_tvusec)
-            let name = processName(info, pid: pid)
+            let bsd: ProbeBSD
+            switch source.bsd(pid) {
+            case .record(let record): bsd = record
+            case .denied:
+                stats.bsdDeniedCount += 1
+                continue
+            case .missing: continue
+            }
+            stats.bsdReadCount += 1
+
+            // The usage lane is never gated by budget or thermal pressure.
+            var usage = source.usage(pid)
+            if usage != nil {
+                usage?.sampledAtUptimeNanoseconds = source.now()
+                stats.usageReadCount += 1
+            } else {
+                stats.usageFailedCount += 1
+            }
+
+            let identity = ProcessIdentity(pid: Int32(pid), startTimeSeconds: bsd.startTimeSeconds,
+                startTimeMicroseconds: bsd.startTimeMicroseconds)
+            let name = bsd.name.isEmpty ? "pid-\(pid)" : bsd.name
             let requested = plan.candidateSet.contains(identity: identity, pid: Int32(pid)) ||
                 plan.includeForensicsFor.contains(identity) || plan.includeForensicsForPIDs.contains(Int32(pid)) ||
                 plan.probePolicy.richMetricIdentities.contains(identity) || plan.probePolicy.richMetricPIDs.contains(Int32(pid))
-            let hinted = isDeveloperName(name)
-            let lite = ProcessLiteRecord(identity: identity, parentPID: Int32(info.pbi_ppid),
-                userID: info.pbi_uid, name: name, processGroupID: Int32(info.pbi_pgid), status: info.pbi_status,
-                flags: info.pbi_flags, openFileCount: Int(info.pbi_nfiles), sampledAt: plan.sampledAt)
-            priorities.append(requested ? 2 : hinted ? 1 : 0)
-            samples.append(RawProcessSample(pid: pid, liteRecord: lite, taskInfo: nil, usage: nil,
-                preliminaryPriority: requested || hinted))
+            let hinted = !requested && (plan.hintedIdentities.contains(identity) ||
+                known.record(for: identity) == nil && hints.isDeveloperName(bsd.name))
+            let priority = requested ? 2 : hinted ? 1 : 0
+            let lite = ProcessLiteRecord(identity: identity, parentPID: bsd.parentPID,
+                userID: bsd.userID, name: name, processGroupID: bsd.processGroupID, status: bsd.status,
+                flags: bsd.flags, openFileCount: bsd.openFileCount, sampledAt: plan.sampledAt)
+            priorities.append(priority)
+            samples.append(RawProcessSample(pid: pid, liteRecord: lite, kernelName: bsd.name,
+                usage: usage, task: nil, priority: priority))
         }
 
-        let selected = RichProbeSelector.indices(priorities: priorities,
-            budget: plan.probePolicy.allowsRichMetrics ? budget : 0, pass: pass)
-        for index in selected {
-            if deadline.isExpired() {
-                expired = true
+        let budget = plan.probePolicy.allowsRichMetrics
+            ? plan.metricsEnrichmentBudget
+            : max(4, plan.metricsEnrichmentBudget / 4)
+        for index in RichProbeSelector.indices(priorities: priorities, budget: budget, pass: pass) {
+            if deadline.isExpired(at: source.now()) {
+                stats.didHitDeadline = true
                 break
             }
-            let sample = samples[index]
-            var task = proc_taskallinfo()
-            let size = Int32(MemoryLayout<proc_taskallinfo>.stride)
-            expensiveCalls += 1
-            guard proc_pidinfo(sample.pid, PROC_PIDTASKALLINFO, 0, &task, size) == size,
-                  task.pbsd.pbi_start_tvsec == sample.liteRecord.identity.startTimeSeconds,
-                  task.pbsd.pbi_start_tvusec == sample.liteRecord.identity.startTimeMicroseconds else {
-                // Keep the BSD record. A denied or raced task read is not a disappeared process.
-                continue
-            }
-            taskReads += 1
-            var usageInfo = rusage_info_v4()
-            let result = withUnsafeMutablePointer(to: &usageInfo) { pointer in
-                pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { rebound in
-                    proc_pid_rusage(sample.pid, RUSAGE_INFO_V4, rebound)
-                }
-            }
-            samples[index] = RawProcessSample(pid: sample.pid, liteRecord: sample.liteRecord,
-                taskInfo: task, usage: result == 0 ? usageInfo : nil,
-                preliminaryPriority: sample.preliminaryPriority)
+            stats.expensiveCallCount += 1
+            // A denied or raced task read keeps the cached thread and VM counts.
+            guard let task = source.taskInfo(samples[index].pid) else { continue }
+            stats.taskInfoReadCount += 1
+            samples[index].task = task
         }
-        return ParallelProbeResult(samples: samples, cheapMetricsCount: samples.count,
-            richMetricsCount: taskReads, skippedCount: skipped, expensiveCallCount: expensiveCalls,
-            bsdReadCount: samples.count, taskInfoReadCount: taskReads, didHitDeadline: expired)
-    }
-
-    private static func processName(_ info: proc_bsdinfo, pid: pid_t) -> String {
-        var storage = info.pbi_name
-        let capacity = MemoryLayout.size(ofValue: storage)
-        return withUnsafePointer(to: &storage) { pointer in
-            pointer.withMemoryRebound(to: CChar.self, capacity: capacity) { rebound in
-                let name = String(cString: rebound)
-                return name.isEmpty ? "pid-\(pid)" : name
-            }
-        }
-    }
-
-    private static func isDeveloperName(_ name: String) -> Bool {
-        let lowered = name.lowercased()
-        return developerNames.contains(lowered) || lowered.contains("electron") ||
-            lowered.contains("vite") || lowered.contains("ollama") ||
-            lowered.contains("llama") || lowered.contains("node")
+        return stats
     }
 }

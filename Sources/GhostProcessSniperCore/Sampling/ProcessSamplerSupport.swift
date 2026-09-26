@@ -63,6 +63,9 @@ struct SamplingCounters {
     var reusedRecordCount = 0
     var pidBufferCopyCount = 0
     var scratchpadReuseCount = 0
+    var usageReadCount = 0
+    var usageFailedCount = 0
+    var bsdDeniedCount = 0
     var didHitDeadline = false
     var laneCounts: [ScanLane: Int] = [:]
 
@@ -75,5 +78,79 @@ struct SamplingCounters {
             return
         }
         laneCounts[lane, default: 0] += amount
+    }
+}
+
+extension SamplingCounters {
+    mutating func record(_ probe: ProbeReadStats) {
+        bsdReadCount += probe.bsdReadCount
+        bsdDeniedCount += probe.bsdDeniedCount
+        usageReadCount += probe.usageReadCount
+        usageFailedCount += probe.usageFailedCount
+        taskInfoReadCount += probe.taskInfoReadCount
+        richMetricRefreshCount += probe.taskInfoReadCount
+        expensiveCallCount += probe.expensiveCallCount
+        didHitDeadline = didHitDeadline || probe.didHitDeadline
+        count(.cheapMetrics, by: probe.bsdReadCount)
+        count(.richMetrics, by: probe.taskInfoReadCount)
+    }
+
+    func stats(processCount: Int, elapsedMilliseconds: Double) -> SamplerStats {
+        SamplerStats(
+            processCount: processCount,
+            commandRefreshCount: commandRefreshCount,
+            commandCacheHitCount: commandCacheHitCount,
+            forensicsRefreshCount: forensicsRefreshCount,
+            forensicsDeferredCount: forensicsDeferredCount,
+            elapsedMilliseconds: elapsedMilliseconds,
+            telemetryDeferredCount: telemetryDeferredCount,
+            forensicsCacheHitCount: forensicsCacheHitCount,
+            forensicsNegativeCacheHitCount: forensicsNegativeCacheHitCount,
+            skippedPIDCount: skippedPIDCount,
+            expensiveCallCount: expensiveCallCount,
+            richMetricRefreshCount: richMetricRefreshCount,
+            scannerWorkerCount: scannerWorkerCount,
+            skippedOptionalWorkCount: skippedOptionalWorkCount,
+            scannerTaskCount: scannerTaskCount,
+            tinyQueueSequentialCount: tinyQueueSequentialCount,
+            didHitDeadline: didHitDeadline,
+            laneCounts: laneCounts,
+            bsdReadCount: bsdReadCount,
+            taskInfoReadCount: taskInfoReadCount,
+            reusedRecordCount: reusedRecordCount,
+            pidBufferCopyCount: pidBufferCopyCount,
+            scratchpadReuseCount: scratchpadReuseCount,
+            usageReadCount: usageReadCount,
+            usageFailedCount: usageFailedCount,
+            bsdDeniedCount: bsdDeniedCount
+        )
+    }
+}
+
+/// One tick's working set. The actor keeps it between ticks so the buffers
+/// keep their capacity.
+struct SamplerTick {
+    var rawSamples: [RawProcessSample] = []
+    var rawPriorities: [Int] = []
+    var samples: [ActiveProcessSample] = []
+    var telemetryJobs: [TelemetryJob] = []
+    var forensicsJobs: [ForensicsJob] = []
+    var identitiesByPID: [Int32: ProcessIdentity] = [:]
+    var indexByIdentity: [ProcessIdentity: Int] = [:]
+    var counters = SamplingCounters()
+    var deadline = TickDeadline(startedAt: 0, budgetMilliseconds: 0)
+    private(set) var reused = false
+    private var used = false
+
+    mutating func reset(deadline: TickDeadline) {
+        samples.removeAll(keepingCapacity: true)
+        telemetryJobs.removeAll(keepingCapacity: true)
+        forensicsJobs.removeAll(keepingCapacity: true)
+        identitiesByPID.removeAll(keepingCapacity: true)
+        indexByIdentity.removeAll(keepingCapacity: true)
+        counters = SamplingCounters()
+        self.deadline = deadline
+        reused = used
+        used = true
     }
 }

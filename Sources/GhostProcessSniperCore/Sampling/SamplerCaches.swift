@@ -7,6 +7,31 @@ public struct ProcessTelemetryCache: Sendable {
         public let commandLine: String
         public let ownerName: String
         public let refreshedAt: Date
+        /// A name-only stand-in for telemetry that has not been read yet. It is
+        /// never cached, never fresh and never counted as a cache hit.
+        public let isPlaceholder: Bool
+        /// argv was read, or found unreadable. A path-only entry still waits for the argv lane.
+        let argumentsRead: Bool
+        /// The BSD name the entry was read under. The same identity under a new
+        /// name has exec'd, so the entry no longer describes it.
+        let kernelName: String
+
+        init(name: String, executablePath: String, commandLine: String, ownerName: String, refreshedAt: Date,
+             isPlaceholder: Bool = false, argumentsRead: Bool = true, kernelName: String = "") {
+            self.name = name
+            self.executablePath = executablePath
+            self.commandLine = commandLine
+            self.ownerName = ownerName
+            self.refreshedAt = refreshedAt
+            self.isPlaceholder = isPlaceholder
+            self.argumentsRead = argumentsRead
+            self.kernelName = kernelName
+        }
+
+        static func placeholder(name: String, ownerName: String) -> Entry {
+            Entry(name: name, executablePath: "", commandLine: name, ownerName: ownerName,
+                  refreshedAt: .distantPast, isPlaceholder: true, argumentsRead: false)
+        }
     }
 
     private var entries: [ProcessIdentity: Entry] = [:]
@@ -18,7 +43,12 @@ public struct ProcessTelemetryCache: Sendable {
     }
 
     public mutating func update(_ entry: Entry, for identity: ProcessIdentity) {
+        guard !entry.isPlaceholder else { return }
         entries[identity] = entry
+    }
+
+    mutating func remove(_ identity: ProcessIdentity) {
+        entries[identity] = nil
     }
 
     public mutating func prune(keeping identities: Set<ProcessIdentity>) {
@@ -61,6 +91,10 @@ public struct ForensicsCache: Sendable {
         entries[identity] = Entry(forensics: forensics, refreshedAt: date)
     }
 
+    mutating func remove(_ identity: ProcessIdentity) {
+        entries[identity] = nil
+    }
+
     public mutating func prune(keeping identities: Set<ProcessIdentity>) {
         entries = entries.filter { identities.contains($0.key) }
     }
@@ -95,18 +129,15 @@ public struct ProcessScanCache: Sendable {
         records = records.filter { identities.contains($0.key) }
     }
 
+    /// A record whose telemetry was a placeholder carries `.distantPast`, so it is always due.
     public func shouldRefreshTelemetry(
         identity: ProcessIdentity,
         now: Date,
         maxAge: TimeInterval,
         grace: TimeInterval,
-        isPriority: Bool,
-        force: Bool
+        isPriority: Bool
     ) -> Bool {
         guard let record = records[identity] else {
-            return true
-        }
-        if force {
             return true
         }
         let age = now.timeIntervalSince(record.telemetryRefreshedAt)

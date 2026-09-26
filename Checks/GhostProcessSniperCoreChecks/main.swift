@@ -20,6 +20,7 @@ struct CoreChecks {
         await run("nativeKillSnapshotProviderUsesLitePath") { try await nativeKillSnapshotProviderUsesLitePath() }
         await run("nativeSamplerDefersForensicsWhenPlanRequestsIt") { try await nativeSamplerDefersForensicsWhenPlanRequestsIt() }
         await run("nativeSamplerUsesBSDFirstCheapGraph") { try await nativeSamplerUsesBSDFirstCheapGraph() }
+        await run("nativeForensicsListOnlyListeningPorts") { try await nativeForensicsListOnlyListeningPorts() }
         await run("classifierScoresDevProcesses") { try classifierScoresDevProcesses() }
         await run("classifierProducesProcessKinds") { try classifierProducesProcessKinds() }
         await run("duplicateDetectorCapturesSmallSameUserProcesses") { try duplicateDetectorCapturesSmallSameUserProcesses() }
@@ -164,7 +165,6 @@ private func nativeSamplerDefersForensicsWhenPlanRequestsIt() async throws {
             commandRefreshInterval: 60,
             includeForensicsFor: [],
             includeForensicsForPIDs: [],
-            forceCommandRefresh: false,
             allowsOptionalForensics: false,
             maxForensicsPerRefresh: 0,
             reason: "check"
@@ -177,7 +177,6 @@ private func nativeSamplerDefersForensicsWhenPlanRequestsIt() async throws {
             commandRefreshInterval: 60,
             includeForensicsFor: [],
             includeForensicsForPIDs: [],
-            forceCommandRefresh: false,
             allowsOptionalForensics: false,
             maxForensicsPerRefresh: 0,
             reason: "check"
@@ -187,6 +186,9 @@ private func nativeSamplerDefersForensicsWhenPlanRequestsIt() async throws {
     try check(first.stats.forensicsRefreshCount == 0, "battery saver plan should skip expensive forensics")
     try check(first.stats.forensicsDeferredCount > 0, "sampler should report deferred forensics")
     try check(second.stats.commandCacheHitCount > 0, "sampler should reuse command/path cache on stable processes")
+    let ownProcesses = second.processes.filter { $0.userID == geteuid() }
+    let pathless = ownProcesses.filter { $0.executablePath.isEmpty }
+    try check(Double(pathless.count) < 0.05 * Double(max(1, ownProcesses.count)), "second sample should know the executable path of almost every same-user process, \(pathless.count) of \(ownProcesses.count) missing")
 }
 
 private func nativeSamplerUsesBSDFirstCheapGraph() async throws {
@@ -197,7 +199,6 @@ private func nativeSamplerUsesBSDFirstCheapGraph() async throws {
         commandRefreshInterval: 120,
         includeForensicsFor: [],
         includeForensicsForPIDs: [],
-        forceCommandRefresh: false,
         allowsOptionalForensics: false,
         maxForensicsPerRefresh: 0,
         reason: "bsd-first-check",
@@ -209,11 +210,74 @@ private func nativeSamplerUsesBSDFirstCheapGraph() async throws {
     let second = try await sampler.sample(plan: secondPlan)
 
     try check(first.stats.bsdReadCount >= first.stats.processCount, "cheap graph scan should read BSD identity for sampled processes")
+    try check(Double(first.stats.usageReadCount) >= 0.9 * Double(first.stats.processCount), "every readable process should get a CPU and memory reading each tick")
+    try check(first.stats.taskInfoReadCount <= plan.metricsEnrichmentBudget, "task-info reads should stay within the enrichment budget")
     try check(first.stats.taskInfoReadCount < max(1, first.stats.bsdReadCount), "quiet scan should avoid all-process task-info sweeps")
     try check(first.stats.pidBufferCopyCount == 0, "the single probe pass should read the PID buffer in place")
     try check(second.stats.scratchpadReuseCount > 0, "sampler should reuse actor-owned scratch buffers")
     try check(second.stats.reusedRecordCount > 0 || second.stats.commandCacheHitCount > 0, "stable quiet refresh should reuse cached process records or telemetry")
+    if geteuid() != 0 {
+        try check(first.stats.bsdDeniedCount > 0, "an unprivileged scan should count other users' processes it cannot see")
+    }
 }
+
+private func nativeForensicsListOnlyListeningPorts() async throws {
+    #if os(macOS)
+    try await withLoopbackConnection { listenerPort, clientPort in
+        let sampler = NativeProcessSampler()
+        var plan = SamplingPlan.balanced(now: Date(timeIntervalSince1970: 1_020))
+        plan.includeForensicsForPIDs = [getpid()]
+        let batch = try await sampler.sample(plan: plan)
+        guard let current = batch.processes.first(where: { $0.pid == getpid() }) else {
+            throw CheckFailure(message: "sampler did not include current process")
+        }
+        try check(current.forensics.listeningPorts.contains(listenerPort), "forensics should list the check's TCP listener")
+        try check(!current.forensics.listeningPorts.contains(clientPort), "forensics should not list an outbound connection's ephemeral port")
+    }
+    #endif
+}
+
+#if os(macOS)
+/// A loopback listener plus one outbound connection to it, both held open while `body` runs.
+private func withLoopbackConnection(_ body: (_ listenerPort: Int, _ clientPort: Int) async throws -> Void) async throws {
+    let listener = socket(AF_INET, SOCK_STREAM, 0)
+    guard listener >= 0 else { throw CheckFailure(message: "socket failed") }
+    defer { close(listener) }
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    address.sin_port = 0
+    let length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let bound = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, length) }
+    }
+    guard bound == 0, listen(listener, 4) == 0 else { throw CheckFailure(message: "listen failed") }
+    let listenerPort = try boundPort(listener)
+
+    let client = socket(AF_INET, SOCK_STREAM, 0)
+    guard client >= 0 else { throw CheckFailure(message: "client socket failed") }
+    defer { close(client) }
+    address.sin_port = in_port_t(UInt16(listenerPort).bigEndian)
+    let connected = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, length) }
+    }
+    guard connected == 0 else { throw CheckFailure(message: "connect failed") }
+    let accepted = accept(listener, nil, nil)
+    defer { if accepted >= 0 { close(accepted) } }
+    try await body(listenerPort, try boundPort(client))
+}
+
+private func boundPort(_ descriptor: Int32) throws -> Int {
+    var address = sockaddr_in()
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let result = withUnsafeMutablePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(descriptor, $0, &length) }
+    }
+    guard result == 0 else { throw CheckFailure(message: "getsockname failed") }
+    return Int(UInt16(bigEndian: address.sin_port))
+}
+#endif
 
 private func classifierScoresDevProcesses() throws {
     let classifier = DevProcessClassifier()
@@ -1259,24 +1323,21 @@ private func scannerDeadlineAndCachesBehave() throws {
         now: Date(timeIntervalSince1970: 1_005),
         maxAge: 10,
         grace: 10,
-        isPriority: false,
-        force: false
+        isPriority: false
     ), "unchanged quiet process should reuse cached telemetry")
     try check(cache.shouldRefreshTelemetry(
         identity: process.identity,
         now: Date(timeIntervalSince1970: 1_030),
         maxAge: 10,
         grace: 10,
-        isPriority: false,
-        force: false
+        isPriority: false
     ), "quiet telemetry should refresh after max age plus grace")
     try check(cache.shouldRefreshTelemetry(
         identity: process.identity,
         now: Date(timeIntervalSince1970: 1_012),
         maxAge: 10,
         grace: 10,
-        isPriority: true,
-        force: false
+        isPriority: true
     ), "priority telemetry should use the shorter max-age window")
 
     var forensics = ForensicsCache()
