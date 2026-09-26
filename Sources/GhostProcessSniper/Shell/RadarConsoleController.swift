@@ -110,6 +110,12 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         session?.ignoreSelected()
     }
 
+    func prepareKill(familyKey: String) {
+        showIfNeeded()
+        session?.focus(.family(familyKey))
+        session?.prepareKill(familyKey: familyKey)
+    }
+
     func prepareKillSelected() {
         showIfNeeded()
         session?.prepareKillSelected()

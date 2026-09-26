@@ -52,6 +52,32 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         consoleController.focusSection(selection)
     }
 
+    /// A notification click or action. Keys come from the notification, so the
+    /// family is resolved again in case it restarted since the alert.
+    func handleNotification(action: String, familyKey: String?, signatureID: String?) {
+        let family = familyKey.flatMap { monitor.family(signatureID: $0) }
+            ?? signatureID.flatMap { monitor.family(signatureID: $0) }
+        switch action {
+        case NotificationRouter.snoozeAction:
+            guard let target = signatureID ?? familyKey else {
+                return
+            }
+            Task { [monitor] in await monitor.snooze(signatureID: target, minutes: 60) }
+        case NotificationRouter.stopAction:
+            openConsole()
+            if let family {
+                consoleController.prepareKill(familyKey: family.familyKey)
+            } else if let key = familyKey ?? signatureID {
+                consoleController.focusFamily(key)
+            }
+        default:
+            openConsole()
+            if let key = family?.familyKey ?? familyKey ?? signatureID {
+                consoleController.focusFamily(key)
+            }
+        }
+    }
+
     func findProcesses() {
         openConsole()
         consoleController.find()

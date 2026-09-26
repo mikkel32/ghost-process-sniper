@@ -38,6 +38,18 @@ struct GhostProcessSniperApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = MenuBarCoordinator()
     private let metricKitSubscriber = RadarMetricKitSubscriber()
+    // The notification center holds its delegate weakly.
+    private var notificationRouter: NotificationRouter?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Unbundled dev builds have no notification center.
+        guard Bundle.main.bundleIdentifier != nil else {
+            return
+        }
+        let router = NotificationRouter(coordinator: coordinator)
+        router.install()
+        notificationRouter = router
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
