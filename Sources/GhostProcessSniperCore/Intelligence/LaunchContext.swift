@@ -42,11 +42,21 @@ public enum LaunchContext: String, Codable, Sendable {
 public enum LaunchContextResolver {
     /// `livePIDs` are the pids alive in the same sample.
     public static func resolve(root: ProcessMetrics, livePIDs: Set<Int32>) -> LaunchContext {
-        if LaunchOrigin.isAppMainBinary(path: root.executablePath, name: root.name) {
+        resolve(
+            root: root,
+            livePIDs: livePIDs,
+            isAppMainBinary: LaunchOrigin.isAppMainBinary(path: root.executablePath, name: root.name),
+            isLaunchdManaged: LaunchOrigin.isLaunchdManaged(path: root.executablePath, commandLine: root.commandLine)
+        )
+    }
+
+    /// With the path verdicts precomputed, as the builder caches them.
+    static func resolve(root: ProcessMetrics, livePIDs: Set<Int32>, isAppMainBinary: Bool, isLaunchdManaged: Bool) -> LaunchContext {
+        if isAppMainBinary {
             return .appBundle
         }
         if root.parentPID == 1 {
-            if LaunchOrigin.isLaunchdManaged(path: root.executablePath, commandLine: root.commandLine) {
+            if isLaunchdManaged {
                 return .launchdJob
             }
             if let session = root.sessionID {

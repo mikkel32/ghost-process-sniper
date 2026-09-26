@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// The words a process is known by, cut at real boundaries so rules match
@@ -109,7 +110,17 @@ public struct WorkloadTokens: Sendable {
     /// matching; single words must be whole words.
     public func mentions(_ markers: [String]) -> Bool {
         markers.contains { marker in
-            marker.contains(" ") || marker.contains("/") ? lowerCommand.contains(marker) || lowerPath.contains(marker) : words.contains(marker)
+            let isPhrase = marker.utf8.contains { $0 == UInt8(ascii: " ") || $0 == UInt8(ascii: "/") }
+            return isPhrase ? Self.contains(lowerCommand, marker) || Self.contains(lowerPath, marker) : words.contains(marker)
+        }
+    }
+
+    /// A byte search: Foundation's substring search costs far more, and the
+    /// catalog runs dozens of them per new process.
+    static func contains(_ haystack: String, _ needle: String) -> Bool {
+        guard !needle.isEmpty, !haystack.isEmpty else { return false }
+        return haystack.withCString { text in
+            needle.withCString { strstr(text, $0) != nil }
         }
     }
 

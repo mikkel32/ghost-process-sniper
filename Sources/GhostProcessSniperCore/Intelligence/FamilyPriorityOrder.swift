@@ -56,6 +56,10 @@ enum FamilyPriorityOrder {
     }
 
     private static func namesInIncreasingOrder(_ lhs: ProcessFamily, _ rhs: ProcessFamily) -> Bool {
+        // Equal names are common (every "node"); skip the costly compare.
+        if lhs.displayName == rhs.displayName {
+            return lhs.familyKey < rhs.familyKey
+        }
         switch lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) {
         case .orderedAscending: return true
         case .orderedDescending: return false

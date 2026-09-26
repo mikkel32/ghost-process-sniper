@@ -13,6 +13,7 @@ struct ProcessStaticFacts: Sendable {
     let parentDirectory: String
     let isHelperNamed: Bool
     let isAppMainBinary: Bool
+    let isLaunchdManaged: Bool
     let isHardwareEligible: Bool
     /// Nil when the process is not a duplicate candidate at all.
     let duplicateKey: DuplicateClusterKey?

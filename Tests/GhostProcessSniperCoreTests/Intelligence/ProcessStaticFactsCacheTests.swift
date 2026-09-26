@@ -53,6 +53,7 @@ final class ProcessStaticFactsCacheTests: XCTestCase {
             parentDirectory: ProcessStaticFacts.parentDirectory(of: process.executablePath),
             isHelperNamed: false,
             isAppMainBinary: false,
+            isLaunchdManaged: false,
             isHardwareEligible: true,
             duplicateKey: nil
         )

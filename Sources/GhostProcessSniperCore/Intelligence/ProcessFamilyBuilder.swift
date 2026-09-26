@@ -188,8 +188,8 @@ public struct ProcessFamilyBuilder: Sendable {
                 activity: activity,
                 trendStep: step,
                 forensics: forensics,
-                forgotten: assessForgotten(root: membership.root, forensics: forensics, activity: activity,
-                                           livePIDs: livePIDs, now: now),
+                forgotten: assessForgotten(root: membership.root, facts: tree.facts[membership.root.pid], forensics: forensics,
+                                           activity: activity, livePIDs: livePIDs, now: now),
                 hardwareProfiles: hardwareProfiles,
                 settings: settings,
                 trendWindow: &trendWindow,
@@ -243,6 +243,7 @@ public struct ProcessFamilyBuilder: Sendable {
             parentDirectory: ProcessStaticFacts.parentDirectory(of: process.executablePath),
             isHelperNamed: process.name.lowercased().contains("helper"),
             isAppMainBinary: tokens.isAppMainBinary,
+            isLaunchdManaged: LaunchOrigin.isLaunchdManaged(path: process.executablePath, commandLine: process.commandLine),
             isHardwareEligible: hardwareDetector.isEligibleForGenericHardwareDetection(process),
             duplicateKey: duplicateDetector.candidateKey(for: process, tokens: tokens, classification: classification)
         )
@@ -254,12 +255,16 @@ public struct ProcessFamilyBuilder: Sendable {
 
     private func assessForgotten(
         root: ProcessMetrics,
+        facts: ProcessStaticFacts?,
         forensics: ProcessForensics,
         activity: FamilyCPUActivity,
         livePIDs: Set<Int32>,
         now: Date
     ) -> ForgottenAssessment {
-        let context = LaunchContextResolver.resolve(root: root, livePIDs: livePIDs)
+        let context = facts.map {
+            LaunchContextResolver.resolve(root: root, livePIDs: livePIDs, isAppMainBinary: $0.isAppMainBinary,
+                                          isLaunchdManaged: $0.isLaunchdManaged)
+        } ?? LaunchContextResolver.resolve(root: root, livePIDs: livePIDs)
         // Only unattended work earns a file-system check.
         var missing = false
         if context.isUnattended || context == .terminalBackground,
