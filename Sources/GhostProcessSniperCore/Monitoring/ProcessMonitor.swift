@@ -486,7 +486,7 @@ public final class ProcessMonitor {
         }
     }
 
-    private func save(rule: RadarRule) async {
+    public func save(rule: RadarRule) async {
         guard let store else {
             rules.append(rule)
             return

@@ -71,6 +71,13 @@ final class ConsoleRowModelTests: XCTestCase {
         XCTAssertNil(rows.first { $0.familyName == "gone" }?.liveFamilyKey)
     }
 
+    func testRevealSelectsTheOutermostAppBundle() {
+        XCTAssertEqual(FinderReveal.path(forExecutable: "/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper"),
+                       "/Applications/Visual Studio Code.app")
+        XCTAssertEqual(FinderReveal.path(forExecutable: "/usr/local/bin/node"), "/usr/local/bin/node")
+        XCTAssertNil(FinderReveal.path(forExecutable: ""))
+    }
+
     private func incident(_ name: String, memory: UInt64, seenAt: TimeInterval, signature: ProcessSignature? = nil) -> RadarIncident {
         RadarIncident(
             signature: signature ?? ProcessSignature(displayName: name, canonicalPath: "/bin/\(name)", commandLine: name),

@@ -46,6 +46,8 @@ public struct FamilyDecisionBrief: Equatable, Sendable {
     public let evidence: [String]
     /// What a stop would give back, such as "Frees 1.2 GB and 45% CPU".
     public let reclaimText: String
+    /// Memory against the learned normal, such as "2.1x usual".
+    public let baselineText: String
     public let mute: Mute
 
     public init(
@@ -121,6 +123,11 @@ public struct FamilyDecisionBrief: Equatable, Sendable {
             reclaim.append("\(RadarFormat.percent(family.totalCPUPercent)) CPU")
         }
         reclaimText = reclaim.joined(separator: " and ")
+        if let baseline = family.baseline, baseline.isMeasurementTrusted {
+            baselineText = String(format: "%.1fx usual", baseline.memoryMultiple(for: family.totalPhysicalFootprintBytes))
+        } else {
+            baselineText = "Learning"
+        }
     }
 
     private static func confidenceText(

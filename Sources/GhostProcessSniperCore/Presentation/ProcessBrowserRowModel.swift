@@ -121,3 +121,16 @@ extension RadarSort {
         }
     }
 }
+
+/// What "Reveal in Finder" should select for a process.
+public enum FinderReveal {
+    /// The app bundle for anything inside one, since Finder cannot show a
+    /// binary buried in Contents/MacOS usefully; otherwise the executable.
+    public static func path(forExecutable path: String) -> String? {
+        guard !path.isEmpty else { return nil }
+        if let range = path.range(of: ".app/") {
+            return String(path[..<range.lowerBound]) + ".app"
+        }
+        return path
+    }
+}
