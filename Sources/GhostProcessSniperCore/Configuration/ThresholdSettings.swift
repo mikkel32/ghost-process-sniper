@@ -4,7 +4,8 @@ public struct ThresholdSettings: Codable, Equatable, Sendable {
     public var memoryBytes: UInt64
     public var cpuPercent: Double
     public var leakVelocityMegabytesPerMinute: Double
-    public var sustainedSeconds: TimeInterval
+    /// Saved settings still carry this key, so it keeps round-tripping.
+    private var legacySustainedSeconds: TimeInterval
     public var refreshInterval: TimeInterval
     public var forceKillDelay: TimeInterval
     public var radarMode: RadarMode
@@ -66,7 +67,7 @@ public struct ThresholdSettings: Codable, Equatable, Sendable {
         self.memoryBytes = memoryBytes
         self.cpuPercent = cpuPercent
         self.leakVelocityMegabytesPerMinute = leakVelocityMegabytesPerMinute
-        self.sustainedSeconds = sustainedSeconds
+        self.legacySustainedSeconds = sustainedSeconds
         self.refreshInterval = refreshInterval
         self.forceKillDelay = forceKillDelay
         self.radarMode = radarMode
@@ -81,7 +82,7 @@ public struct ThresholdSettings: Codable, Equatable, Sendable {
         case memoryBytes
         case cpuPercent
         case leakVelocityMegabytesPerMinute
-        case sustainedSeconds
+        case legacySustainedSeconds = "sustainedSeconds"
         case refreshInterval
         case forceKillDelay
         case radarMode
@@ -98,7 +99,7 @@ public struct ThresholdSettings: Codable, Equatable, Sendable {
         memoryBytes = try container.decodeIfPresent(UInt64.self, forKey: .memoryBytes) ?? defaults.memoryBytes
         cpuPercent = try container.decodeIfPresent(Double.self, forKey: .cpuPercent) ?? defaults.cpuPercent
         leakVelocityMegabytesPerMinute = try container.decodeIfPresent(Double.self, forKey: .leakVelocityMegabytesPerMinute) ?? defaults.leakVelocityMegabytesPerMinute
-        sustainedSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .sustainedSeconds) ?? defaults.sustainedSeconds
+        legacySustainedSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .legacySustainedSeconds) ?? defaults.legacySustainedSeconds
         refreshInterval = try container.decodeIfPresent(TimeInterval.self, forKey: .refreshInterval) ?? defaults.refreshInterval
         forceKillDelay = try container.decodeIfPresent(TimeInterval.self, forKey: .forceKillDelay) ?? defaults.forceKillDelay
         radarMode = try container.decodeIfPresent(RadarMode.self, forKey: .radarMode) ?? defaults.radarMode
@@ -109,6 +110,12 @@ public struct ThresholdSettings: Codable, Equatable, Sendable {
         detectionMode = try container.decodeIfPresent(RadarDetectionMode.self, forKey: .detectionMode) ?? .custom
         sensitivity = try container.decodeIfPresent(RadarSensitivity.self, forKey: .sensitivity) ?? .balanced
         adaptivePerformance = try container.decodeIfPresent(Bool.self, forKey: .adaptivePerformance) ?? false
+    }
+
+    @available(*, deprecated, message: "Nothing reads it; saved settings keep it only for compatibility.")
+    public var sustainedSeconds: TimeInterval {
+        get { legacySustainedSeconds }
+        set { legacySustainedSeconds = newValue }
     }
 
     public var memoryGigabytes: Double {
