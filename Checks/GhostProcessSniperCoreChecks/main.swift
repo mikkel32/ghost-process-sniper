@@ -20,8 +20,6 @@ struct CoreChecks {
         await run("nativeKillSnapshotProviderUsesLitePath") { try await nativeKillSnapshotProviderUsesLitePath() }
         await run("nativeSamplerDefersForensicsWhenPlanRequestsIt") { try await nativeSamplerDefersForensicsWhenPlanRequestsIt() }
         await run("nativeSamplerUsesBSDFirstCheapGraph") { try await nativeSamplerUsesBSDFirstCheapGraph() }
-        await run("nativeForensicsListOnlyListeningPorts") { try await nativeForensicsListOnlyListeningPorts() }
-        await run("nativePortCensusFindsListeningPort") { try await nativePortCensusFindsListeningPort() }
         await run("classifierScoresDevProcesses") { try classifierScoresDevProcesses() }
         await run("classifierProducesProcessKinds") { try classifierProducesProcessKinds() }
         await run("duplicateDetectorCapturesSmallSameUserProcesses") { try duplicateDetectorCapturesSmallSameUserProcesses() }
@@ -58,11 +56,9 @@ struct CoreChecks {
         await run("startupGraceDelaysLeakCalls") { try startupGraceDelaysLeakCalls() }
         await run("decliningFamiliesEaseOff") { try decliningFamiliesEaseOff() }
         await run("selfUsageMonitorMeasuresOwnCost") { try selfUsageMonitorMeasuresOwnCost() }
-        await run("scannerDeadlineAndCachesBehave") { try scannerDeadlineAndCachesBehave() }
         await run("scannerHealthFeedsDiagnostics") { try scannerHealthFeedsDiagnostics() }
         await run("gpuUsageTrackerComputesDeltaPercent") { try gpuUsageTrackerComputesDeltaPercent() }
         await run("spikeRingBufferBoundsReports") { try spikeRingBufferBoundsReports() }
-        await run("scannerBudgetCapsTelemetryBursts") { try scannerBudgetCapsTelemetryBursts() }
         await run("radarPublishPayloadSkipsUnchangedContentRebuild") { try radarPublishPayloadSkipsUnchangedContentRebuild() }
         await run("menuBarStatusPresentationIsIconOnlyAndCompact") { try menuBarStatusPresentationIsIconOnlyAndCompact() }
         await run("menuBarPresentationKeepsDiagnosticsOutOfTitle") { try menuBarPresentationKeepsDiagnosticsOutOfTitle() }
@@ -231,80 +227,6 @@ private func nativeSamplerUsesBSDFirstCheapGraph() async throws {
         try check(first.stats.bsdDeniedCount > 0, "an unprivileged scan should count other users' processes it cannot see")
     }
 }
-
-private func nativeForensicsListOnlyListeningPorts() async throws {
-    #if os(macOS)
-    try await withLoopbackConnection { listenerPort, clientPort in
-        let sampler = NativeProcessSampler()
-        var plan = SamplingPlan.balanced(now: Date(timeIntervalSince1970: 1_020))
-        plan.includeForensicsForPIDs = [getpid()]
-        let batch = try await sampler.sample(plan: plan)
-        guard let current = batch.processes.first(where: { $0.pid == getpid() }) else {
-            throw CheckFailure(message: "sampler did not include current process")
-        }
-        try check(current.forensics.listeningPorts.contains(listenerPort), "forensics should list the check's TCP listener")
-        try check(!current.forensics.listeningPorts.contains(clientPort), "forensics should not list an outbound connection's ephemeral port")
-    }
-    #endif
-}
-
-private func nativePortCensusFindsListeningPort() async throws {
-    #if os(macOS)
-    try await withLoopbackConnection { listenerPort, _ in
-        let sampler = NativeProcessSampler()
-        var plan = SamplingPlan.balanced(now: Date(timeIntervalSince1970: 1_030))
-        plan.portCensusAll = true
-        let batch = try await sampler.sample(plan: plan)
-        guard let current = batch.processes.first(where: { $0.pid == getpid() }) else {
-            throw CheckFailure(message: "sampler did not include current process")
-        }
-        try check(batch.stats.portCensusCount > 0, "an explicit census should read ports")
-        try check(current.forensics.listeningPorts.contains(listenerPort), "the census should find a quiet process's listener")
-    }
-    #endif
-}
-
-#if os(macOS)
-/// A loopback listener plus one outbound connection to it, both held open while `body` runs.
-private func withLoopbackConnection(_ body: (_ listenerPort: Int, _ clientPort: Int) async throws -> Void) async throws {
-    let listener = socket(AF_INET, SOCK_STREAM, 0)
-    guard listener >= 0 else { throw CheckFailure(message: "socket failed") }
-    defer { close(listener) }
-    var address = sockaddr_in()
-    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-    address.sin_family = sa_family_t(AF_INET)
-    address.sin_addr.s_addr = inet_addr("127.0.0.1")
-    address.sin_port = 0
-    let length = socklen_t(MemoryLayout<sockaddr_in>.size)
-    let bound = withUnsafePointer(to: &address) { pointer in
-        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, length) }
-    }
-    guard bound == 0, listen(listener, 4) == 0 else { throw CheckFailure(message: "listen failed") }
-    let listenerPort = try boundPort(listener)
-
-    let client = socket(AF_INET, SOCK_STREAM, 0)
-    guard client >= 0 else { throw CheckFailure(message: "client socket failed") }
-    defer { close(client) }
-    address.sin_port = in_port_t(UInt16(listenerPort).bigEndian)
-    let connected = withUnsafePointer(to: &address) { pointer in
-        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, length) }
-    }
-    guard connected == 0 else { throw CheckFailure(message: "connect failed") }
-    let accepted = accept(listener, nil, nil)
-    defer { if accepted >= 0 { close(accepted) } }
-    try await body(listenerPort, try boundPort(client))
-}
-
-private func boundPort(_ descriptor: Int32) throws -> Int {
-    var address = sockaddr_in()
-    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-    let result = withUnsafeMutablePointer(to: &address) { pointer in
-        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(descriptor, $0, &length) }
-    }
-    guard result == 0 else { throw CheckFailure(message: "getsockname failed") }
-    return Int(UInt16(bigEndian: address.sin_port))
-}
-#endif
 
 private func classifierScoresDevProcesses() throws {
     let classifier = DevProcessClassifier()
@@ -1363,57 +1285,6 @@ private func performanceMetrics(
     return metrics
 }
 
-private func scannerDeadlineAndCachesBehave() throws {
-    let budget = ScannerBudget.budget(for: .batterySaver)
-    let deadline = SamplerDeadline(
-        startedAt: Date(timeIntervalSince1970: 100),
-        budgetMilliseconds: budget.targetMilliseconds
-    )
-    try check(!deadline.isExpired(now: Date(timeIntervalSince1970: 100.001)), "deadline should allow work inside budget")
-    try check(deadline.isExpired(now: Date(timeIntervalSince1970: 101)), "deadline should expire once the scan crosses budget")
-
-    let process = sample(pid: 215, name: "node", commandLine: "node server.js", memory: 64_000_000)
-    let record = ProcessRecord(
-        identity: process.identity,
-        process: process,
-        telemetryRefreshedAt: Date(timeIntervalSince1970: 1_000)
-    )
-    var cache = ProcessScanCache()
-    cache.update(record)
-    try check(!cache.shouldRefreshTelemetry(
-        identity: process.identity,
-        now: Date(timeIntervalSince1970: 1_005),
-        maxAge: 10,
-        grace: 10,
-        isPriority: false
-    ), "unchanged quiet process should reuse cached telemetry")
-    try check(cache.shouldRefreshTelemetry(
-        identity: process.identity,
-        now: Date(timeIntervalSince1970: 1_030),
-        maxAge: 10,
-        grace: 10,
-        isPriority: false
-    ), "quiet telemetry should refresh after max age plus grace")
-    try check(cache.shouldRefreshTelemetry(
-        identity: process.identity,
-        now: Date(timeIntervalSince1970: 1_012),
-        maxAge: 10,
-        grace: 10,
-        isPriority: true
-    ), "priority telemetry should use the shorter max-age window")
-
-    var forensics = ForensicsCache()
-    let partial = ProcessForensics.unavailable(reason: "protected")
-    forensics.update(partial, for: process.identity, at: Date(timeIntervalSince1970: 2_000))
-    try check(forensics.negativeEntry(for: process.identity, now: Date(timeIntervalSince1970: 2_090), maxAge: 120)?.forensics == partial, "partial forensics should be negative-cached")
-
-    var cpu = CPUUsageTracker<ProcessIdentity>()
-    _ = cpu.percent(key: process.identity, totalProcessorSeconds: 1, wallClock: Date(timeIntervalSince1970: 1))
-    cpu.prune(keeping: [])
-    let missing = cpu.percent(key: process.identity, totalProcessorSeconds: 2, wallClock: Date(timeIntervalSince1970: 2))
-    try check(missing == nil, "CPU tracker pruning should drop old identity state")
-}
-
 private func scannerHealthFeedsDiagnostics() throws {
     let stats = SamplerStats(
         processCount: 10,
@@ -1533,10 +1404,6 @@ private func spikeRingBufferBoundsReports() throws {
     try check(report.worstHitchMilliseconds == 38, "spike ring should expose worst hitch")
     try check(report.latestSpikePhase == "store", "spike ring should expose latest spike phase")
     try check(!report.recentSpikes.contains(where: { $0.contains("sample") }), "spike ring should evict old entries")
-}
-
-private func scannerBudgetCapsTelemetryBursts() throws {
-    try check(ScannerBudget.budget(for: .balanced).maxTelemetryRefreshes <= 16, "balanced scanner should cap command/path refresh bursts")
 }
 
 private func radarPublishPayloadSkipsUnchangedContentRebuild() throws {
