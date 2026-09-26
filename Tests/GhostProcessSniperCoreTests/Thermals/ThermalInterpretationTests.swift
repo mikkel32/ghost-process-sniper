@@ -187,6 +187,40 @@ final class ThermalInterpretationTests: XCTestCase {
         XCTAssertEqual(result.trajectory.spanSeconds, 10)
     }
 
+    func testTrendSurvivesHottestCoreRotationWithinOneSensorSet() {
+        var window = ThermalObservationWindow()
+        var latest = snapshot(nil)
+        for (index, value) in [70.0, 73, 76, 79, 82, 85, 88].enumerated() {
+            latest = ThermalSnapshot(sampledAt: now.addingTimeInterval(Double(index * 10)),
+                cpuCelsius: value, gpuCelsius: nil, sensorCount: 2, sensorKeys: ["Tp01", "Tp05"],
+                systemState: "Normal", unavailableReason: nil,
+                cpuSensorKey: index.isMultiple(of: 2) ? "Tp01" : "Tp05", cpuSeriesID: "cpu:Tp01,Tp05")
+            window.record(latest, at: latest.sampledAt)
+        }
+        let result = ThermalDiagnosis.evaluate(snapshot: latest, activity: .empty, observations: window,
+                                               at: latest.sampledAt)
+        XCTAssertEqual(result.temperature.trajectory.direction, .rising)
+        XCTAssertEqual(result.temperature.trajectory.spanSeconds, 60)
+        XCTAssertGreaterThan(result.temperature.trajectory.hotSeconds, 0)
+        XCTAssertTrue(result.headline.contains("rising"))
+    }
+
+    func testTrendResetsWhenTheSensorSetChanges() {
+        var window = ThermalObservationWindow()
+        var latest = snapshot(nil)
+        for (index, value) in [70.0, 72, 76, 80].enumerated() {
+            latest = ThermalSnapshot(sampledAt: now.addingTimeInterval(Double(index * 10)),
+                cpuCelsius: value, gpuCelsius: nil, sensorCount: 2, sensorKeys: ["Tp01", "Tp05"],
+                systemState: "Normal", unavailableReason: nil, cpuSensorKey: "Tp01",
+                cpuSeriesID: index < 2 ? "cpu:Tp01,Tp05" : "cpu:Tp01")
+            window.record(latest, at: latest.sampledAt)
+        }
+        let result = ThermalTemperatureAssessment.evaluate(snapshot: latest, observations: window,
+                                                            at: latest.sampledAt)
+        XCTAssertEqual(result.trajectory.direction, .measuring)
+        XCTAssertEqual(result.trajectory.spanSeconds, 10)
+    }
+
     func testSingleSpikeDoesNotInventASustainedRise() {
         let (window, latest) = history([75, 75, 75, 75, 75, 75, 90])
         let result = ThermalTemperatureAssessment.evaluate(snapshot: latest, observations: window, at: latest.sampledAt)

@@ -9,12 +9,18 @@ public struct ThermalSnapshot: Equatable, Sendable {
     public let sensorKeys: [String]
     public let systemState: String
     public let unavailableReason: String?
+    /// The sensor that produced the reported maximum; it rotates between cores under load.
     public let cpuSensorKey: String?
     public let gpuSensorKey: String?
+    /// Identifies the set of sensors behind the maximum, so a trend survives the
+    /// hottest core moving and resets only when the readable set itself changes.
+    public let cpuSeriesID: String?
+    public let gpuSeriesID: String?
 
     public init(sampledAt: Date, cpuCelsius: Double?, gpuCelsius: Double?, sensorCount: Int,
                 sensorKeys: [String], systemState: String, unavailableReason: String?,
-                cpuSensorKey: String? = nil, gpuSensorKey: String? = nil) {
+                cpuSensorKey: String? = nil, gpuSensorKey: String? = nil,
+                cpuSeriesID: String? = nil, gpuSeriesID: String? = nil) {
         self.sampledAt = sampledAt
         self.cpuCelsius = cpuCelsius
         self.gpuCelsius = gpuCelsius
@@ -24,7 +30,12 @@ public struct ThermalSnapshot: Equatable, Sendable {
         self.unavailableReason = unavailableReason
         self.cpuSensorKey = cpuSensorKey
         self.gpuSensorKey = gpuSensorKey
+        self.cpuSeriesID = cpuSeriesID
+        self.gpuSeriesID = gpuSeriesID
     }
+
+    var cpuSeries: String? { cpuSeriesID ?? cpuSensorKey }
+    var gpuSeries: String? { gpuSeriesID ?? gpuSensorKey }
 
     public static let unknown = ThermalSnapshot(sampledAt: .distantPast, cpuCelsius: nil, gpuCelsius: nil, sensorCount: 0, sensorKeys: [], systemState: "Waiting", unavailableReason: "Waiting for hardware sensors")
 
@@ -129,9 +140,15 @@ public actor ThermalSampler {
             systemState: state,
             unavailableReason: keys.isEmpty ? (cpuKeys.isEmpty ? "Sensor mapping is not verified for this Mac" : "Hardware sensors could not be read") : nil,
             cpuSensorKey: hottestCPU?.0,
-            gpuSensorKey: hottestGPU?.0
+            gpuSensorKey: hottestGPU?.0,
+            cpuSeriesID: Self.seriesID("cpu", cpu),
+            gpuSeriesID: Self.seriesID("gpu", gpu)
         )
         return snapshot
+    }
+
+    private static func seriesID(_ component: String, _ readings: [(String, Double)]) -> String? {
+        readings.isEmpty ? nil : component + ":" + readings.map(\.0).sorted().joined(separator: ",")
     }
 
     private func openConnection() {

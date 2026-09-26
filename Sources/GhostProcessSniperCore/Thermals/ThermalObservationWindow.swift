@@ -35,8 +35,8 @@ public struct ThermalObservationWindow: Equatable, Sendable {
         let date: Date
         let cpu: Double?
         let gpu: Double?
-        let cpuKey: String?
-        let gpuKey: String?
+        let cpuSeries: String?
+        let gpuSeries: String?
     }
 
     private(set) var readings: [Reading] = []
@@ -48,7 +48,7 @@ public struct ThermalObservationWindow: Equatable, Sendable {
         let next = Reading(date: snapshot.sampledAt,
                            cpu: ThermalTemperatureAssessment.valid(snapshot.cpuCelsius),
                            gpu: ThermalTemperatureAssessment.valid(snapshot.gpuCelsius),
-                           cpuKey: snapshot.cpuSensorKey, gpuKey: snapshot.gpuSensorKey)
+                           cpuSeries: snapshot.cpuSeries, gpuSeries: snapshot.gpuSeries)
         if let last = readings.last {
             guard next.date >= last.date else { return }
             if next.date == last.date {
@@ -68,10 +68,9 @@ public struct ThermalObservationWindow: Equatable, Sendable {
         current.record(snapshot, at: now)
         guard current.readings.last?.date == snapshot.sampledAt else { return .empty }
         var series: [(date: Date, value: Double)] = []
-        let currentKey = cpu ? snapshot.cpuSensorKey : snapshot.gpuSensorKey
+        let currentSeries = cpu ? snapshot.cpuSeries : snapshot.gpuSeries
         for reading in current.readings.reversed() {
-            let key = cpu ? reading.cpuKey : reading.gpuKey
-            guard key == currentKey, let value = cpu ? reading.cpu : reading.gpu else { break }
+            guard (cpu ? reading.cpuSeries : reading.gpuSeries) == currentSeries, let value = cpu ? reading.cpu : reading.gpu else { break }
             series.append((reading.date, value))
         }
         guard let latest = series.first else { return .empty }

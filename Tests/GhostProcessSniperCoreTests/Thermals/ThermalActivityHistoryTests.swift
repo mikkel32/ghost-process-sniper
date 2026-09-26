@@ -96,6 +96,20 @@ final class ThermalActivityHistoryTests: XCTestCase {
         XCTAssertFalse(result.detail.contains("CPU temperature:"))
     }
 
+    func testCoolingCheckComparesSameSensorSetAcrossRotatingCores() throws {
+        let baseline = try XCTUnwrap(activity(cpu: 120, at: start).contributors.first)
+        let before = ThermalSnapshot(sampledAt: start, cpuCelsius: 84, gpuCelsius: nil,
+            sensorCount: 2, sensorKeys: ["Tp01", "Tp05"], systemState: "Nominal",
+            unavailableReason: nil, cpuSensorKey: "Tp01", cpuSeriesID: "cpu:Tp01,Tp05")
+        let check = ThermalCoolingCheck(contributor: baseline, snapshot: before, at: start)
+        let later = start.addingTimeInterval(25)
+        let after = ThermalSnapshot(sampledAt: later, cpuCelsius: 80, gpuCelsius: nil,
+            sensorCount: 2, sensorKeys: ["Tp01", "Tp05"], systemState: "Nominal",
+            unavailableReason: nil, cpuSensorKey: "Tp05", cpuSeriesID: "cpu:Tp01,Tp05")
+        let result = check.evaluate(activity: activity(cpu: 1, at: later), snapshot: after, at: later)
+        XCTAssertTrue(result.detail.contains("CPU temperature: down 4.0°C"))
+    }
+
     private func activity(cpu: Double, at date: Date) -> ThermalActivitySummary {
         let sample = ThermalActivitySample(
             identity: ProcessIdentity(pid: 42, startTimeSeconds: 2_000_099_000, startTimeMicroseconds: 0),
