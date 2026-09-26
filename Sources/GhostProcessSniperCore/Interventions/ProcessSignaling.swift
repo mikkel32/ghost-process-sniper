@@ -85,6 +85,10 @@ public struct SignalFailure: Error, Equatable, Sendable {
     }
 }
 
+extension SignalFailure: LocalizedError {
+    public var errorDescription: String? { message }
+}
+
 public protocol ProcessSignaling: Sendable {
     var usesDarwinProcessNamespace: Bool { get }
     func send(signal: Int32, to pid: Int32) throws
@@ -105,6 +109,11 @@ public struct DarwinProcessSignaler: ProcessSignaling {
     public init() {}
 
     public func send(signal: Int32, to pid: Int32) throws {
+        // kill(0) signals Ghost's own process group and kill(-1) every
+        // process the user owns; no plan may ever reach either.
+        guard pid > 1, pid != getpid() else {
+            throw SignalFailure(pid: pid, signal: signal, errnoCode: EINVAL, message: "Refused: protected PID")
+        }
         guard kill(pid, signal) == 0 else {
             let code = errno
             throw SignalFailure(
@@ -124,7 +133,8 @@ public struct DarwinProcessSignaler: ProcessSignaling {
     }
 
     public func requestQuit(pid: Int32) async -> Bool {
-        await MainActor.run {
+        guard pid > 1, pid != getpid() else { return false }
+        return await MainActor.run {
             guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return false }
             return app.terminate()
         }

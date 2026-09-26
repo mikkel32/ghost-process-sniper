@@ -17,7 +17,8 @@ public final class ProcessKiller: Sendable {
         currentUserID: UInt32 = UInt32(geteuid()),
         sleeper: @escaping @Sendable (UInt64) async -> Void = { nanoseconds in
             try? await Task.sleep(nanoseconds: nanoseconds)
-        }
+        },
+        protection: KillProtectionPolicy = KillProtectionPolicy()
     ) {
         if let snapshotProvider {
             self.snapshotProvider = snapshotProvider
@@ -30,7 +31,8 @@ public final class ProcessKiller: Sendable {
         self.currentUserID = currentUserID
         self.preflightBuilder = KillPreflightBuilder(
             currentUserID: currentUserID,
-            usesDarwinProcessNamespace: signaler.usesDarwinProcessNamespace
+            usesDarwinProcessNamespace: signaler.usesDarwinProcessNamespace,
+            protection: protection
         )
         self.sleeper = sleeper
     }

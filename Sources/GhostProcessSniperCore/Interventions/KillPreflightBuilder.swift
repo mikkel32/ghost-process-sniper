@@ -14,6 +14,7 @@ struct KillPreflight {
 struct KillPreflightBuilder: Sendable {
     let currentUserID: UInt32
     let usesDarwinProcessNamespace: Bool
+    let protection: KillProtectionPolicy
     private let confidenceModel = KillConfidenceModel()
     private let safetyGate = KillSafetyGate()
     private let reclaimEstimator = KillReclaimEstimator()
@@ -79,6 +80,8 @@ struct KillPreflightBuilder: Sendable {
             )
         }
 
+        let protectionFloor = applyProtection(plan: plan, arena: arena, index: index, targets: &targets, locked: &locked)
+
         if let approved = plan.approvedIdentities {
             let additions = targets.filter { !approved.contains($0.identity) }
             locked.append(contentsOf: additions.map { $0.updating(state: .locked, reason: "Not included in the confirmed preview") })
@@ -112,9 +115,9 @@ struct KillPreflightBuilder: Sendable {
             forceKillDelay: profile.forceKillDelay
         )
         let decisionScore = policy.decisionScore
-        let strategy = policy.recommendation
-        let strategyProfile = policy.profile
-        let evidence = decisionScore.factors.map(Self.evidence(from:)) + confidenceModel.evidence(
+        var strategy = policy.recommendation
+        var strategyProfile = policy.profile
+        var evidence = decisionScore.factors.map(Self.evidence(from:)) + confidenceModel.evidence(
             plan: plan,
             targets: targets,
             locked: locked,
@@ -122,6 +125,20 @@ struct KillPreflightBuilder: Sendable {
             recycled: recycled,
             reclaim: reclaim
         )
+        evidence += protectionFloor.cautions.map { KillDecisionEvidence(kind: $0.severity == .info ? .info : .caution, title: $0.title, detail: $0.detail) }
+        if let reason = protectionFloor.rootReason {
+            // Stopping the rest of the tree without its root is not what
+            // anyone asked for, so the whole plan becomes inspect-only.
+            strategy = KillStrategyRecommendation(strategy: .inspectOnly, confidence: 1, reasons: [reason], previewText: reason)
+            strategyProfile = KillStrategyProfile(
+                strategy: .inspectOnly,
+                confidence: 1,
+                phases: [],
+                verificationSchedule: KillVerificationSchedule(graceSeconds: 0, secondaryGraceSeconds: 0, settleSeconds: 0),
+                summary: reason
+            )
+            evidence.append(KillDecisionEvidence(kind: .blocking, title: "Protected", detail: reason))
+        }
         let readiness = safetyGate.readiness(hasTargets: !targets.isEmpty, evidence: evidence)
         let performanceReport = KillPerformanceReport(snapshot: snapshot)
 
@@ -147,9 +164,43 @@ struct KillPreflightBuilder: Sendable {
             strategySimulation: policy.simulation,
             watcherAvailable: !targets.isEmpty && usesDarwinProcessNamespace,
             arenaStats: arena.stats,
-            riskAssessment: policy.risk
+            riskAssessment: policy.risk.merging(protectionFloor.cautions, headline: protectionFloor.rootReason)
         )
         return KillPreflight(preview: preview, targets: targets, locked: locked, stale: stale, recycled: recycled)
+    }
+
+    /// Moves every target below the protection floor to `locked` and
+    /// collects the warnings for the rest; the root's warning comes first.
+    private func applyProtection(
+        plan: KillPlan,
+        arena: KillGraphArena,
+        index: KillProcessIndex,
+        targets: inout [KillTarget],
+        locked: inout [KillTarget]
+    ) -> (rootReason: String?, cautions: [KillRisk]) {
+        let workload = Dictionary((plan.workload?.processes ?? []).map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
+        let chain = protection.selfAndAncestors { arena.processes(for: $0).first?.parentPID }
+        var rootReason: String?
+        var cautions: [KillRisk] = []
+        var protected = Set<ProcessIdentity>()
+        for target in targets {
+            guard let process = arena.process(for: target.identity) ?? index.liteProcess(for: target.identity) else { continue }
+            let known = workload[target.pid]
+            switch protection.verdict(for: process, executablePath: known?.executablePath, commandLine: known?.commandLine,
+                                      arena: arena, selfAndAncestors: chain) {
+            case .never(let reason):
+                locked.append(target.updating(state: .locked, reason: reason))
+                protected.insert(target.identity)
+                if target.identity == plan.rootIdentity { rootReason = reason }
+            case .caution(let risk):
+                if target.identity == plan.rootIdentity { cautions.insert(risk, at: 0) } else { cautions.append(risk) }
+            case nil:
+                break
+            }
+        }
+        targets.removeAll { protected.contains($0.identity) }
+        var seenKinds = Set<KillRiskKind>()
+        return (rootReason, cautions.filter { seenKinds.insert($0.kind).inserted })
     }
 
     private func classifyPlanIdentities(

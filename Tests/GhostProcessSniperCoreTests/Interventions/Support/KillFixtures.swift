@@ -7,8 +7,12 @@ extension FakeProcessTable {
         now().timeIntervalSince(Date(timeIntervalSince1970: 1_000_000))
     }
 
-    func killer(sleeper: (@Sendable (UInt64) async -> Void)? = nil) -> ProcessKiller {
-        ProcessKiller(snapshotProvider: self, signaler: self, currentUserID: 501, sleeper: sleeper ?? self.sleeper)
+    func killer(
+        sleeper: (@Sendable (UInt64) async -> Void)? = nil,
+        protection: KillProtectionPolicy = KillProtectionPolicy()
+    ) -> ProcessKiller {
+        ProcessKiller(snapshotProvider: self, signaler: self, currentUserID: 501, sleeper: sleeper ?? self.sleeper,
+                      protection: protection)
     }
 }
 
