@@ -189,33 +189,32 @@ public struct RadarPipeline: Sendable {
     }
 }
 
+/// Holds a family that just stopped being hot at watch or above for
+/// `holdDuration` after it was last actually hot, so a bursty runaway keeps
+/// its rich sampling and its row does not flicker hot → quiet → hot.
 struct RadarHysteresis: Sendable {
-    private var levels: [String: (level: GhostLevel, updatedAt: Date)] = [:]
-    private let holdDuration: TimeInterval = 20
+    private var lastHotAt: [String: Date] = [:]
+    let holdDuration: TimeInterval = 20
 
     mutating func apply(to families: [ProcessFamily], now: Date) -> [ProcessFamily] {
-        if levels.count > families.count + 64 {
+        if lastHotAt.count > families.count + 64 {
             let activeKeys = Set(families.map(\.familyKey))
-            levels = levels.filter { activeKeys.contains($0.key) }
+            lastHotAt = lastHotAt.filter { activeKeys.contains($0.key) }
         }
         return families.map { family in
             let key = family.familyKey
-            guard let previous = levels[key] else {
-                levels[key] = (family.score.level, now)
+            if family.score.level >= .hot {
+                lastHotAt[key] = now
                 return family
             }
-
-            var level = family.score.level
-            if previous.level >= .hot,
-               family.score.level < .hot,
-               now.timeIntervalSince(previous.updatedAt) < holdDuration {
-                level = max(family.score.level, .watch)
+            guard let hotAt = lastHotAt[key] else {
+                return family
             }
-
-            if level != previous.level || now.timeIntervalSince(previous.updatedAt) >= holdDuration {
-                levels[key] = (level, now)
+            guard now.timeIntervalSince(hotAt) < holdDuration else {
+                lastHotAt[key] = nil
+                return family
             }
-
+            let level = max(family.score.level, .watch)
             guard level != family.score.level else {
                 return family
             }
