@@ -319,12 +319,15 @@ public struct RadarIntelligence: Sendable {
         guard !redundant.isEmpty else { return [] }
         let ports = cluster.redundantPorts
         let noun = redundant.count == 1 ? "copy" : "copies"
+        // The kept copy may be the one in a terminal or the busiest, not the newest.
+        let started = { (identity: ProcessIdentity) in (identity.startTimeSeconds, identity.startTimeMicroseconds) }
+        let age = redundant.allSatisfy { started($0) < started(keep) } ? "older" : "other"
         let portText = ports.isEmpty ? "" : " (port\(ports.count == 1 ? "" : "s") \(ports.map(String.init).joined(separator: ", ")))"
         return [
             RadarActionSuggestion(
                 id: RadarActionSuggestion.stableID(scope: "duplicate|\(cluster.key.id)", type: .suggestKill),
                 type: .suggestKill,
-                title: "Stop \(redundant.count) older \(noun)\(portText)",
+                title: "Stop \(redundant.count) \(age) \(noun)\(portText)",
                 detail: "\(cluster.independentRootCount) copies of \(cluster.displayName) are running; keeps PID \(keep.pid), \(cluster.keepReason).",
                 createdAt: now,
                 targetIdentities: redundant

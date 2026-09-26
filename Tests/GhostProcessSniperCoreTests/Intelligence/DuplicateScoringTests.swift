@@ -71,7 +71,7 @@ final class DuplicateScoringTests: XCTestCase {
         XCTAssertFalse(other.suggestions.contains { $0.targetIdentities != nil })
     }
 
-    func testTheCopyInATerminalIsKeptOverANewerDetachedOne() {
+    func testTheCopyInATerminalIsKeptOverANewerDetachedOne() throws {
         let script = "/Users/dev/api/server.js"
         let inTerminal = node(950, parent: 1, script, startedAgo: 7_200)
         let attached = ProcessMetrics(
@@ -84,9 +84,17 @@ final class DuplicateScoringTests: XCTestCase {
                                         terminalForegroundGroupID: 950, runState: .sleeping)
         )
         let newer = node(951, script, startedAgo: 60)
-        let cluster = build([attached, newer]).duplicateClusters.first
+        let result = build([attached, newer])
+        let cluster = result.duplicateClusters.first
         XCTAssertEqual(cluster?.keepIdentity, attached.identity)
         XCTAssertEqual(cluster?.keepReason, "the one attached to a terminal")
+
+        let kept = try XCTUnwrap(result.families.first { $0.root.identity == attached.identity })
+        let enriched = RadarIntelligence().enrich(
+            family: kept, context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []),
+            settings: .smart, now: Fixture.now)
+        let stop = try XCTUnwrap(enriched.suggestions.first { $0.targetIdentities != nil })
+        XCTAssertEqual(stop.title, "Stop 1 other copy")
     }
 
     func testDifferentScriptsOnOneInterpreterAreNotCopies() {
