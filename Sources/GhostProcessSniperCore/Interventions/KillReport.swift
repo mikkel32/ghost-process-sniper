@@ -47,6 +47,9 @@ public struct KillReport: Equatable, Sendable {
     /// Processes that started after the stop was approved. Stopped with the
     /// rest, or, with force held, only reported (state `.locked`).
     public var lateTargets: [KillTarget] = []
+    /// Processes the stop left alone that lost their parent to it and now
+    /// run on under launchd.
+    public var leftRunning: [KillTarget] = []
     /// Processes frozen with SIGSTOP right before SIGKILL.
     public var frozenCount = 0
     /// New processes kept appearing faster than the force stage could look.
@@ -73,10 +76,13 @@ public struct KillReport: Equatable, Sendable {
         if !signalDeniedPIDs.isEmpty {
             parts.append("macOS refused to stop \(pidLabel) \(refused); it is protected by security software or a system policy.")
         }
-        let keptRunning = lateTargets.filter { $0.state == .locked }
+        let orphaned = Set(leftRunning.map(\.identity))
+        let keptRunning = lateTargets.filter { $0.state == .locked && !orphaned.contains($0.identity) }
         if !keptRunning.isEmpty {
-            let names = keptRunning.map { "\($0.name) (PID \($0.pid))" }.joined(separator: ", ")
-            parts.append("Kept running after \(displayName) stopped: \(names).")
+            parts.append("Kept running after \(displayName) stopped: \(Self.names(keptRunning)).")
+        }
+        if !leftRunning.isEmpty {
+            parts.append("Left running (now orphaned): \(Self.names(leftRunning)).")
         }
         if forkStorm {
             parts.append("It kept starting new processes; Ghost froze and stopped \(frozenCount) of them. Check that nothing starts it again.")
@@ -121,6 +127,10 @@ public struct KillReport: Equatable, Sendable {
         return "No owned live processes matched this kill plan."
     }
 
+    private static func names(_ targets: [KillTarget]) -> String {
+        targets.map { "\($0.name) (PID \($0.pid))" }.joined(separator: ", ")
+    }
+
     public var diagnosticText: String {
         var lines = [
             "Ghost Process Sniper Kill Report",
@@ -142,6 +152,7 @@ public struct KillReport: Equatable, Sendable {
             "Verification modes: \(reactorReport.verificationModeCounts.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ").ifEmpty("none"))",
             "Signal waves: \(reactorReport.signalWaves.count), arena reuse \(reactorReport.arenaReuseCount)",
             "Calibrated reclaim: \(RadarFormat.bytes(calibratedReclaimBytes))",
+            "Left running: \(leftRunning.map { String($0.pid) }.joined(separator: ", ").ifEmpty("none"))",
             "Late: \(lateTargets.map { "\($0.pid) \($0.state.rawValue)" }.joined(separator: ", ").ifEmpty("none")), frozen \(frozenCount)\(forkStorm ? ", fork storm" : "")",
             "Force skipped: \(skipForceRequested ? "yes" : "no")\(appStillOpen ? ", app still open" : "")\(isForceFollowUp ? " (force follow-up)" : "")",
             "Refused by macOS: \(signalDeniedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",

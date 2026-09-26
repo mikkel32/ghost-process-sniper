@@ -130,7 +130,14 @@ public struct InterventionPolicyEngine: Sendable {
             }
         }
         if !locked.isEmpty {
-            factors.append(KillDecisionFactor(kind: .whyWait, title: "Protected descendants", detail: "\(locked.count) locked or foreign process\(locked.count == 1 ? "" : "es") will be skipped.", weight: -min(24, Double(locked.count) * 6)))
+            // Weighs on the score but never decides the strategy: a root
+            // with root-owned helpers is still the user's to stop.
+            let foreign = locked.filter { $0.reason.hasPrefix("Owned by") || $0.reason.hasPrefix("Runs under") }.count
+            let count = "\(locked.count) process\(locked.count == 1 ? "" : "es")"
+            let detail = foreign == locked.count
+                ? "\(count) owned by other users \(locked.count == 1 ? "stays" : "stay") running."
+                : "\(count) \(locked.count == 1 ? "stays" : "stay") running; \(foreign) of them belong to other users."
+            factors.append(KillDecisionFactor(kind: .whyWait, title: "Protected descendants", detail: detail, weight: -min(16, Double(locked.count) * 4)))
         }
         if !stale.isEmpty || !recycled.isEmpty || !diff.isEmpty {
             factors.append(KillDecisionFactor(kind: .whyWait, title: "Tree drift", detail: diff.summary, weight: -min(20, Double(stale.count + recycled.count + diff.reparentedPIDs.count) * 5)))
@@ -184,11 +191,12 @@ public struct InterventionPolicyEngine: Sendable {
         decisionScore: KillDecisionScore,
         risk: KillRiskAssessment
     ) -> KillStrategyRecommendation {
-        if targets.isEmpty || decisionScore.factors.contains(where: { $0.kind == .blocking }) || locked.count >= max(3, targets.count) {
+        let rootLocked = locked.contains { $0.identity == plan.rootIdentity }
+        if targets.isEmpty || rootLocked || decisionScore.factors.contains(where: { $0.kind == .blocking }) {
             return KillStrategyRecommendation(
                 strategy: .inspectOnly,
                 confidence: max(0.72, decisionScore.confidence),
-                reasons: decisionScore.whyWait.prefix(2).map(\.detail).ifEmpty(["Low confidence or too many protected descendants."]),
+                reasons: decisionScore.whyWait.prefix(2).map(\.detail).ifEmpty(["The root process is locked or protected."]),
                 previewText: "Inspect only; no signal should be sent until ownership is clearer."
             )
         }

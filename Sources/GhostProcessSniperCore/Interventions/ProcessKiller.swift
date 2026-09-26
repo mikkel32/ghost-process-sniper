@@ -228,6 +228,7 @@ public final class ProcessKiller: Sendable {
             report.lateTargets = zip(walk.adopted, results.suffix(walk.adopted.count)).map {
                 $0.updating(state: $1.state, reason: $0.reason)
             } + walk.reportedLate
+            report.leftRunning = await orphanedByStop(preflight.locked + walk.reportedLate)
             report.realizedMemoryReclaimBytes = reclaimEstimator.realizedEstimate(
                 from: preflight.preview.reclaimEstimate,
                 targets: report.targetResults
@@ -299,6 +300,23 @@ public final class ProcessKiller: Sendable {
                 scopeUsed: plan.scope
             )
         }
+    }
+
+    /// Processes the stop left alone whose parent it took away: they now
+    /// run on under launchd. Only asked when something was left alone.
+    private func orphanedByStop(_ untouched: [KillTarget]) async -> [KillTarget] {
+        let candidates = untouched.filter { $0.parentPID.map { $0 > 1 } == true && $0.identity.startTimeSeconds > 0 }
+        guard !candidates.isEmpty,
+              let snapshot = try? await snapshotProvider.snapshot(request: KillSnapshotRequest(
+                policy: .verify, targetIdentities: candidates.map(\.identity), includeHeavyMetricsForTargets: false,
+                requiresCompleteGraph: false, conversionBudget: .targetsOnly, verificationMode: .targetOnly
+              )) else { return [] }
+        let index = KillProcessIndex(snapshot: snapshot)
+        return candidates.filter { target in
+            guard let process = index.liteProcess(for: target.identity) else { return false }
+            return process.parentPID == 1 && !process.isZombie
+        }
+        .map { $0.updating(state: .locked, reason: "Left running (now orphaned)") }
     }
 
     private static func inspectOnlyFailure(_ preview: KillPreview, approved: Bool) -> String {

@@ -87,9 +87,11 @@ struct KillPreflightBuilder: Sendable {
         let zombies = separateZombies(arena: arena, index: index, targets: &targets)
 
         if let approved = plan.approvedIdentities {
-            let additions = targets.filter { !approved.contains($0.identity) }
+            let adopted = adoptions(plan: plan, arena: arena, targets: targets, approved: approved)
+            let adoptedIdentities = Set(adopted.map(\.identity))
+            let additions = targets.filter { !approved.contains($0.identity) && !adoptedIdentities.contains($0.identity) }
             locked.append(contentsOf: additions.map { $0.updating(state: .locked, reason: "Not included in the confirmed preview") })
-            targets.removeAll { !approved.contains($0.identity) }
+            targets = targets.filter { approved.contains($0.identity) } + adopted
         }
         targets = targets.sorted(by: ProcessKiller.signalOrder).map {
             $0.condition == .suspended ? $0.updating(state: .ready, reason: "Suspended (Ctrl-Z) \u{2014} still holds its ports") : $0
@@ -173,6 +175,32 @@ struct KillPreflightBuilder: Sendable {
         )
         return KillPreflight(preview: preview, targets: targets, locked: locked, stale: stale, recycled: recycled,
                              exited: zombies.exited, zombieParentName: zombies.parentName)
+    }
+
+    /// Children an approved process started after the preview stop with it;
+    /// anything older was shown in the preview, or deliberately left out.
+    private func adoptions(
+        plan: KillPlan,
+        arena: KillGraphArena,
+        targets: [KillTarget],
+        approved: Set<ProcessIdentity>
+    ) -> [KillTarget] {
+        guard plan.scope != .singleRoot, let approvedAt = plan.approvedAt else { return [] }
+        let candidates = Set(targets.map(\.identity)).subtracting(approved)
+        guard !candidates.isEmpty else { return [] }
+        return KillTreeSweeper.lateMembers(
+            arena: arena,
+            anchors: targets.filter { approved.contains($0.identity) },
+            known: approved,
+            bornAfter: approvedAt,
+            currentUserID: currentUserID,
+            protection: protection,
+            rootIdentity: plan.rootIdentity,
+            startedWhen: "after the preview"
+        )
+        .filter { candidates.contains($0.identity) }
+        .prefix(32)
+        .map { $0 }
     }
 
     /// Moves every target below the protection floor to `locked` and

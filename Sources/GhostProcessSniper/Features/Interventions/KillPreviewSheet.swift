@@ -51,7 +51,7 @@ struct KillPreviewSheet: View {
             if report == nil, !isKilling {
                 Label(previewExpired
                       ? "Preview expired. Close and open a fresh preview to continue."
-                      : "60-second preview. Only the identities shown here are eligible; new descendants are skipped.",
+                      : "60-second preview of the processes shown here. Processes they start before you confirm are stopped with them.",
                       systemImage: previewExpired ? "clock.badge.exclamationmark" : "checkmark.shield")
                     .font(.caption)
                     .foregroundStyle(previewExpired ? Color.orange : Color.secondary)
