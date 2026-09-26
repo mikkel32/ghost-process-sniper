@@ -44,7 +44,7 @@ These remain the existing two production SwiftPM targets. Folder organization do
 
 ## Guardrails
 
-`python3 Scripts/check_architecture.py` verifies declared source ownership, prevents SwiftUI/app imports in core, keeps SQLite access in Persistence, and enforces line budgets. New files have a 600-line ceiling. Existing larger files have explicit current-size ceilings in `Config/architecture.json`; those exceptions are visible debt, not permission to grow indefinitely. A deleted or moved exception must be updated rather than left silently stale.
+`python3 Scripts/check_architecture.py` verifies declared source ownership, prevents SwiftUI/app imports in core, keeps SQLite access in Persistence, and enforces line budgets. New files have a 600-line ceiling. Existing larger files have explicit ceilings in `Config/architecture.json`; those exceptions are visible debt, not permission to grow. Each ceiling must equal its file's current length: shrink a file and the check asks you to lower its budget (or remove the entry once it is under 600), so any growth shows up as an `architecture.json` edit in review. A deleted or moved exception must be updated rather than left silently stale. `test_roots` applies the same line budgets, without folder rules, to `Tests/GhostProcessSniperCoreTests` and `Checks/GhostProcessSniperCoreChecks`. `--base <git-ref>` additionally fails when any budget is higher than in that ref (for example `--base origin/main`); it is skipped when git or the ref is unavailable.
 
 Put new behavior in an existing responsibility or extract a coherent component. Avoid catch-all `Utils` files, parallel copies of application settings, and direct persistence or signal calls from a view. Prefer a pure value projection plus a narrow actor or service for asynchronous work. Keep measurement freshness separate from display invalidation, and keep process inspection separate from intervention approval.
 
@@ -101,6 +101,32 @@ RADAR_INDEX_BENCHMARK_REPORT="$PWD/.build/performance-audit/duplicate-index.json
 ```
 
 This benchmark alternates the old and indexed implementations on the same synthetic input, verifies identical results, and discards two warm-up rounds. It measures duplicate resolution, not full application frame rate. The legacy implementation exists only in test support.
+
+## Stop strategy test bench
+
+`Scripts/dev-hog-fixture.sh` starts disposable processes that exercise each stop strategy. Every fixture has `ghost-fixture:<kind>` in its argv and leads its own process group; `stop` signals only groups that still carry the marker, sends SIGTERM, waits up to 3 s, then sends SIGKILL.
+
+```sh
+Scripts/dev-hog-fixture.sh start                    # every kind
+Scripts/dev-hog-fixture.sh start dev-server slow-db # just these
+Scripts/dev-hog-fixture.sh status
+Scripts/dev-hog-fixture.sh stop
+```
+
+`start` refuses while fixtures from an earlier start are still running. The dev server listens on `127.0.0.1:${GHOST_FIXTURE_PORT:-51730}`, away from Vite's usual 5173.
+
+Manual checklist on macOS. Open the family, preview the stop, run it, then read the report.
+
+| Kind | What it does | Expect in the stop sheet and report |
+| --- | --- | --- |
+| `leak` | Touches 16 MiB every 0.25 s, plateaus at 1.5 GiB | A growing Python family; SIGINT ends it at the first step and the memory is released |
+| `cpu` | Burns one core | Shows as a heat leader on Overview; SIGINT ends it at the first step |
+| `ignore-term` | Ignores SIGTERM and SIGINT, burns one core | Every polite step is ignored; the report shows the same-identity survivor forced with SIGKILL |
+| `dev-server` | argv0 `vite`, serves the port, exits 0 on SIGINT, ignores SIGTERM | "Interrupts the dev server like Ctrl-C and frees port 51730"; the report ends after SIGINT and the port is free |
+| `supervisor` | A "nodemon" parent that restarts its `node` child within 1 s | Stop only the `node` child (per-process preview): "Will restart … nodemon … Stop nodemon instead"; the report says nodemon started it again. Stopping the whole family takes the supervisor down too |
+| `slow-db` | argv0 `postgres`, exits 4 s after SIGTERM | Careful shutdown: "Database writes", 12 s to flush and no force without asking; the report ends early at about 4 s instead of waiting the full grace |
+
+Run `stop` afterwards; it also cleans up anything a test left behind.
 
 ## Scope of verification
 
