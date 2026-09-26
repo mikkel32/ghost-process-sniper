@@ -70,9 +70,9 @@ public enum KillTargetCondition: String, Sendable {
 }
 
 public struct KillTarget: Identifiable, Equatable, Sendable {
-    public var id: String {
-        "\(identity.pid)-\(identity.startTimeSeconds)-\(identity.startTimeMicroseconds)-\(state.rawValue)"
-    }
+    /// The process alone, not its state: a row that goes from ready to
+    /// terminated is the same row, updated in place.
+    public var id: ProcessIdentity { identity }
 
     public let identity: ProcessIdentity
     public let parentPID: Int32?

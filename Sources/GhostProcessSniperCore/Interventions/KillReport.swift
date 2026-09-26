@@ -74,84 +74,26 @@ public struct KillReport: Equatable, Sendable {
         partiallySucceeded && deniedPIDs.isEmpty && survivorPIDs.isEmpty && failures.isEmpty
     }
 
+    /// The outcome in plain words; see `narrative` for its parts.
     public var summary: String {
-        if !failures.isEmpty && !partiallySucceeded {
-            return failures.joined(separator: "\n")
-        }
-        let refused = signalDeniedPIDs.sorted().map(String.init).joined(separator: ", ")
-        let pidLabel = signalDeniedPIDs.count == 1 ? "PID" : "PIDs"
-        if !signalDeniedPIDs.isEmpty && !partiallySucceeded {
-            return "macOS refused to stop \(displayName) (\(pidLabel) \(refused)). It is protected by security software or a system policy; nothing else was tried."
-        }
-        var parts = [outcomeSummary]
-        if !signalDeniedPIDs.isEmpty {
-            parts.append("macOS refused to stop \(pidLabel) \(refused); it is protected by security software or a system policy.")
-        }
-        let orphaned = Set(leftRunning.map(\.identity))
-        let keptRunning = lateTargets.filter { $0.state == .locked && !orphaned.contains($0.identity) }
-        if !keptRunning.isEmpty {
-            parts.append("Kept running after \(displayName) stopped: \(Self.names(keptRunning)).")
-        }
-        if !leftRunning.isEmpty {
-            parts.append("Left running (now orphaned): \(Self.names(leftRunning)).")
-        }
-        if forkStorm {
-            parts.append("It kept starting new processes; Ghost froze and stopped \(frozenCount) of them. Check that nothing starts it again.")
-        }
-        parts += stuckExitingPIDs.sorted().map {
-            "PID \($0) is stuck finishing its exit in the kernel (hung disk or network I/O); it disappears when that I/O completes."
-        }
-        return (parts + notes).joined(separator: " ")
-    }
-
-    private var outcomeSummary: String {
-        if !respawnedPIDs.isEmpty {
-            let pids = respawnedPIDs.sorted().map(String.init).joined(separator: ", ")
-            let advice = respawnedBy == "launchd"
-                ? "Quit the app or disable the login item that owns it."
-                : "Stop \(respawnedBy ?? "the supervisor") instead."
-            return "Stopped, but \(respawnedBy ?? "a supervisor") started it again (PID \(pids)). \(advice)"
-        }
-        if !survivorPIDs.isEmpty {
-            let pids = survivorPIDs.sorted().map(String.init).joined(separator: ", ")
-            return skipForceRequested
-                ? "Still running: PID \(pids). It may be waiting on you, such as a save prompt; force-stop only if you are sure."
-                : "Survivors: \(pids)."
-        }
-        if !forcedPIDs.isEmpty {
-            return "Force-killed \(forcedPIDs.count) stubborn process\(forcedPIDs.count == 1 ? "" : "es")."
-        }
-        if !gracefulPIDs.isEmpty {
-            let locked = Set(deniedPIDs).subtracting(signalDeniedPIDs).count
-            let suffix = locked > 0 ? " \(locked) locked skipped." : ""
-            return "Terminated \(gracefulPIDs.count) process\(gracefulPIDs.count == 1 ? "" : "es").\(suffix)"
-        }
-        if let zombieParentName {
-            return "\(displayName) had already exited; \(zombieParentName) still has to collect it."
-        }
-        if !deniedPIDs.isEmpty {
-            return "Locked: \(deniedPIDs.count) protected process\(deniedPIDs.count == 1 ? "" : "es")."
-        }
-        if stalePIDs.contains(rootPID) {
-            return "Already gone."
-        }
-        if !stalePIDs.isEmpty || !recycledPIDs.isEmpty {
-            return "No safe live targets. Stale or recycled PIDs skipped."
-        }
-        return "No owned live processes matched this kill plan."
-    }
-
-    private static func names(_ targets: [KillTarget]) -> String {
-        targets.map { "\($0.name) (PID \($0.pid))" }.joined(separator: ", ")
+        narrative.text
     }
 
     public var diagnosticText: String {
-        var lines = [
-            "Ghost Process Sniper Kill Report",
+        let story = narrative
+        var lines = ["Ghost Process Sniper Kill Report", story.headline]
+        lines += story.nextStep.map { ["Next: \($0)"] } ?? []
+        lines += story.details
+        let outcomes = KillOutcomeRows.make(report: self)
+        if !outcomes.isEmpty {
+            lines.append("Processes:")
+            lines += outcomes.map { "- \($0.name) (PID \($0.pid)) \u{2192} \($0.state.label), \($0.reason)" }
+        }
+        lines += [
+            "Diagnostics:",
             "Family: \(displayName)",
             "Root PID: \(rootPID)",
             "Operation: \(operationID.rawValue)",
-            "Summary: \(summary)",
             "Duration: \(Int(timeline.totalMilliseconds.rounded())) ms",
             "Estimated reclaim: \(RadarFormat.bytes(estimatedMemoryReclaimBytes)), \(Int(estimatedCPUReclaimPercent.rounded()))% CPU",
             "Realized reclaim: \(RadarFormat.bytes(realizedMemoryReclaimBytes))",
