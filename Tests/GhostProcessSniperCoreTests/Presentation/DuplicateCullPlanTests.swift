@@ -121,6 +121,28 @@ final class DuplicateCullPlanTests: XCTestCase {
         XCTAssertEqual(plan.decision(for: copies[1])?.rule, .keptNewest)
     }
 
+    func testRecommendedCopyIsKeptInsteadOfTheNewest() {
+        let copies = [tsserver(911, parent: 1, start: 1_000), tsserver(912, parent: 1, start: 3_000), tsserver(913, parent: 1, start: 2_000)]
+        let recommended = cluster(copies, keep: copies[0].identity, keepReason: "the one attached to a terminal")
+
+        let plan = DuplicateCullPlan.plan(for: recommended, sample: copies, currentUserID: uid_t(me))
+
+        XCTAssertEqual(plan.decision(for: copies[0])?.rule, .recommendedKeep)
+        XCTAssertEqual(plan.decision(for: copies[0])?.reason, "Kept as the one attached to a terminal")
+        XCTAssertEqual(Set(plan.stopTargets.map(\.pid)), [912, 913], "the newest copy is not special once one is recommended")
+    }
+
+    func testSafetyRulesStillWinOverTheRecommendation() {
+        let busy = tsserver(921, parent: 1, cpu: 30)
+        let idle = [tsserver(922, parent: 1), tsserver(923, parent: 1)]
+        let sample = [busy] + idle
+
+        let plan = DuplicateCullPlan.plan(for: cluster(sample, keep: busy.identity), sample: sample, currentUserID: uid_t(me))
+
+        XCTAssertEqual(plan.decision(for: busy)?.rule, .busy, "a busy copy keeps its own, more useful reason")
+        XCTAssertEqual(Set(plan.stopTargets.map(\.pid)), [922, 923])
+    }
+
     func testStopsAreCapped() {
         let copies = (0..<40).map { tsserver(Int32(1_000 + $0), parent: 1) }
         let keeper = process(90, parent: 1, name: "zsh")
@@ -208,14 +230,22 @@ final class DuplicateCullPlanTests: XCTestCase {
         )
     }
 
-    private func cluster(_ members: [ProcessMetrics], name: String = "tsserver") -> DuplicateProcessCluster {
+    private func cluster(
+        _ members: [ProcessMetrics],
+        name: String = "tsserver",
+        keep: ProcessIdentity? = nil,
+        keepReason: String = "the newest copy"
+    ) -> DuplicateProcessCluster {
         DuplicateProcessCluster(
             key: DuplicateClusterKey(kind: .commandPrefix, value: name, displayName: name),
             displayName: name,
             members: members,
             independentRootCount: members.count,
             likelyKind: .nodeServer,
-            classificationReason: "test"
+            classificationReason: "test",
+            copyRootIdentities: keep == nil ? [] : members.filter { $0.parentPID == 1 }.map(\.identity),
+            keepIdentity: keep,
+            keepReason: keepReason
         )
     }
 }

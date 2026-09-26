@@ -11,7 +11,7 @@ public struct DuplicateCullPlan: Equatable, Sendable {
 
     public enum Rule: String, CaseIterable, Sendable {
         case notYours, busy, busyChild, unmeasured, launchdService, openedApp, lightWork,
-             usedByParent, parentOutsideScan, keptNewest, overLimit, orphaned, stopsWithCopy
+             usedByParent, parentOutsideScan, keptNewest, recommendedKeep, overLimit, orphaned, stopsWithCopy
     }
 
     public struct Decision: Identifiable, Equatable, Sendable {
@@ -54,7 +54,8 @@ public struct DuplicateCullPlan: Equatable, Sendable {
     /// One pass stops at most this many copies; the next look finds the rest.
     public static let maximumStops = 32
 
-    /// Integration point for a smarter "which copy to keep" recommendation.
+    /// Follows the radar's "which copy to keep" recommendation within the
+    /// conservative safety rules.
     public static let planner: any DuplicateCullPlanning = ConservativeDuplicateCullPlanner()
 
     public let clusterID: String
@@ -134,6 +135,7 @@ public struct DuplicateCullPlan: Equatable, Sendable {
         case .usedByParent: "every copy is used by a running app"
         case .parentOutsideScan: "what started them is outside this scan"
         case .keptNewest: "the only idle copy is kept in case it is still wanted"
+        case .recommendedKeep: "the only idle copy is the one worth keeping"
         case .overLimit, .orphaned, .stopsWithCopy: "every copy is in use"
         }
     }
@@ -149,8 +151,10 @@ public protocol DuplicateCullPlanning: Sendable {
 }
 
 /// Keeps every copy that is someone else's, busy, run by launchd, or started
-/// by something still running. Stops only idle copies whose parent is gone
-/// (launchd adopted them), and never every copy of a cluster.
+/// by something still running, and the copy the radar recommends keeping
+/// (`keepIdentity`: the one in a terminal, else the most recently active).
+/// Stops only idle copies whose parent is gone (launchd adopted them), and
+/// never every copy of a cluster.
 public struct ConservativeDuplicateCullPlanner: DuplicateCullPlanning {
     public static let busyCPUPercent = 5.0
     public static let idleCPUPercent = 2.0
@@ -181,6 +185,8 @@ public struct ConservativeDuplicateCullPlanner: DuplicateCullPlanning {
         for copy in live {
             if let keep = keepReason(copy, index: index, userID: userID) {
                 kept[copy.identity] = keep
+            } else if copy.identity == cluster.keepIdentity {
+                kept[copy.identity] = (.recommendedKeep, "Kept as \(cluster.keepReason)")
             } else {
                 candidates.append(copy)
             }
@@ -239,10 +245,11 @@ public struct ConservativeDuplicateCullPlanner: DuplicateCullPlanning {
             return (.parentOutsideScan, "Started by PID \(copy.parentPID), outside this scan")
         }
         // launchd is the parent of orphans, but also of the agents, XPC
-        // services and apps it runs on purpose.
+        // services, Homebrew services and apps it runs on purpose.
         let path = copy.executablePath
         let lowered = path.lowercased()
         if KillRiskAssessor.isLaunchdManagedService(path: path)
+            || LaunchOrigin.isLaunchdManaged(path: path, commandLine: copy.commandLine)
             || lowered.contains("/contents/xpcservices/") || lowered.contains(".xpc/") {
             return (.launchdService, "Run by launchd, which would start it again")
         }
