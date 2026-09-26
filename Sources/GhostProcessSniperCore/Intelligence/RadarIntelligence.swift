@@ -59,7 +59,7 @@ public struct RadarRuleEngine: Sendable {
         guard family.score.value >= match.minimumScore else {
             return false
         }
-        if let leak = match.minimumLeakVelocity, family.trend.memoryVelocityMegabytesPerMinute < leak {
+        if let leak = match.minimumLeakVelocity, family.trend.credibleMemoryVelocity < leak {
             return false
         }
         if let age = match.minimumAgeMinutes {
@@ -113,7 +113,7 @@ public struct RadarRuleEngine: Sendable {
             RadarActionSuggestion(
                 type: .inspect,
                 title: "Inspect trend",
-                detail: "Leak \(Int(family.trend.memoryVelocityMegabytesPerMinute.rounded())) MB/min",
+                detail: "Leak \(Int(family.trend.credibleMemoryVelocity.rounded())) MB/min",
                 ruleID: rule.id,
                 createdAt: now
             )
@@ -156,13 +156,7 @@ public struct RadarIntelligence: Sendable {
         now: Date
     ) -> ProcessFamily {
         guard family.hasRecentMeasurements(at: now) else {
-            return family.enriched(
-                score: GhostScore(value: 0, level: .quiet, reasons: ["Measurements incomplete or stale"], heat: .quiet),
-                suggestions: [],
-                alertState: .normal,
-                forecast: .quiet,
-                lastScoredAt: now
-            )
+            return unscorable(family: family, context: context, now: now)
         }
         let candidateBaseline = context.baselines[family.signature.id]
         let baseline = candidateBaseline?.isMeasurementTrusted == true ? candidateBaseline : nil
@@ -175,7 +169,8 @@ public struct RadarIntelligence: Sendable {
                 settings: settings
             ),
             family: family,
-            pressure: context.systemPressure
+            pressure: context.systemPressure,
+            share: context.pressureShare(for: family)
         )
         let staged = family.enriched(
             score: score,
@@ -192,7 +187,8 @@ public struct RadarIntelligence: Sendable {
             score: suppressedScore,
             suggestions: preliminarySuppression
         )
-        let forecast = forecaster.forecast(family: workingFamily, settings: settings, now: now)
+        let forecast = forecaster.forecast(family: workingFamily, settings: settings, now: now,
+                                           pressure: context.systemPressure, hostOutlook: context.hostOutlook)
         let predictiveScore = scoreWithForecast(suppressedScore, forecast: forecast, family: workingFamily)
         let refinedHeat = GhostHeatModel.refined(
             base: predictiveScore.heat,
@@ -200,6 +196,7 @@ public struct RadarIntelligence: Sendable {
             baseline: baseline,
             recentIncidentCount: recentIncidents,
             pressure: context.systemPressure,
+            pressureShare: context.pressureShare(for: workingFamily),
             forecast: forecast
         )
         let heatResolvedScore = GhostScore(
@@ -219,7 +216,10 @@ public struct RadarIntelligence: Sendable {
         )
         let finalSuggestions: [RadarActionSuggestion]
         if finalSuppression.isEmpty {
-            finalSuggestions = mergedSuggestions(finalRules + forecastSuggestion(for: heatResolvedFamily))
+            finalSuggestions = mergedSuggestions(
+                finalRules + forecastSuggestion(for: heatResolvedFamily) + duplicateSuggestion(for: heatResolvedFamily, now: now) +
+                    zombieSuggestion(for: heatResolvedFamily, now: now) + culpritSuggestion(for: heatResolvedFamily, now: now)
+            )
         } else {
             // Muted families keep their underlying diagnostics, but should not
             // simultaneously tell the user to inspect, notify, or kill.
@@ -241,13 +241,26 @@ public struct RadarIntelligence: Sendable {
         return resolvedFamily.enriched(alertState: resolvedAlert)
     }
 
+    // Without a current reading nothing is scored, but ignore and snooze
+    // rules still hold: a muted family must not lose its Muted state.
+    private func unscorable(family: ProcessFamily, context: RadarContext, now: Date) -> ProcessFamily {
+        let suppression = suppressionSuggestions(from: ruleEngine.suggestions(for: family, rules: context.rules, now: now))
+        let blank = GhostScore(value: 0, level: .quiet, reasons: ["Measurements incomplete or stale"], heat: .quiet)
+        let waiting = family.enriched(
+            score: adjustedScoreForSuppression(blank, suggestions: suppression),
+            suggestions: suppression,
+            forecast: .quiet,
+            lastScoredAt: now
+        )
+        return waiting.enriched(alertState: ruleEngine.alertState(for: waiting, suggestions: suppression, now: now))
+    }
+
     private func scoreWithForecast(
         _ score: GhostScore,
         forecast: RiskForecast,
         family: ProcessFamily
     ) -> GhostScore {
-        let hasEnoughHistory = family.trend.sampleCount >= 3 || score.heat.sustainedSignalCount > 0
-        guard forecast.isCredibleEarlyWarning, hasEnoughHistory else {
+        guard forecast.isCredibleEarlyWarning, family.forecastHasUsefulHistory(heat: score.heat) else {
             return score
         }
         let impact: Double = switch forecast.state {
@@ -261,6 +274,7 @@ public struct RadarIntelligence: Sendable {
         let weightedImpact = impact * forecast.confidence
         let value = min(100, score.value + weightedImpact)
         let forecastComponent = GhostScoreComponent(
+            slot: "forecast",
             kind: .forecast,
             title: "Forecast: \(forecast.state.label)",
             detail: forecast.whyNow.isEmpty ? forecast.etaText : forecast.whyNow,
@@ -293,6 +307,70 @@ public struct RadarIntelligence: Sendable {
         ]
     }
 
+    /// One suggestion per duplicated workload, on the copy to keep: stop the
+    /// others. The copy with the suggestion is never a target.
+    private func duplicateSuggestion(for family: ProcessFamily, now: Date) -> [RadarActionSuggestion] {
+        guard let cluster = family.duplicateCluster, cluster.countsAsIndependentCopies,
+              let keep = cluster.keepIdentity, family.members.contains(where: { $0.identity == keep })
+        else {
+            return []
+        }
+        let redundant = cluster.redundantRootIdentities
+        guard !redundant.isEmpty else { return [] }
+        let ports = cluster.redundantPorts
+        let noun = redundant.count == 1 ? "copy" : "copies"
+        // The kept copy may be the one in a terminal or the busiest, not the newest.
+        let started = { (identity: ProcessIdentity) in (identity.startTimeSeconds, identity.startTimeMicroseconds) }
+        let age = redundant.allSatisfy { started($0) < started(keep) } ? "older" : "other"
+        let portText = ports.isEmpty ? "" : " (port\(ports.count == 1 ? "" : "s") \(ports.map(String.init).joined(separator: ", ")))"
+        return [
+            RadarActionSuggestion(
+                id: RadarActionSuggestion.stableID(scope: "duplicate|\(cluster.key.id)", type: .suggestKill),
+                type: .suggestKill,
+                title: "Stop \(redundant.count) \(age) \(noun)\(portText)",
+                detail: "\(cluster.independentRootCount) copies of \(cluster.displayName) are running; keeps PID \(keep.pid), \(cluster.keepReason).",
+                createdAt: now,
+                targetIdentities: redundant
+            )
+        ]
+    }
+
+    /// When one member accounts for most of a leak, stopping it alone (a
+    /// language server, a renderer) is often enough and spares the rest of
+    /// the tree, through the single-process stop path.
+    private func culpritSuggestion(for family: ProcessFamily, now: Date) -> [RadarActionSuggestion] {
+        guard let culprit = family.culprit, culprit.identity != family.root.identity, family.hasCredibleLeak,
+              family.ownedIdentities.contains(culprit.identity)
+        else {
+            return []
+        }
+        return [
+            RadarActionSuggestion(
+                id: RadarActionSuggestion.stableID(scope: "culprit", type: .suggestKill),
+                type: .suggestKill,
+                title: "Stop only \(culprit.name) (\(Int((culprit.share * 100).rounded()))% of growth)",
+                detail: "It grows \(Int(culprit.slopeMegabytesPerMinute.rounded())) MB/min; the rest of \(family.displayName) keeps running.",
+                createdAt: now,
+                targetIdentities: [culprit.identity]
+            )
+        ]
+    }
+
+    /// Zombies cannot be killed; only the parent that never reaps them can
+    /// be fixed.
+    private func zombieSuggestion(for family: ProcessFamily, now: Date) -> [RadarActionSuggestion] {
+        guard family.zombieChildCount >= 3 else { return [] }
+        return [
+            RadarActionSuggestion(
+                id: RadarActionSuggestion.stableID(scope: "zombies", type: .inspect),
+                type: .inspect,
+                title: "Restart \(family.displayName) to clear \(family.zombieChildCount) zombies",
+                detail: "Exited children are waiting for their parent to reap them; stopping them does nothing.",
+                createdAt: now
+            )
+        ]
+    }
+
     private func suppressionSuggestions(
         from suggestions: [RadarActionSuggestion]
     ) -> [RadarActionSuggestion] {
@@ -308,11 +386,9 @@ public struct RadarIntelligence: Sendable {
     private func mergedSuggestions(
         _ suggestions: [RadarActionSuggestion]
     ) -> [RadarActionSuggestion] {
-        var seen = Set<String>()
-        return suggestions.filter { suggestion in
-            let source = suggestion.ruleID?.uuidString ?? "forecast"
-            return seen.insert("\(source)|\(suggestion.type.rawValue)|\(suggestion.title)").inserted
-        }
+        // Ids are per (rule or forecast, action), so they must stay unique.
+        var seen = Set<UUID>()
+        return suggestions.filter { seen.insert($0.id).inserted }
     }
 
     private func baselineAwareScore(
@@ -326,30 +402,35 @@ public struct RadarIntelligence: Sendable {
         }
 
         let memoryMultiple = baseline.memoryMultiple(for: family.totalPhysicalFootprintBytes)
-        let cpuMultiple = baseline.cpuMultiple(for: family.totalCPUPercent)
-        let leakRatio = max(0, family.trend.memoryVelocityMegabytesPerMinute) / max(settings.leakVelocityMegabytesPerMinute, 1)
+        // Unusual means far outside the learned spread as well as well above
+        // the mean: a family that swings between idle and indexing is not
+        // anomalous at 2x.
+        let memoryIsUnusual = baseline.memoryZScore(for: family.totalPhysicalFootprintBytes) >= 3 && memoryMultiple >= 1.3
+        let leakRatio = family.trend.credibleMemoryVelocity / max(settings.leakVelocityMegabytesPerMinute, 1)
         var reasons = family.score.reasons
         var value = family.score.value
         var components = family.score.components
 
-        if memoryMultiple >= 2, family.totalPhysicalFootprintBytes > 256 * 1_048_576 {
+        if memoryIsUnusual, memoryMultiple >= 2, family.totalPhysicalFootprintBytes > 256 * 1_048_576 {
             let impact = min(18, memoryMultiple * 6)
-            let reason = String(format: "%.1fx usual memory", memoryMultiple)
+            let reason = "\(RadarFormat.fixed1(memoryMultiple))x usual memory"
             value += impact
             reasons.insert(reason, at: 0)
             components.append(GhostScoreComponent(
+                slot: "baseline.memory",
                 kind: .baseline,
                 title: reason,
                 detail: "Current memory is far above this family's learned normal",
                 impact: impact,
                 level: memoryMultiple >= 3 ? .critical : .hot
             ))
-        } else if memoryMultiple >= 1.45, family.totalPhysicalFootprintBytes > 512 * 1_048_576 {
+        } else if memoryIsUnusual, family.totalPhysicalFootprintBytes > 512 * 1_048_576 {
             let impact = min(10, memoryMultiple * 4)
-            let reason = String(format: "%.1fx baseline memory", memoryMultiple)
+            let reason = "\(RadarFormat.fixed1(memoryMultiple))x baseline memory"
             value += impact
             reasons.insert(reason, at: 0)
             components.append(GhostScoreComponent(
+                slot: "baseline.memory",
                 kind: .baseline,
                 title: reason,
                 detail: "Current memory is meaningfully above this family's learned normal",
@@ -358,17 +439,17 @@ public struct RadarIntelligence: Sendable {
             ))
         }
 
-        if cpuMultiple >= 3, family.totalCPUPercent > 20 {
-            let impact = min(12, cpuMultiple * 3)
-            let reason = String(format: "%.1fx usual CPU", cpuMultiple)
+        if let cpuAnomaly = BaselineCPUAnomaly(baseline: baseline, cpuPercent: family.totalCPUPercent) {
+            let impact = min(12, cpuAnomaly.multiple * 3)
             value += impact
-            reasons.insert(reason, at: 0)
+            reasons.insert(cpuAnomaly.reason, at: 0)
             components.append(GhostScoreComponent(
+                slot: "baseline.cpu",
                 kind: .baseline,
-                title: reason,
+                title: cpuAnomaly.reason,
                 detail: "CPU use is well above this family's learned normal",
                 impact: impact,
-                level: cpuMultiple >= 5 ? .hot : .watch
+                level: cpuAnomaly.multiple >= 5 ? .hot : .watch
             ))
         }
 
@@ -378,6 +459,7 @@ public struct RadarIntelligence: Sendable {
             value += impact
             reasons.append("recurring family")
             components.append(GhostScoreComponent(
+                slot: "recurrence",
                 kind: .recurrence,
                 title: "Recurring family",
                 detail: "\(incidentCount) prior incident\(incidentCount == 1 ? "" : "s") raise the chance this is a real repeat",
@@ -390,6 +472,7 @@ public struct RadarIntelligence: Sendable {
             value += 6
             reasons.append("leak and CPU are accelerating together")
             components.append(GhostScoreComponent(
+                slot: "acceleration",
                 kind: .leak,
                 title: "Memory and CPU accelerating",
                 detail: "Two independent signals are worsening together, increasing confidence",
@@ -408,24 +491,27 @@ public struct RadarIntelligence: Sendable {
         )
     }
 
-    // The same footprint matters more when the whole machine is starved:
-    // large families get pushed up the queue while host pressure is high.
+    // When the whole machine is starved, the families that hold or grow
+    // its memory move up the queue, in proportion to their share: an idle
+    // bystander of the same size barely moves.
     private func pressureAdjustedScore(
         _ score: GhostScore,
         family: ProcessFamily,
-        pressure: SystemMemoryPressure
+        pressure: SystemMemoryPressure,
+        share: PressureShare
     ) -> GhostScore {
         guard pressure.isKnown, pressure.level >= .warning,
-              family.totalPhysicalFootprintBytes > 512 * 1_048_576
+              family.totalPhysicalFootprintBytes > 512 * 1_048_576, share.boostScale > 0.05
         else {
             return score
         }
-        let boost: Double = pressure.level == .critical ? 12 : 7
-        let reason = "system memory pressure is \(pressure.level.label.lowercased())"
+        let boost: Double = (pressure.level == .critical ? 12 : 7) * share.boostScale
+        let reason = "system memory pressure is \(pressure.level.label.lowercased()) (\(share.text))"
         let pressureComponent = GhostScoreComponent(
+            slot: "pressure",
             kind: .system,
             title: "Host memory pressure",
-            detail: "This footprint matters more while system pressure is \(pressure.level.label.lowercased())",
+            detail: "Holds \(share.text) while system pressure is \(pressure.level.label.lowercased())",
             impact: boost,
             level: pressure.level.ghostLevel
         )
@@ -448,6 +534,7 @@ public struct RadarIntelligence: Sendable {
                 reasons: ["ignored by rule"],
                 components: [
                     GhostScoreComponent(
+                        slot: "rules",
                         kind: .rules,
                         title: "Ignored by rule",
                         detail: "The underlying signals remain visible, but alerts are muted by your rule",
@@ -455,7 +542,7 @@ public struct RadarIntelligence: Sendable {
                         level: .quiet
                     )
                 ],
-                heat: GhostHeat(value: min(score.heat.value, 12), level: .quiet, confidence: score.heat.confidence, evidence: ["Muted by ignore rule"], sustainedSignalCount: score.heat.sustainedSignalCount)
+                heat: score.heat.replacing(value: min(score.heat.value, 12), level: .quiet, evidence: ["Muted by ignore rule"])
             )
         }
         if suggestions.contains(where: { $0.type == .snooze }) {
@@ -466,6 +553,7 @@ public struct RadarIntelligence: Sendable {
                 reasons: ["snoozed"],
                 components: [
                     GhostScoreComponent(
+                        slot: "rules",
                         kind: .rules,
                         title: "Snoozed",
                         detail: "The family remains visible while alerts are temporarily paused",
@@ -473,7 +561,7 @@ public struct RadarIntelligence: Sendable {
                         level: .watch
                     )
                 ],
-                heat: GhostHeat(value: min(score.heat.value, 29), level: .watch, confidence: score.heat.confidence, evidence: ["Temporarily snoozed"], sustainedSignalCount: score.heat.sustainedSignalCount)
+                heat: score.heat.replacing(value: min(score.heat.value, 29), level: .watch, evidence: ["Temporarily snoozed"])
             )
         }
         return score

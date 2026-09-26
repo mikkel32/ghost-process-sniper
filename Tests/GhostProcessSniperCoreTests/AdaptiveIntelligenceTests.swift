@@ -99,6 +99,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
         let heat = GhostHeatModel.initial(
             memoryRatio: 1.7,
             cpuRatio: 0.15,
+            cpuThreshold: 90,
             gpuRatio: 0,
             leakRatio: 0,
             trend: TrendMetrics(
@@ -141,6 +142,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
         let heat = GhostHeatModel.initial(
             memoryRatio: 1.25,
             cpuRatio: 1.55,
+            cpuThreshold: 80,
             gpuRatio: 0.2,
             leakRatio: 1.8,
             trend: TrendMetrics(
@@ -331,7 +333,7 @@ final class AdaptiveIntelligenceTests: XCTestCase {
         XCTAssertEqual(legacy.headline, unlearned.headline)
 
         let trustedBaseline = FamilyBaseline(
-            signature: family.signature, sampleCount: 4, meanMemoryBytes: Double(128 * mebibyte),
+            signature: family.signature, sampleCount: 40, meanMemoryBytes: Double(128 * mebibyte),
             peakMemoryBytes: 128 * mebibyte, meanCPUPercent: 4, peakCPUPercent: 4,
             meanLeakVelocityMegabytesPerMinute: 0, incidentCount: 0,
             firstSeenAt: now, lastSeenAt: now

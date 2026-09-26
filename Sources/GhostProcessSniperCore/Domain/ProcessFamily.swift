@@ -3,9 +3,8 @@ import Darwin
 
 public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public var id: ProcessIdentity { root.identity }
-    public var familyKey: String {
-        "\(signature.id)|pid:\(root.identity.pid)|start:\(root.identity.startTimeSeconds).\(root.identity.startTimeMicroseconds)"
-    }
+    /// Built once: every cache, hysteresis and version map looks it up.
+    public let familyKey: String
 
     public let root: ProcessMetrics
     public let members: [ProcessMetrics]
@@ -16,23 +15,45 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public let devConfidence: Double
     public let commandHints: [String]
     public let trend: TrendMetrics
-    public let score: GhostScore
+    public private(set) var score: GhostScore
     public let ownedIdentities: [ProcessIdentity]
     public let protectedPIDs: [Int32]
     public let signature: ProcessSignature
-    public let baseline: FamilyBaseline?
+    public private(set) var baseline: FamilyBaseline?
     public let forensics: ProcessForensics
-    public let suggestions: [RadarActionSuggestion]
-    public let alertState: AlertState
-    public let recentIncidentCount: Int
-    public let forecast: RiskForecast
-    public let signatureVersion: UInt64
-    public let metricsVersion: UInt64
-    public let forensicsFreshness: Date?
-    public let lastScoredAt: Date?
-    public let classification: DevClassification?
-    public let duplicateCluster: DuplicateProcessCluster?
-    public let hardwareSignals: [HardwareOffenderSignal]
+    public private(set) var suggestions: [RadarActionSuggestion]
+    public private(set) var alertState: AlertState
+    public private(set) var recentIncidentCount: Int
+    public private(set) var forecast: RiskForecast
+    public private(set) var signatureVersion: UInt64
+    public private(set) var metricsVersion: UInt64
+    public private(set) var forensicsFreshness: Date?
+    public private(set) var lastScoredAt: Date?
+    public private(set) var classification: DevClassification?
+    public private(set) var duplicateCluster: DuplicateProcessCluster?
+    public private(set) var hardwareSignals: [HardwareOffenderSignal]
+    /// Measurement coverage at build time.
+    public let coverage: FamilyMeasurementCoverage
+    /// The family whose member launched this family's root, e.g. the editor
+    /// behind a language server. Nil for independent families.
+    public private(set) var parentFamilyKey: String?
+    /// CPU minutes and last activity from the activity ledger; empty for
+    /// families built without history.
+    public let cpuActivity: FamilyCPUActivity
+    /// The builder's forgotten-process judgment; nil for hand-built
+    /// families, which are judged on demand (see forgottenAssessment).
+    public let forgotten: ForgottenAssessment?
+    /// Exited children the root never reaped.
+    public let zombieChildCount: Int
+    /// Growth over the last ninety minutes, from the members' minute buckets.
+    public let longTermTrend: LongTermTrend
+    /// Which members the growth comes from, largest share first.
+    public private(set) var growth: [MemberGrowth]
+
+    /// The one member most of the growth comes from, on a clean trend.
+    public var culprit: MemberGrowth? {
+        growth.first.flatMap { $0.isCulprit ? $0 : nil }
+    }
 
     public var displayName: String { root.name }
     public var childCount: Int { max(0, members.count - 1) }
@@ -64,7 +85,14 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         lastScoredAt: Date? = nil,
         classification: DevClassification? = nil,
         duplicateCluster: DuplicateProcessCluster? = nil,
-        hardwareSignals: [HardwareOffenderSignal] = []
+        hardwareSignals: [HardwareOffenderSignal] = [],
+        coverage: FamilyMeasurementCoverage? = nil,
+        parentFamilyKey: String? = nil,
+        cpuActivity: FamilyCPUActivity = .empty,
+        forgotten: ForgottenAssessment? = nil,
+        zombieChildCount: Int? = nil,
+        longTermTrend: LongTermTrend = .none,
+        growth: [MemberGrowth] = []
     ) {
         self.root = root
         self.members = members
@@ -78,7 +106,9 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.score = score
         self.ownedIdentities = ownedIdentities
         self.protectedPIDs = protectedPIDs
-        self.signature = signature ?? ProcessSignature.from(root: root)
+        let signature = signature ?? ProcessSignature.from(root: root)
+        self.signature = signature
+        self.familyKey = Self.key(signature: signature, root: root.identity)
         self.baseline = baseline
         self.forensics = forensics ?? ProcessFamily.aggregateForensics(from: members)
         self.suggestions = suggestions
@@ -92,6 +122,42 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.classification = classification
         self.duplicateCluster = duplicateCluster
         self.hardwareSignals = hardwareSignals
+        self.coverage = coverage ?? FamilyMeasurementCoverage(members: members, root: root, at: lastScoredAt ?? root.sampledAt)
+        self.parentFamilyKey = parentFamilyKey
+        self.cpuActivity = cpuActivity
+        self.forgotten = forgotten
+        self.zombieChildCount = zombieChildCount ?? members.filter { $0.isZombie && $0.identity != root.identity }.count
+        self.longTermTrend = longTermTrend
+        self.growth = growth
+    }
+
+    /// The forgotten-process judgment: the builder's, or one made now from
+    /// what the family carries (no session liveness or directory checks).
+    public var forgottenAssessment: ForgottenAssessment {
+        if let forgotten { return forgotten }
+        return ForgottenProcessAssessor.assess(
+            root: root,
+            context: LaunchContextResolver.resolve(root: root, livePIDs: Set(members.map(\.pid))),
+            activity: cpuActivity,
+            forensics: forensics,
+            workingDirectoryMissing: false,
+            now: lastScoredAt ?? root.sampledAt
+        )
+    }
+
+    /// One concrete instance of a signature: the signature plus the root.
+    public static func key(signature: ProcessSignature, root: ProcessIdentity) -> String {
+        "\(signature.id)|pid:\(root.pid)|start:\(root.startTimeSeconds).\(root.startTimeMicroseconds)"
+    }
+
+    mutating func attribute(growth: [MemberGrowth]) {
+        self.growth = growth
+    }
+
+    /// Families launched by this one (see parentFamilyKey), for a stop that
+    /// should take an editor's servers with it.
+    public func childFamilies(in families: [ProcessFamily]) -> [ProcessFamily] {
+        families.filter { $0.parentFamilyKey == familyKey }
     }
 
     public func killPlan(
@@ -126,37 +192,25 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         duplicateCluster: DuplicateProcessCluster? = nil,
         hardwareSignals: [HardwareOffenderSignal]? = nil
     ) -> ProcessFamily {
-        ProcessFamily(
-            root: root,
-            members: members,
-            totalResidentMemoryBytes: totalResidentMemoryBytes,
-            totalPhysicalFootprintBytes: totalPhysicalFootprintBytes,
-            totalCPUPercent: totalCPUPercent,
-            totalGPUPercent: totalGPUPercent,
-            devConfidence: devConfidence,
-            commandHints: commandHints,
-            trend: trend,
-            score: score ?? self.score,
-            ownedIdentities: ownedIdentities,
-            protectedPIDs: protectedPIDs,
-            signature: signature,
-            baseline: baseline ?? self.baseline,
-            forensics: forensics,
-            suggestions: suggestions ?? self.suggestions,
-            alertState: alertState ?? self.alertState,
-            recentIncidentCount: recentIncidentCount ?? self.recentIncidentCount,
-            forecast: forecast ?? self.forecast,
-            signatureVersion: signatureVersion ?? self.signatureVersion,
-            metricsVersion: metricsVersion ?? self.metricsVersion,
-            forensicsFreshness: forensicsFreshness ?? self.forensicsFreshness,
-            lastScoredAt: lastScoredAt ?? self.lastScoredAt,
-            classification: classification ?? self.classification,
-            duplicateCluster: duplicateCluster ?? self.duplicateCluster,
-            hardwareSignals: hardwareSignals ?? self.hardwareSignals
-        )
+        // A copy keeps the measured totals, forensics, coverage and key.
+        var copy = self
+        if let score { copy.score = score }
+        if let baseline { copy.baseline = baseline }
+        if let suggestions { copy.suggestions = suggestions }
+        if let alertState { copy.alertState = alertState }
+        if let recentIncidentCount { copy.recentIncidentCount = recentIncidentCount }
+        if let forecast { copy.forecast = forecast }
+        if let signatureVersion { copy.signatureVersion = signatureVersion }
+        if let metricsVersion { copy.metricsVersion = metricsVersion }
+        if let forensicsFreshness { copy.forensicsFreshness = forensicsFreshness }
+        if let lastScoredAt { copy.lastScoredAt = lastScoredAt }
+        if let classification { copy.classification = classification }
+        if let duplicateCluster { copy.duplicateCluster = duplicateCluster }
+        if let hardwareSignals { copy.hardwareSignals = hardwareSignals }
+        return copy
     }
 
-    private static func aggregateForensics(from members: [ProcessMetrics]) -> ProcessForensics {
+    static func aggregateForensics(from members: [ProcessMetrics]) -> ProcessForensics {
         let root = members.first?.forensics
         let openFiles = members.compactMap(\.forensics.openFileCount).reduce(0, +)
         let sockets = members.compactMap(\.forensics.socketCount).reduce(0, +)

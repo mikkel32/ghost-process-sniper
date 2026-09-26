@@ -52,6 +52,7 @@ struct CoreChecks {
         await run("memoryPatternAnalyzerClassifiesShapes") { try memoryPatternAnalyzerClassifiesShapes() }
         await run("riskForecasterTreatsSawtoothAsChurn") { try riskForecasterTreatsSawtoothAsChurn() }
         await run("systemPressureBoostsLargeFamilies") { try systemPressureBoostsLargeFamilies() }
+        await run("systemPressureSamplerFollowsKernelVerdict") { try systemPressureSamplerFollowsKernelVerdict() }
         await run("familyVerdictSynthesizesJudgment") { try familyVerdictSynthesizesJudgment() }
         await run("riskForecasterRequiresSustainedCPUEvidence") { try riskForecasterRequiresSustainedCPUEvidence() }
         await run("startupGraceDelaysLeakCalls") { try startupGraceDelaysLeakCalls() }
@@ -143,6 +144,15 @@ private func nativeSamplerSeesCurrentProcess() async throws {
     }
     try check(current.identity.startTimeSeconds > 0, "native sampler should include stable start time")
     try check(!current.name.isEmpty, "native sampler should include process name")
+    // The session facts forgotten-process detection relies on. A CI runner
+    // may have no terminal, so the tty itself is not required.
+    try check(getsid(getpid()) > 0, "getsid should succeed for the checks process")
+    try check(current.sessionID == getsid(getpid()), "native sampler should read the session id")
+    try check(current.processGroupID == getpgrp(), "native sampler should read the process group")
+    try check(current.runState == .running || current.runState == .sleeping, "native sampler should read the run state")
+    if isatty(STDIN_FILENO) != 0 {
+        try check(current.controllingTerminal != nil, "a process with a terminal should report its tty")
+    }
 }
 
 private func nativeKillSnapshotProviderUsesLitePath() async throws {
@@ -363,8 +373,8 @@ private func duplicateDetectorCapturesSmallSameUserProcesses() throws {
     try check(result.promotedDuplicateCandidateCount == 2, "duplicate members should be promoted as family candidates")
     try check(result.families.count == 2, "independent duplicate roots should become visible families")
     try check(result.families.allSatisfy { $0.score.level >= .watch }, "duplicate-promoted families should have watch visibility")
-    try check(result.families.contains { $0.score.reasons.contains("2 matching instances") }, "duplicate score should explain matching instances")
-    try check(result.families.contains { $0.score.components.contains(where: { $0.kind == .fanout && $0.title.contains("matching instances") }) }, "duplicate score should expose a fanout component")
+    try check(result.families.contains { $0.score.reasons.contains("2 independent copies") }, "duplicate score should explain the independent copies")
+    try check(result.families.contains { $0.score.components.contains(where: { $0.kind == .fanout && $0.title.contains("independent copies") }) }, "duplicate score should expose a fanout component")
 }
 
 private func duplicateDetectorIgnoresSingletonsAndSystemBundles() throws {
@@ -560,7 +570,8 @@ private func familyBuilderSurfacesGPUHardwareSignals() throws {
         commandLine: "SmallRenderer --canvas",
         memory: 96_000_000,
         cpu: 8,
-        gpu: 64
+        gpu: 64,
+        sampledAt: Date(timeIntervalSince1970: 2_450)
     )
 
     let families = builder.buildFamilies(
@@ -895,7 +906,7 @@ private func riskForecasterPredictsETAAndState() throws {
 
     try check(forecast.state >= .leaking, "forecaster should promote imminent memory growth")
     try check((forecast.etaSeconds ?? 0) > 180 && (forecast.etaSeconds ?? 999) < 240, "forecaster should compute memory threshold ETA")
-    try check(forecast.whyNow.contains("threshold ETA"), "forecast should explain why now")
+    try check(forecast.whyNow.contains("memory limit in"), "forecast should explain why now")
     try check(forecast.recommendedAction.action == .inspect, "leaking forecast should remain advisory inspect")
 }
 
@@ -926,6 +937,7 @@ private func riskForecasterSuppressesQuietNoise() throws {
 }
 
 private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
+    // Forgotten needs watched idleness, not just age and launchd as parent.
     let stale = forecastFamily(
         pid: 207,
         parentPID: 1,
@@ -933,7 +945,8 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
         memory: 650 * 1_048_576,
         cpu: 0,
         trend: .empty,
-        score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"])
+        score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"]),
+        cpuActivity: FamilyCPUActivity(buckets: [], lastActiveAt: nil, measuredSince: Date(timeIntervalSince1970: 12_000))
     )
     let staleForecast = forecastWithFreshMeasurements(
         family: stale,
@@ -953,7 +966,7 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
     )
     let baseline = FamilyBaseline(
         signature: recurringBase.signature,
-        sampleCount: 20,
+        sampleCount: 40,
         meanMemoryBytes: 160 * 1_048_576,
         peakMemoryBytes: 220 * 1_048_576,
         meanCPUPercent: 2,
@@ -974,8 +987,8 @@ private func riskForecasterDetectsStaleAndRecurringFamilies() throws {
 }
 
 private func riskForecasterDetectsLeakAcceleration() throws {
-    let base = Date(timeIntervalSince1970: 20_840)
-    let samples = [100, 140, 220, 340, 500, 700].enumerated().map { index, megabytes in
+    let base = Date(timeIntervalSince1970: 20_790)
+    let samples = [100, 110, 120, 130, 200, 300, 400, 500].enumerated().map { index, megabytes in
         TrendSample(
             date: base.addingTimeInterval(Double(index) * 30),
             memoryBytes: UInt64(megabytes) * 1_048_576,
@@ -984,12 +997,13 @@ private func riskForecasterDetectsLeakAcceleration() throws {
     }
     let family = forecastFamily(
         pid: 209,
-        memory: 700 * 1_048_576,
+        memory: 500 * 1_048_576,
         cpu: 4,
         trend: TrendMetrics(
-            memoryVelocityMegabytesPerMinute: 20,
+            memoryVelocityMegabytesPerMinute: 120,
             cpuSlopePerMinute: 0,
             memoryPoints: samples.map { Double($0.memoryBytes) },
+            memoryFitQuality: 0.9,
             samples: samples
         ),
         score: GhostScore(value: 12, level: .quiet, reasons: ["quiet dev process"])
@@ -1000,8 +1014,10 @@ private func riskForecasterDetectsLeakAcceleration() throws {
         now: Date(timeIntervalSince1970: 21_000)
     )
 
-    try check(forecast.state == .runaway, "accelerating leak should become runaway even before fixed thresholds")
+    // Acceleration sharpens a leak call; on its own it is not a runaway.
+    try check(forecast.state == .leaking, "accelerating leak should be called a leak")
     try check(forecast.leakAccelerationMegabytesPerMinute2 > 80, "forecast should expose leak acceleration")
+    try check(forecast.whyNow.contains("accelerating"), "acceleration should be explained")
 }
 
 private func trendWindowRegressionResistsEndpointSpikes() throws {
@@ -1116,10 +1132,22 @@ private func riskForecasterTreatsSawtoothAsChurn() throws {
     try check(forecast.whyNow.contains("churn"), "forecast should explain the churn pattern")
 }
 
+// Swap growth may raise the level one step, so only the kernel's bounds are exact.
+private func systemPressureSamplerFollowsKernelVerdict() throws {
+    let pressure = SystemPressureSampler().sample()
+    guard let kernel = pressure.kernelLevel else { return }
+    switch kernel {
+    case 4: try check(pressure.level == .critical, "kernel critical pressure should read critical")
+    case 2: try check(pressure.level == .warning, "kernel warning pressure should read warning")
+    default: try check(pressure.level <= .warning, "kernel normal pressure should never read critical")
+    }
+}
+
 private func systemPressureBoostsLargeFamilies() throws {
+    // Half of the memory in use: pressure is largely this family's doing.
     let family = forecastFamily(
         pid: 220,
-        memory: 1_610_612_736,
+        memory: 8_589_934_592,
         cpu: 3,
         trend: .empty,
         score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"])
@@ -1152,6 +1180,18 @@ private func systemPressureBoostsLargeFamilies() throws {
     try check(pressured.score.value >= nominal.score.value + 10, "critical host pressure should boost large families")
     try check(pressured.score.reasons.joined(separator: " ").contains("pressure"), "pressure boost should be explained in reasons")
     try check(pressured.score.level >= .watch, "gigabyte families under critical pressure should be at least watch")
+
+    // A 1.5 GB bystander holding a tenth of used memory is barely moved.
+    let bystander = forecastFamily(pid: 221, memory: 1_610_612_736, cpu: 3, trend: .empty,
+        score: GhostScore(value: 10, level: .quiet, reasons: ["quiet dev process"]))
+    let calm = intelligence.enrich(family: freshMeasurements(bystander, at: now),
+        context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []), settings: .aggressive, now: now)
+    let squeezed = intelligence.enrich(family: freshMeasurements(bystander, at: now),
+        context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: SystemMemoryPressure(
+            level: .critical, usedFraction: 0.95, totalBytes: 17_179_869_184, availableBytes: 858_993_459,
+            compressedBytes: 4_294_967_296)),
+        settings: .aggressive, now: now)
+    try check(squeezed.score.value - calm.score.value < 10, "an idle bystander should get only its share of the pressure boost")
 }
 
 private func familyVerdictSynthesizesJudgment() throws {
@@ -1228,6 +1268,14 @@ private func riskForecasterRequiresSustainedCPUEvidence() throws {
         trend: cpuTrend([90, 90, 90, 90, 4]), score: GhostScore(value: 8, level: .quiet, reasons: []))
     let recoveredForecast = forecastWithFreshMeasurements(family: recovered, settings: .aggressive, now: now)
     try check(recoveredForecast.state == .quiet, "old high CPU must not keep a currently recovered process runaway")
+
+    // A compile pegging every core is expected work, not a runaway.
+    let build = forecastFamily(pid: 236, parentPID: 999, memory: 200 * 1_048_576, cpu: 700,
+        trend: cpuTrend([650, 700, 720, 690, 700]), score: GhostScore(value: 8, level: .quiet, reasons: []),
+        classification: DevClassification(kind: .swiftBuild, confidence: 0.95, reason: "Swift build toolchain", traits: .buildOrTest))
+    let buildForecast = forecastWithFreshMeasurements(family: build, settings: .aggressive, now: now)
+    try check(buildForecast.state != .runaway, "a build at 700% should not be runaway before fifteen minutes")
+    try check(buildForecast.recommendedAction.title == "Let it finish", "a build should be left to finish")
 }
 
 private func startupGraceDelaysLeakCalls() throws {
@@ -2085,7 +2133,7 @@ private func radarIntelligenceEscalatesBaselineAnomalies() throws {
     let family = hotFamily(pid: 520, memory: 420_000_000, cpu: 15, score: GhostScore(value: 32, level: .watch, reasons: ["dev process"]))
     let baseline = FamilyBaseline(
         signature: family.signature,
-        sampleCount: 8,
+        sampleCount: 40,
         meanMemoryBytes: 100_000_000,
         peakMemoryBytes: 120_000_000,
         meanCPUPercent: 5,
@@ -3821,7 +3869,9 @@ private func forecastFamily(
     trend: TrendMetrics,
     score: GhostScore,
     baseline: FamilyBaseline? = nil,
-    recentIncidentCount: Int = 0
+    recentIncidentCount: Int = 0,
+    cpuActivity: FamilyCPUActivity = .empty,
+    classification: DevClassification? = nil
 ) -> ProcessFamily {
     let root = sample(
         pid: pid,
@@ -3846,7 +3896,9 @@ private func forecastFamily(
         ownedIdentities: [root.identity],
         protectedPIDs: [],
         baseline: baseline,
-        recentIncidentCount: recentIncidentCount
+        recentIncidentCount: recentIncidentCount,
+        classification: classification,
+        cpuActivity: cpuActivity
     )
 }
 
@@ -3985,5 +4037,5 @@ private func freshMeasurements(_ family: ProcessFamily, at date: Date) -> Proces
         suggestions: family.suggestions, alertState: family.alertState,
         recentIncidentCount: family.recentIncidentCount, forecast: family.forecast,
         lastScoredAt: date, classification: family.classification, duplicateCluster: family.duplicateCluster,
-        hardwareSignals: family.hardwareSignals)
+        hardwareSignals: family.hardwareSignals, cpuActivity: family.cpuActivity, forgotten: family.forgotten)
 }

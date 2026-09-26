@@ -35,22 +35,37 @@ public struct ProcessSignature: Hashable, Codable, Sendable {
         )
     }
 
+    // Bounded before the per-token work: command lines with hundreds of
+    // arguments used to normalize every token only to keep twelve.
     private static func normalizedCommand(_ command: String) -> String {
         command
             .split(whereSeparator: \.isWhitespace)
-            .map { piece in
-                let text = String(piece)
-                if text.hasPrefix("/var/folders/") || text.hasPrefix("/private/var/folders/") {
+            .prefix(12)
+            .map { piece -> String in
+                if piece.hasPrefix("/var/folders/") || piece.hasPrefix("/private/var/folders/") {
                     return "<tmp>"
                 }
-                if text.range(of: #"^\d+$"#, options: .regularExpression) != nil {
+                if isDecimalDigits(piece) {
                     return "<num>"
                 }
-                return text
+                return String(piece)
             }
-            .prefix(12)
             .joined(separator: " ")
             .lowercased()
+    }
+
+    /// The regex `^\d+$` this replaced: every scalar a decimal digit, which
+    /// includes non-ASCII digits such as Arabic-Indic and full-width ones.
+    static func isDecimalDigits(_ token: Substring) -> Bool {
+        guard !token.isEmpty else { return false }
+        for scalar in token.unicodeScalars {
+            if scalar.isASCII {
+                guard scalar.value >= 48, scalar.value <= 57 else { return false }
+            } else if scalar.properties.generalCategory != .decimalNumber {
+                return false
+            }
+        }
+        return true
     }
 
     private static func fingerprint(_ value: String) -> String {
@@ -59,7 +74,8 @@ public struct ProcessSignature: Hashable, Codable, Sendable {
             hash ^= UInt64(byte)
             hash &*= 0x100000001b3
         }
-        return String(format: "%016llx", hash)
+        let hex = String(hash, radix: 16)
+        return String(repeating: "0", count: 16 - hex.count) + hex
     }
 }
 

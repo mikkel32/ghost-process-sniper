@@ -28,6 +28,7 @@ struct NativeProcessProbeSource: ProcessProbeSource {
         guard result == size else {
             return result <= 0 && errno == EPERM ? .denied : .missing
         }
+        let terminal = Self.terminalFields(info)
         return .record(ProbeBSD(
             pid: pid,
             parentPID: Int32(info.pbi_ppid),
@@ -38,7 +39,9 @@ struct NativeProcessProbeSource: ProcessProbeSource {
             openFileCount: Int(info.pbi_nfiles),
             startTimeSeconds: info.pbi_start_tvsec,
             startTimeMicroseconds: info.pbi_start_tvusec,
-            name: Self.kernelName(info)
+            name: Self.kernelName(info),
+            controllingTerminal: terminal.device,
+            terminalForegroundGroupID: terminal.foregroundGroup
         ))
     }
 
@@ -164,6 +167,16 @@ struct NativeProcessProbeSource: ProcessProbeSource {
             Self.tupleString(info.pvi_cdir.vip_path).ifNotEmpty,
             Self.tupleString(info.pvi_rdir.vip_path).ifNotEmpty
         )
+    }
+
+    /// e_tdev is NODEV (all ones) without a controlling terminal.
+    private static func terminalFields(_ info: proc_bsdinfo) -> (device: UInt32?, foregroundGroup: Int32?) {
+        #if os(macOS)
+        guard info.e_tdev != UInt32.max else { return (nil, nil) }
+        return (info.e_tdev, info.e_tpgid == 0 ? nil : Int32(bitPattern: info.e_tpgid))
+        #else
+        return (nil, nil)
+        #endif
     }
 
     private static func kernelName(_ info: proc_bsdinfo) -> String {

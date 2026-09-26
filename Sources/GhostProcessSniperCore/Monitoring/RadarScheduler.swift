@@ -39,6 +39,7 @@ public struct RadarScheduler: Sendable {
     private var hotSince: [String: Date] = [:]
     /// When each quiet developer process last had its ports read.
     private var portCensusStamps: [ProcessIdentity: Date] = [:]
+    private var planCount: UInt64 = 0
     private let pressureProvider: @Sendable () -> SystemPressureLevel
 
     /// A family hot for this long, and already alerted on, is a known long
@@ -73,7 +74,8 @@ public struct RadarScheduler: Sendable {
     ) -> SamplingPlan {
         let pressure = updateSystemPressure()
         power = powerReader.context(now: now)
-        let demand = FamilySamplingDemand(families: families, focusedKeys: focusedSignatureIDs)
+        planCount &+= 1
+        let demand = FamilySamplingDemand(families: families, focusedKeys: focusedSignatureIDs, pass: planCount)
         let mode = settings.resolvedPerformanceMode(RadarSchedulingContext(
             uiVisible: uiVisible,
             power: power,

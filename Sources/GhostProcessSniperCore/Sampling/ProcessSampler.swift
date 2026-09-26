@@ -117,7 +117,8 @@ public actor NativeProcessSampler: ProcessSampling {
                 measurementStatus: sample.measurementStatus,
                 cpuMeasurementStatus: sample.cpuMeasurementStatus,
                 gpuMeasurementStatus: gpuSnapshot.measuredAtByPID[sample.identity.pid]
-                    .map { $0 == now ? .fresh : .cached($0) } ?? .unavailable
+                    .map { $0 == now ? .fresh : .cached($0) } ?? .unavailable,
+                session: sample.session
             )
             scanCache.update(ProcessRecord(identity: sample.identity, process: process,
                 telemetryRefreshedAt: telemetry.isPlaceholder ? .distantPast : telemetry.refreshedAt))
@@ -195,7 +196,8 @@ public actor NativeProcessSampler: ProcessSampling {
             isSystemProcess: lite.isSystemProcess,
             totalProcessorSeconds: usage?.cpuSeconds ?? cached?.totalProcessorSeconds ?? 0,
             cpu: cpu,
-            isPriority: raw.priority > 0
+            isPriority: raw.priority > 0,
+            session: lite.session(cachedSessionID: cached?.sessionID)
         )
     }
 

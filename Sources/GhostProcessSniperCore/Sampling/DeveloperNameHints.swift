@@ -4,13 +4,8 @@
 /// kernel name, so a stable process table costs one dictionary lookup per
 /// newcomer and no lowercasing.
 struct DeveloperNameHints: Sendable {
-    private static let names: Set<String> = [
-        "node", "npm", "pnpm", "yarn", "bun", "vite", "deno", "python", "python3",
-        "ruby", "rails", "java", "gradle", "mvn", "docker", "com.docker.backend",
-        "colima", "ollama", "swift", "swift-frontend", "swift-build", "xcodebuild",
-        "electron", "uvicorn", "gunicorn", "webpack", "next", "cargo", "rustc", "go",
-        "air", "beam.smp", "mix", "dotnet", "php"
-    ]
+    /// The workload catalog's probe names plus runners it does not classify.
+    private static let names = WorkloadCatalog.probeHintNames.union(["air", "mix"])
     private static let fragments = ["electron", "vite", "ollama", "llama", "node"]
     private static let memoLimit = 4_096
 

@@ -14,6 +14,10 @@ struct ProbeBSD: Equatable, Sendable {
     let startTimeMicroseconds: UInt64
     /// Raw `pbi_name`; empty when the kernel has none.
     let name: String
+    /// e_tdev; nil when the process has no controlling terminal (NODEV).
+    var controllingTerminal: UInt32?
+    /// e_tpgid: the terminal's foreground process group.
+    var terminalForegroundGroupID: Int32?
 }
 
 enum ProbeBSDRead: Equatable, Sendable {

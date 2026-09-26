@@ -78,6 +78,16 @@ public enum ForecastHorizon: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// What a forecast's ETA counts down to. CPU never has an ETA: a linear CPU%
+/// extrapolation is meaningless, so a CPU breach is evidence, not a countdown.
+public enum ForecastETAKind: String, Codable, CaseIterable, Sendable {
+    case none
+    case memoryLimit
+    /// Time until this family's growth alone turns host memory pressure
+    /// critical. Never breached: a spent reserve has no countdown.
+    case hostMemory
+}
+
 public struct AnomalyBaseline: Codable, Equatable, Sendable {
     public let memoryMultiple: Double
     public let cpuMultiple: Double
@@ -163,6 +173,9 @@ public struct RiskForecast: Codable, Equatable, Sendable {
     public let staleLikelihood: Double
     public let baseline: AnomalyBaseline
     public let generatedAt: Date
+    public let etaKind: ForecastETAKind
+    /// What the CPU minutes say, when the family has any.
+    public let cpuBehavior: CPUBehavior?
 
     public static let quiet = RiskForecast(
         state: .quiet,
@@ -200,7 +213,9 @@ public struct RiskForecast: Codable, Equatable, Sendable {
         recurrenceRisk: Double,
         staleLikelihood: Double,
         baseline: AnomalyBaseline,
-        generatedAt: Date
+        generatedAt: Date,
+        etaKind: ForecastETAKind? = nil,
+        cpuBehavior: CPUBehavior? = nil
     ) {
         self.state = state
         self.horizon = horizon
@@ -216,6 +231,8 @@ public struct RiskForecast: Codable, Equatable, Sendable {
         self.staleLikelihood = min(1, max(0, staleLikelihood))
         self.baseline = baseline
         self.generatedAt = generatedAt
+        self.etaKind = etaKind ?? (etaSeconds == nil ? .none : .memoryLimit)
+        self.cpuBehavior = cpuBehavior
     }
 
     /// A low-confidence forecast is useful as directional context, but should
@@ -269,11 +286,22 @@ public extension ProcessFamily {
     /// history requirement next to the family so every subsystem uses the same
     /// credibility policy.
     var forecastHasUsefulHistory: Bool {
-        trend.sampleCount >= 3 || score.heat.sustainedSignalCount > 0
+        forecastHasUsefulHistory(heat: score.heat)
+    }
+
+    /// Only trend-proven persistence substitutes for samples; baseline and
+    /// host-pressure votes (corroborationCount) never do.
+    func forecastHasUsefulHistory(heat: GhostHeat) -> Bool {
+        trend.sampleCount >= 3 || heat.sustainedSignalCount > 0
     }
 
     var forecastHasEscalationHistory: Bool {
         trend.sampleCount >= 4 || score.heat.sustainedSignalCount > 0
+    }
+
+    /// Forgotten work is idle work: no reading in the window above 2% CPU.
+    var isIdleAcrossWindow: Bool {
+        totalCPUPercent <= 2 && trend.samples.allSatisfy { $0.cpuPercent <= 2 }
     }
 
     var forecastIsCredibleEarlyWarning: Bool {

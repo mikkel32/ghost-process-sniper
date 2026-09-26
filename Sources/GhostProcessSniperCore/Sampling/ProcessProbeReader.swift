@@ -78,7 +78,8 @@ enum ProcessProbeReader {
             let priority = requested ? 2 : hinted ? 1 : 0
             let lite = ProcessLiteRecord(identity: identity, parentPID: bsd.parentPID,
                 userID: bsd.userID, name: name, processGroupID: bsd.processGroupID, status: bsd.status,
-                flags: bsd.flags, openFileCount: bsd.openFileCount, sampledAt: plan.sampledAt)
+                flags: bsd.flags, openFileCount: bsd.openFileCount, sampledAt: plan.sampledAt,
+                controllingTerminal: bsd.controllingTerminal, terminalForegroundGroupID: bsd.terminalForegroundGroupID)
             priorities.append(priority)
             samples.append(RawProcessSample(pid: pid, liteRecord: lite, kernelName: bsd.name,
                 usage: usage, task: nil, priority: priority))

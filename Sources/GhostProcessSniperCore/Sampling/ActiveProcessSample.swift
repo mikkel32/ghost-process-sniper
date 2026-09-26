@@ -18,6 +18,7 @@ struct ActiveProcessSample {
     let totalProcessorSeconds: TimeInterval
     let cpu: Double
     let isPriority: Bool
+    let session: ProcessSessionInfo
     var telemetry: ProcessTelemetryCache.Entry?
     var forensics: ProcessForensics?
 }

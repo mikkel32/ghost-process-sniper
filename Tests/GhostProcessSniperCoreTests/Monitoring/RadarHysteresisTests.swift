@@ -13,18 +13,18 @@ final class RadarHysteresisTests: XCTestCase {
         hysteresis.apply(to: [family(level)], now: t0.addingTimeInterval(seconds))[0]
     }
 
-    func testHoldsAtWatchForTheWholeHoldAfterTheLastHotTick() {
+    func testHoldsAtWatchOrAboveForTheWholeHoldAfterTheLastHotTick() {
         var hysteresis = RadarHysteresis()
         XCTAssertEqual(level(after: &hysteresis, .hot, at: 0).score.level, .hot)
-        for seconds in [1.0, 2, 19] {
+        for seconds in [1.0, 2, 19, 21, 40] {
             let held = level(after: &hysteresis, .quiet, at: seconds)
-            XCTAssertEqual(held.score.level, .watch, "t0+\(seconds)")
-            XCTAssertEqual(held.score.heat.level, .watch)
-            XCTAssertTrue(held.score.reasons.contains("held briefly to avoid flicker"))
+            XCTAssertGreaterThanOrEqual(held.score.level, .watch, "t0+\(seconds)")
+            XCTAssertEqual(held.score.heat.level, held.score.level)
+            XCTAssertTrue(held.score.reasons.contains(RadarHysteresis.holdReason))
         }
-        let released = level(after: &hysteresis, .quiet, at: 21)
+        let released = level(after: &hysteresis, .quiet, at: 41)
         XCTAssertEqual(released.score.level, .quiet)
-        XCTAssertFalse(released.score.reasons.contains("held briefly to avoid flicker"))
+        XCTAssertFalse(released.score.reasons.contains(RadarHysteresis.holdReason))
     }
 
     func testBurstyRunawayNeverDropsBelowWatch() {

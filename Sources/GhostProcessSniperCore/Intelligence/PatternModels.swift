@@ -8,6 +8,8 @@ public enum MemoryPattern: String, Codable, CaseIterable, Sendable {
     case flat
     case steadyClimb
     case sawtooth
+    /// Reclaims in cycles, but every trough sits higher: a leak under GC.
+    case risingFloor
     case stepJump
     case volatile
     case declining
@@ -18,6 +20,7 @@ public enum MemoryPattern: String, Codable, CaseIterable, Sendable {
         case .flat: "Flat"
         case .steadyClimb: "Steady Climb"
         case .sawtooth: "Sawtooth"
+        case .risingFloor: "Leaking under GC"
         case .stepJump: "Step Jump"
         case .volatile: "Volatile"
         case .declining: "Declining"
@@ -30,18 +33,20 @@ public enum MemoryPattern: String, Codable, CaseIterable, Sendable {
         case .flat: "minus"
         case .steadyClimb: "chart.line.uptrend.xyaxis"
         case .sawtooth: "waveform.path"
+        case .risingFloor: "drop.triangle"
         case .stepJump: "stairs"
         case .volatile: "waveform.path.ecg"
         case .declining: "chart.line.downtrend.xyaxis"
         }
     }
 
-    /// Whether a positive net velocity with this shape should still be
-    /// treated as an accumulating leak.
+    /// Whether a positive net velocity with this shape is, by shape alone, an
+    /// accumulating leak. Too few points or an irregular shape prove nothing;
+    /// MemoryPatternAnalysis.indicatesAccumulation adds the fit evidence.
     public var indicatesAccumulation: Bool {
         switch self {
-        case .steadyClimb, .volatile, .unknown: true
-        case .flat, .sawtooth, .stepJump, .declining: false
+        case .steadyClimb, .risingFloor: true
+        case .flat, .sawtooth, .stepJump, .declining, .volatile, .unknown: false
         }
     }
 }
@@ -50,6 +55,16 @@ public struct MemoryPatternAnalysis: Equatable, Sendable {
     public let pattern: MemoryPattern
     public let confidence: Double
     public let detail: String
+    /// R² of the memory regression the shape was judged with.
+    public let fitQuality: Double
+    /// Theil-Sen slope of the series, robust to jitter and single spikes.
+    public let robustSlopeMegabytesPerMinute: Double
+    /// Lower end of the slope's ~95% confidence band; > 0 means real growth.
+    public let slopeLowerBoundMegabytesPerMinute: Double
+    /// Theil-Sen slope through the reclaim troughs (0 without two dips).
+    public let floorSlopeMegabytesPerMinute: Double
+    /// Per-sample measurement noise estimated from first differences.
+    public let noiseMegabytes: Double
 
     public static let unknown = MemoryPatternAnalysis(
         pattern: .unknown,
@@ -57,87 +72,32 @@ public struct MemoryPatternAnalysis: Equatable, Sendable {
         detail: "Collecting samples"
     )
 
-    public init(pattern: MemoryPattern, confidence: Double, detail: String) {
+    public init(
+        pattern: MemoryPattern,
+        confidence: Double,
+        detail: String,
+        fitQuality: Double = 0,
+        robustSlopeMegabytesPerMinute: Double = 0,
+        slopeLowerBoundMegabytesPerMinute: Double = 0,
+        floorSlopeMegabytesPerMinute: Double = 0,
+        noiseMegabytes: Double = 0
+    ) {
         self.pattern = pattern
         self.confidence = min(1, max(0, confidence))
         self.detail = detail
+        self.fitQuality = min(1, max(0, fitQuality))
+        self.robustSlopeMegabytesPerMinute = robustSlopeMegabytesPerMinute
+        self.slopeLowerBoundMegabytesPerMinute = slopeLowerBoundMegabytesPerMinute
+        self.floorSlopeMegabytesPerMinute = floorSlopeMegabytesPerMinute
+        self.noiseMegabytes = noiseMegabytes
     }
 
-    /// Classify a memory series (bytes) by its shape.
-    public static func analyze(points: [Double], fitQuality: Double) -> MemoryPatternAnalysis {
-        guard points.count >= 4, let first = points.first, let last = points.last else {
-            return .unknown
-        }
-
-        let megabytes = points.map { $0 / 1_048_576 }
-        var totalRise = 0.0
-        var totalFall = 0.0
-        var largestStep = 0.0
-        var dipCount = 0
-        for index in 1..<megabytes.count {
-            let delta = megabytes[index] - megabytes[index - 1]
-            if delta > 0 {
-                totalRise += delta
-                largestStep = max(largestStep, delta)
-            } else if delta < 0 {
-                totalFall += -delta
-                dipCount += 1
-            }
-        }
-
-        let netMegabytes = (last - first) / 1_048_576
-        let mean = megabytes.reduce(0, +) / Double(megabytes.count)
-        let range = (megabytes.max() ?? 0) - (megabytes.min() ?? 0)
-
-        if range < max(16, mean * 0.03) {
-            return MemoryPatternAnalysis(
-                pattern: .flat,
-                confidence: 0.9,
-                detail: String(format: "Memory holds within %.0f MB of %.0f MB", range, mean)
-            )
-        }
-
-        if netMegabytes < -max(16, mean * 0.03) {
-            return MemoryPatternAnalysis(
-                pattern: .declining,
-                confidence: 0.8,
-                detail: String(format: "Released %.0f MB across the window", -netMegabytes)
-            )
-        }
-
-        // One jump that dominates the total growth is an allocation event,
-        // not a continuous leak.
-        if totalRise > 0, largestStep >= totalRise * 0.7, largestStep >= 32 {
-            return MemoryPatternAnalysis(
-                pattern: .stepJump,
-                confidence: min(1, largestStep / max(1, totalRise)),
-                detail: String(format: "One %.0f MB step accounts for the growth", largestStep)
-            )
-        }
-
-        // Repeated meaningful dips mean memory is being reclaimed in cycles.
-        if dipCount >= 2, totalRise > 0, totalFall >= totalRise * 0.35 {
-            let reclaimed = Int(min(1, totalFall / totalRise) * 100)
-            return MemoryPatternAnalysis(
-                pattern: .sawtooth,
-                confidence: min(1, totalFall / totalRise),
-                detail: "Reclaims \(reclaimed)% of what it allocates across \(dipCount) dips"
-            )
-        }
-
-        if fitQuality >= 0.7, netMegabytes > 0 {
-            return MemoryPatternAnalysis(
-                pattern: .steadyClimb,
-                confidence: fitQuality,
-                detail: String(format: "Monotonic growth of %.0f MB with little reclaim", netMegabytes)
-            )
-        }
-
-        return MemoryPatternAnalysis(
-            pattern: .volatile,
-            confidence: 0.5,
-            detail: String(format: "Irregular swings across a %.0f MB range", range)
-        )
+    /// An irregular series still accumulates when the trend explains most of
+    /// it or its robust slope is significantly positive; every other shape
+    /// answers by itself.
+    public var indicatesAccumulation: Bool {
+        guard pattern == .volatile else { return pattern.indicatesAccumulation }
+        return fitQuality >= 0.5 || slopeLowerBoundMegabytesPerMinute > 0
     }
 }
 
@@ -183,9 +143,14 @@ public struct FamilyVerdict: Equatable, Sendable {
         }
 
         let forecast = family.forecast
-        let velocity = max(0, family.trend.memoryVelocityMegabytesPerMinute)
+        let velocity = family.trend.credibleMemoryVelocity
         let trustedBaseline = family.baseline.flatMap { $0.isMeasurementTrusted ? $0 : nil }
-        let baselineMultiple = trustedBaseline?.memoryMultiple(for: family.totalPhysicalFootprintBytes) ?? 1
+        // Above-normal claims need the footprint outside the learned spread too.
+        let baselineMultiple = trustedBaseline.map { baseline in
+            baseline.memoryZScore(for: family.totalPhysicalFootprintBytes) >= 3
+                ? baseline.memoryMultiple(for: family.totalPhysicalFootprintBytes)
+                : 1
+        } ?? 1
         let effectiveForecastState: ForecastState
         if family.score.level >= .critical {
             effectiveForecastState = .critical
@@ -199,6 +164,12 @@ public struct FamilyVerdict: Equatable, Sendable {
             effectiveForecastState = forecast.state
         } else {
             effectiveForecastState = .quiet
+        }
+
+        // A measured Hot level outranks a quiet or immature forecast: the
+        // verdict must never reassure next to a Hot badge.
+        if effectiveForecastState <= .warming, family.score.level >= .hot {
+            return measuredVerdict(family: family)
         }
 
         switch effectiveForecastState {
@@ -220,7 +191,15 @@ public struct FamilyVerdict: Equatable, Sendable {
             if pattern.pattern == .steadyClimb {
                 return FamilyVerdict(
                     headline: "Likely leak",
-                    detail: "Climbing \(Int(velocity.rounded())) MB/min with little reclaim. \(forecast.etaText == "No threshold ETA" ? "No threshold in sight yet." : "Threshold ETA \(forecast.etaText).")",
+                    detail: "Climbing \(Int(velocity.rounded())) MB/min with little reclaim. \(leakETASentence(forecast))",
+                    level: .hot,
+                    systemImage: "drop.triangle"
+                )
+            }
+            if pattern.pattern == .risingFloor {
+                return FamilyVerdict(
+                    headline: "Leaking under GC",
+                    detail: "\(pattern.detail): memory is reclaimed in cycles, but not all of it.",
                     level: .hot,
                     systemImage: "drop.triangle"
                 )
@@ -234,7 +213,7 @@ public struct FamilyVerdict: Equatable, Sendable {
         case .stale:
             return FamilyVerdict(
                 headline: "Probably forgotten",
-                detail: "Long-lived detached tree with idle CPU — looks like a dev process nobody is using.",
+                detail: staleDetail(family: family),
                 level: .watch,
                 systemImage: "moon.zzz"
             )
@@ -258,7 +237,7 @@ public struct FamilyVerdict: Equatable, Sendable {
             if baselineMultiple >= 2 {
                 return FamilyVerdict(
                     headline: "Above its normal",
-                    detail: String(format: "Using %.1fx its usual memory. %@", baselineMultiple, sentence(forecast.whyNow)),
+                    detail: "Using \(RadarFormat.fixed1(baselineMultiple))x its usual memory. \(sentence(forecast.whyNow))",
                     level: .watch,
                     systemImage: "arrow.up.right.circle"
                 )
@@ -281,12 +260,12 @@ public struct FamilyVerdict: Equatable, Sendable {
             if baselineMultiple >= 2 {
                 return FamilyVerdict(
                     headline: "Above its normal",
-                    detail: String(format: "Using %.1fx its usual memory but otherwise calm.", baselineMultiple),
+                    detail: "Using \(RadarFormat.fixed1(baselineMultiple))x its usual memory but otherwise calm.",
                     level: .watch,
                     systemImage: "arrow.up.right.circle"
                 )
             }
-            if trustedBaseline != nil {
+            if trustedBaseline != nil, family.score.level <= .watch {
                 return FamilyVerdict(
                     headline: "Behaving normally",
                     detail: "Inside its learned range with no predictive signals.",
@@ -300,6 +279,50 @@ public struct FamilyVerdict: Equatable, Sendable {
                 level: .quiet,
                 systemImage: "checkmark.circle"
             )
+        }
+    }
+
+    // Only the facts that actually hold; the stale state guarantees idle CPU.
+    private static func staleDetail(family: ProcessFamily) -> String {
+        var facts = family.forgottenAssessment.facts
+        if !facts.contains(where: { $0.hasPrefix("no CPU use") }) {
+            facts.append("idle CPU")
+        }
+        if family.totalPhysicalFootprintBytes > 512 * 1_048_576 {
+            facts.append("still holding \(RadarFormat.bytes(family.totalPhysicalFootprintBytes))")
+        }
+        return sentence(facts.joined(separator: ", ")) + " Looks like a dev process nobody is using."
+    }
+
+    private static func measuredVerdict(family: ProcessFamily) -> FamilyVerdict {
+        let evidence = family.score.heat.evidence
+        let headline: String
+        let systemImage: String
+        if evidence.contains(GhostHeat.memoryAboveLimitEvidence) {
+            headline = "Using a lot of memory now"
+            systemImage = "memorychip"
+        } else if evidence.contains(GhostHeat.sustainedCPUEvidence) || evidence.contains(GhostHeat.instantCPUEvidence) {
+            headline = "CPU busy now"
+            systemImage = "cpu"
+        } else {
+            headline = "Heavy right now"
+            systemImage = "flame"
+        }
+        let observed = evidence.first.map { sentence($0) + " " } ?? ""
+        return FamilyVerdict(
+            headline: headline,
+            detail: observed + "Not confirmed as a leak yet.",
+            level: family.score.level,
+            systemImage: systemImage
+        )
+    }
+
+    private static func leakETASentence(_ forecast: RiskForecast) -> String {
+        switch (forecast.etaKind, forecast.horizon) {
+        case (.none, _): "No memory limit in sight yet."
+        case (.hostMemory, _): "Memory pressure turns critical in \(forecast.etaText)."
+        case (.memoryLimit, .breached): "Already above its memory limit."
+        case (.memoryLimit, _): "Memory limit in \(forecast.etaText)."
         }
     }
 

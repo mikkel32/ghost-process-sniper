@@ -9,6 +9,10 @@ public struct RadarSummary: Equatable, Sendable {
     public let topFamilyName: String?
     public let leakingCount: Int
     public let suggestionCount: Int
+    /// When host memory pressure turns critical at the current growth.
+    public let hostPressureETA: TimeInterval?
+    /// The family driving that growth the most.
+    public let hostPressureCulprit: String?
 
     public static let empty = RadarSummary(
         statusText: "Quiet",
@@ -29,7 +33,9 @@ public struct RadarSummary: Equatable, Sendable {
         totalMemoryBytes: UInt64,
         topFamilyName: String?,
         leakingCount: Int = 0,
-        suggestionCount: Int = 0
+        suggestionCount: Int = 0,
+        hostPressureETA: TimeInterval? = nil,
+        hostPressureCulprit: String? = nil
     ) {
         self.statusText = statusText
         self.level = level
@@ -39,6 +45,8 @@ public struct RadarSummary: Equatable, Sendable {
         self.topFamilyName = topFamilyName
         self.leakingCount = leakingCount
         self.suggestionCount = suggestionCount
+        self.hostPressureETA = hostPressureETA
+        self.hostPressureCulprit = hostPressureCulprit
     }
 }
 
@@ -71,21 +79,52 @@ public struct RadarActionSuggestion: Identifiable, Codable, Equatable, Sendable 
     public let detail: String
     public let ruleID: UUID?
     public let createdAt: Date
+    /// The processes the action is about when they are not the family
+    /// itself, e.g. the redundant copies of a duplicated server. Stop the
+    /// family that owns each one.
+    public let targetIdentities: [ProcessIdentity]?
 
+    /// Without an explicit `id`, the same rule (or the forecast) and action
+    /// always get the same id, so a suggestion card keeps its identity
+    /// across refreshes.
     public init(
-        id: UUID = UUID(),
+        id: UUID? = nil,
         type: RadarActionType,
         title: String,
         detail: String,
         ruleID: UUID? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        targetIdentities: [ProcessIdentity]? = nil
     ) {
-        self.id = id
+        self.id = id ?? Self.stableID(ruleID: ruleID, type: type)
         self.type = type
         self.title = title
         self.detail = detail
         self.ruleID = ruleID
         self.createdAt = createdAt
+        self.targetIdentities = targetIdentities
+    }
+
+    public static func stableID(ruleID: UUID?, type: RadarActionType) -> UUID {
+        stableID(scope: ruleID?.uuidString ?? "forecast", type: type)
+    }
+
+    /// A stable id for a suggestion that no rule owns, e.g. "duplicate|<key>".
+    public static func stableID(scope: String, type: RadarActionType) -> UUID {
+        let key = Array("\(scope)|\(type.rawValue)".utf8)
+        let basis: UInt64 = 0xcbf2_9ce4_8422_2325
+        let high = fnv1a(key, seed: basis)
+        let low = fnv1a(key, seed: basis ^ 1)
+        var bytes = (0..<8).map { UInt8(truncatingIfNeeded: high >> (56 - 8 * $0)) } +
+            (0..<8).map { UInt8(truncatingIfNeeded: low >> (56 - 8 * $0)) }
+        bytes[6] = (bytes[6] & 0x0F) | 0x80 // version 8: custom
+        bytes[8] = (bytes[8] & 0x3F) | 0x80 // RFC 4122 variant
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                           bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+    }
+
+    private static func fnv1a(_ bytes: [UInt8], seed: UInt64) -> UInt64 {
+        bytes.reduce(seed) { ($0 ^ UInt64($1)) &* 0x0000_0100_0000_01B3 }
     }
 }
 
@@ -115,7 +154,7 @@ public struct AlertState: Codable, Equatable, Sendable {
 
 
 
-public struct RadarRuleMatch: Codable, Equatable, Sendable {
+public struct RadarRuleMatch: Codable, Hashable, Sendable {
     public var signatureID: String?
     public var commandContains: String?
     public var pathContains: String?
@@ -258,17 +297,24 @@ public struct RadarContext: Equatable, Sendable {
     public let recentIncidentCounts: [String: Int]
     public let rules: [RadarRule]
     public let systemPressure: SystemMemoryPressure
+    /// Each family's share of host memory pressure, by family key.
+    public let pressureShares: [String: PressureShare]
+    public let hostOutlook: HostMemoryOutlook?
 
     public init(
         baselines: [String: FamilyBaseline],
         recentIncidentCounts: [String: Int],
         rules: [RadarRule],
-        systemPressure: SystemMemoryPressure = .unknown
+        systemPressure: SystemMemoryPressure = .unknown,
+        pressureShares: [String: PressureShare] = [:],
+        hostOutlook: HostMemoryOutlook? = nil
     ) {
         self.baselines = baselines
         self.recentIncidentCounts = recentIncidentCounts
         self.rules = rules
         self.systemPressure = systemPressure
+        self.pressureShares = pressureShares
+        self.hostOutlook = hostOutlook
     }
 
     public func updating(systemPressure: SystemMemoryPressure) -> RadarContext {
@@ -276,8 +322,28 @@ public struct RadarContext: Equatable, Sendable {
             baselines: baselines,
             recentIncidentCounts: recentIncidentCounts,
             rules: rules,
-            systemPressure: systemPressure
+            systemPressure: systemPressure,
+            pressureShares: pressureShares,
+            hostOutlook: hostOutlook
         )
+    }
+
+    /// Attributes host pressure across this tick's families.
+    public func attributingPressure(to families: [ProcessFamily]) -> RadarContext {
+        guard systemPressure.isKnown, systemPressure.level >= .elevated else { return self }
+        return RadarContext(
+            baselines: baselines,
+            recentIncidentCounts: recentIncidentCounts,
+            rules: rules,
+            systemPressure: systemPressure,
+            pressureShares: PressureAttribution.compute(families: families, pressure: systemPressure),
+            hostOutlook: PressureAttribution.outlook(families: families, pressure: systemPressure)
+        )
+    }
+
+    /// This family's share, computed alone when the tick had none.
+    public func pressureShare(for family: ProcessFamily) -> PressureShare {
+        pressureShares[family.familyKey] ?? PressureAttribution.share(for: family, pressure: systemPressure)
     }
 }
 

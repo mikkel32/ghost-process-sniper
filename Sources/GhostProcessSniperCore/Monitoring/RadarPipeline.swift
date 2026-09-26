@@ -71,11 +71,14 @@ public struct RadarPipeline: Sendable {
     private let builder: ProcessFamilyBuilder
     private let intelligence: RadarIntelligence
     private var trendWindow = TrendWindow()
+    private var history = RadarHistory()
     private var differ = RadarSnapshotDiffer()
     private var hysteresis = RadarHysteresis()
+    private var continuity = RadarContinuity()
     private var metricsVersions: [String: UInt64] = [:]
     private var signatureVersions: [String: UInt64] = [:]
     private var scoringCache = FamilyScoringCache()
+    private var hostOutlook: HostMemoryOutlook?
 
     public init(
         builder: ProcessFamilyBuilder = ProcessFamilyBuilder(),
@@ -96,7 +99,7 @@ public struct RadarPipeline: Sendable {
         return RadarPipelineOutput(
             families: scored.families,
             duplicateClusters: build.duplicateClusters,
-            summary: builder.summary(for: scored.families),
+            summary: summary(for: scored.families),
             diff: build.diff,
             buildMilliseconds: build.buildMilliseconds,
             scoreMilliseconds: scored.scoreMilliseconds,
@@ -107,8 +110,9 @@ public struct RadarPipeline: Sendable {
         )
     }
 
+    /// Includes the host memory outlook of the latest scored tick.
     public func summary(for families: [ProcessFamily]) -> RadarSummary {
-        builder.summary(for: families)
+        RadarSummaryBuilder.summary(for: families, hostOutlook: hostOutlook)
     }
 
     public mutating func buildCandidates(
@@ -122,6 +126,7 @@ public struct RadarPipeline: Sendable {
             from: processes,
             settings: settings,
             trendWindow: &trendWindow,
+            history: &history,
             now: now
         )
         return RadarPipelineBuildOutput(
@@ -144,22 +149,24 @@ public struct RadarPipeline: Sendable {
         now: Date
     ) -> (families: [ProcessFamily], scoreMilliseconds: Double) {
         let scoreStart = Date()
+        // Attributed once for the tick, before any family is scored.
+        let context = context.attributingPressure(to: families)
+        hostOutlook = context.hostOutlook
         let familyKeys = Set(families.map(\.familyKey))
         scoringCache.prune(keeping: familyKeys)
         if metricsVersions.count > familyKeys.count + 64 {
             metricsVersions = metricsVersions.filter { familyKeys.contains($0.key) }
         }
-        let enriched = families.map { family in
-            if let cached = scoringCache.cachedFamily(for: family, context: context) {
+        let enriched = FamilyPriorityOrder.sorted(families.map { family in
+            if let cached = scoringCache.cachedFamily(for: family, context: context, now: now) {
                 return cached
             }
             let scored = intelligence.enrich(family: family, context: context, settings: settings, now: now)
-            scoringCache.store(scored, context: context)
+            scoringCache.store(scored, from: family, context: context, now: now)
             return scored
-        }
-        .sorted(by: FamilyPriorityOrder.areInIncreasingOrder)
+        })
         let versioned = enriched.map { versionedFamily($0, diff: diff, now: now) }
-        let stable = hysteresis.apply(to: versioned, now: now)
+        let stable = continuity.apply(to: hysteresis.apply(to: versioned, now: now))
         return (stable, Date().timeIntervalSince(scoreStart) * 1_000)
     }
 
@@ -189,49 +196,61 @@ public struct RadarPipeline: Sendable {
     }
 }
 
-/// Holds a family that just stopped being hot at watch or above for
-/// `holdDuration` after it was last actually hot, so a bursty runaway keeps
-/// its rich sampling and its row does not flicker hot → quiet → hot.
+/// Holds a Hot or Critical level until the family has read lower for
+/// `holdDuration`, then steps down one level at a time, each step held too,
+/// so a family oscillating around a threshold does not flap and a bursty
+/// runaway keeps its rich sampling for at least `holdDuration` after its
+/// last hot reading.
 struct RadarHysteresis: Sendable {
     static let holdReason = "held briefly to avoid flicker"
-    private var lastHotAt: [String: Date] = [:]
-    let holdDuration: TimeInterval = 20
+
+    private struct Held: Sendable {
+        var level: GhostLevel
+        /// When the current step started; nil when the level is not held.
+        var stepStartedAt: Date?
+    }
+
+    private var held: [String: Held] = [:]
+    private let holdDuration: TimeInterval = 20
 
     mutating func apply(to families: [ProcessFamily], now: Date) -> [ProcessFamily] {
-        if lastHotAt.count > families.count + 64 {
+        if held.count > families.count + 64 {
             let activeKeys = Set(families.map(\.familyKey))
-            lastHotAt = lastHotAt.filter { activeKeys.contains($0.key) }
+            held = held.filter { activeKeys.contains($0.key) }
         }
         return families.map { family in
             let key = family.familyKey
-            if family.score.level >= .hot {
-                lastHotAt[key] = now
-                return family
-            }
-            guard let hotAt = lastHotAt[key] else {
-                return family
-            }
-            guard now.timeIntervalSince(hotAt) < holdDuration else {
-                lastHotAt[key] = nil
-                return family
-            }
-            let level = max(family.score.level, .watch)
-            guard level != family.score.level else {
+            let incoming = family.score.level
+            // A muted or unmeasurable family drops at once: the hold is for
+            // measured flicker, not for overriding the user or stale data.
+            let suppressed = family.alertState.kind == .ignored || family.alertState.kind == .snoozed ||
+                !family.coverage.isScorable
+            guard let previous = held[key], !suppressed, incoming < previous.level,
+                  previous.level >= .hot || previous.stepStartedAt != nil
+            else {
+                held[key] = Held(level: incoming, stepStartedAt: nil)
                 return family
             }
 
+            var step = previous
+            let startedAt = previous.stepStartedAt ?? now
+            step.stepStartedAt = startedAt
+            if now.timeIntervalSince(startedAt) >= holdDuration {
+                let lower = GhostLevel(rawValue: previous.level.rawValue - 1) ?? incoming
+                step = Held(level: max(incoming, lower), stepStartedAt: now)
+            }
+            if step.level <= incoming {
+                held[key] = Held(level: incoming, stepStartedAt: nil)
+                return family
+            }
+            held[key] = step
+
             let score = GhostScore(
                 value: family.score.value,
-                level: level,
+                level: step.level,
                 reasons: family.score.reasons + [Self.holdReason],
                 components: family.score.components,
-                heat: GhostHeat(
-                    value: family.score.heat.value,
-                    level: level,
-                    confidence: family.score.heat.confidence,
-                    evidence: family.score.heat.evidence,
-                    sustainedSignalCount: family.score.heat.sustainedSignalCount
-                )
+                heat: family.score.heat.replacing(level: step.level)
             )
             return family.enriched(score: score)
         }

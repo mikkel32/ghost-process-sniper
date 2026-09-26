@@ -126,14 +126,18 @@ final class RadarSchedulerTests: XCTestCase {
             let at = now.addingTimeInterval(seconds)
             return scheduler.noteHotFamilies(hysteresis.apply(to: [family], now: at), now: at)
         }
-        for seconds in stride(from: 0.0, through: 290, by: 10) {
-            let burst: GhostLevel = Int(seconds) % 20 == 0 ? .hot : .quiet
-            XCTAssertFalse(tick(burst, at: seconds), "t0+\(seconds)")
+        // Each lull is long enough for the hold to step down to watch.
+        for burst in stride(from: 0.0, through: 270, by: 30) {
+            XCTAssertFalse(tick(.hot, at: burst), "t0+\(burst)")
+            XCTAssertFalse(tick(.quiet, at: burst + 5), "t0+\(burst + 5)")
+            XCTAssertFalse(tick(.quiet, at: burst + 25), "t0+\(burst + 25)")
         }
         XCTAssertTrue(tick(.hot, at: 301), "a build hot in bursts still settles after five minutes")
 
-        XCTAssertFalse(tick(.quiet, at: 330), "past the hold the family really cooled")
-        XCTAssertFalse(tick(.hot, at: 331), "so its five minutes start again")
+        _ = tick(.quiet, at: 310)
+        _ = tick(.quiet, at: 330)
+        XCTAssertFalse(tick(.quiet, at: 350), "once the hold has stepped all the way down the family really cooled")
+        XCTAssertFalse(tick(.hot, at: 351), "so its five minutes start again")
     }
 
     func testPowerContextIsCachedForThirtySeconds() {

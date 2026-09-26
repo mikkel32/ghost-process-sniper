@@ -13,18 +13,27 @@ struct FamilyEvidenceScorer: Sendable {
         duplicateCluster: DuplicateProcessCluster?,
         hardwareSignals: [HardwareOffenderSignal],
         trend: TrendMetrics,
+        forgotten: ForgottenAssessment,
+        zombieChildCount: Int,
+        cpuBehavior: CPUBehavior = .none,
         settings: ThresholdSettings,
         now: Date
     ) -> GhostScore {
         let memoryRatio = Double(footprint) / Double(max(settings.memoryBytes, 1))
         let cpuRatio = cpu / max(settings.cpuPercent, 1)
         let gpuRatio = gpu / 80
-        let leakRatio = max(0, trend.memoryVelocityMegabytesPerMinute) / max(settings.leakVelocityMegabytesPerMinute, 1)
+        // Only history-proven growth scores as a leak: two close samples can
+        // turn one allocation into thousands of MB/min.
+        let leakVelocity = trend.credibleMemoryVelocity
+        let leakRatio = leakVelocity / max(settings.leakVelocityMegabytesPerMinute, 1)
         let childFanout = max(0, members.count - 6)
-        let duplicateImpact = duplicateCluster.map { min(12, Double($0.memberCount) * 3) } ?? 0
+        // Only copies started independently count; a worker pool inside one
+        // family is how the tool works, not a duplicate.
+        let copies = duplicateCluster.flatMap { $0.countsAsIndependentCopies ? $0 : nil }
+        let duplicateImpact = copies.map { min(12, Double($0.independentRootCount - 1) * 4) } ?? 0
         let hardwareImpact = min(24, hardwareSignals.reduce(0) { $0 + $1.impact })
         let ageMinutes = max(0, now.timeIntervalSince(Date(timeIntervalSince1970: TimeInterval(root.identity.startTimeSeconds))) / 60)
-        let orphanBonus = root.parentPID == 1 && confidence >= 0.35 ? 6.0 : 0
+        let forgottenImpact = confidence >= 0.35 && forgotten.likelihood >= 0.45 ? min(8, forgotten.likelihood * 8) : 0
 
         let memoryImpact = memoryRatio * 38
         let cpuImpact = cpuRatio * 34
@@ -43,44 +52,40 @@ struct FamilyEvidenceScorer: Sendable {
 
         var components: [GhostScoreComponent] = [
             GhostScoreComponent(
+                slot: "memory",
                 kind: .memory,
                 title: memoryRatio >= 1 ? "memory above threshold" : "Memory footprint",
-                detail: String(
-                    format: "%@ is %.1fx the %@ limit",
-                    RadarFormat.bytes(footprint),
-                    memoryRatio,
-                    RadarFormat.bytes(settings.memoryBytes)
-                ),
+                detail: "\(RadarFormat.bytes(footprint)) is \(RadarFormat.fixed1(memoryRatio))x the \(RadarFormat.bytes(settings.memoryBytes)) limit",
                 impact: memoryImpact,
                 level: componentLevel(memoryRatio)
             ),
             GhostScoreComponent(
+                slot: "cpu",
                 kind: .cpu,
                 title: cpuRatio >= 1 ? "CPU above threshold" : "CPU activity",
-                detail: String(format: "%.0f%% is %.1fx the %.0f%% limit", cpu, cpuRatio, settings.cpuPercent),
+                detail: "\(RadarFormat.fixed0(cpu))% is \(RadarFormat.fixed1(cpuRatio))x the \(RadarFormat.fixed0(settings.cpuPercent))% limit",
                 impact: cpuImpact,
                 level: componentLevel(cpuRatio, critical: 1.15)
             ),
             GhostScoreComponent(
+                slot: "gpu",
                 kind: .gpu,
                 title: gpuRatio >= 1 ? "GPU above threshold" : "GPU activity",
-                detail: String(format: "%.0f%% GPU utilization", gpu),
+                detail: "\(RadarFormat.fixed0(gpu))% GPU utilization",
                 impact: gpuImpact,
                 level: componentLevel(gpuRatio, hot: 0.55, critical: 1)
             ),
             GhostScoreComponent(
+                slot: "leak",
                 kind: .leak,
-                title: leakRatio >= 1 ? "memory climbing \(Int(trend.memoryVelocityMegabytesPerMinute.rounded())) MB/min" : "Memory growth",
-                detail: String(
-                    format: "%.0f MB/min is %.1fx the %.0f MB/min limit",
-                    max(0, trend.memoryVelocityMegabytesPerMinute),
-                    leakRatio,
-                    settings.leakVelocityMegabytesPerMinute
-                ),
+                title: leakRatio >= 1 ? "memory climbing \(Int(leakVelocity.rounded())) MB/min" : "Memory growth",
+                detail: "\(RadarFormat.fixed0(leakVelocity)) MB/min is \(RadarFormat.fixed1(leakRatio))x the " +
+                    "\(RadarFormat.fixed0(settings.leakVelocityMegabytesPerMinute)) MB/min limit",
                 impact: leakImpact,
                 level: componentLevel(leakRatio, critical: 1.6)
             ),
             GhostScoreComponent(
+                slot: "relevance",
                 kind: .background,
                 title: "Process relevance",
                 detail: "\(Int((confidence * 100).rounded()))% confidence this belongs to the selected radar scope",
@@ -91,6 +96,7 @@ struct FamilyEvidenceScorer: Sendable {
 
         if fanoutImpact > 0 {
             components.append(GhostScoreComponent(
+                slot: "fanout",
                 kind: .fanout,
                 title: "\(members.count - 1) child processes",
                 detail: "Large process trees consume more resources and are harder to leave behind cleanly",
@@ -98,26 +104,39 @@ struct FamilyEvidenceScorer: Sendable {
                 level: childFanout >= 6 ? .hot : .watch
             ))
         }
-        if let duplicateCluster, duplicateImpact > 0 {
+        if let copies, duplicateImpact > 0 {
             components.append(GhostScoreComponent(
+                slot: "duplicate",
                 kind: .fanout,
-                title: "\(duplicateCluster.memberCount) matching instances",
-                detail: duplicateCluster.reason,
+                title: "\(copies.independentRootCount) independent copies",
+                detail: copies.reason,
                 impact: duplicateImpact,
-                level: duplicateCluster.memberCount >= 4 ? .hot : .watch
+                level: copies.independentRootCount >= 4 ? .hot : .watch
             ))
         }
-        if orphanBonus > 0 {
+        if forgottenImpact > 0 {
             components.append(GhostScoreComponent(
+                slot: "forgotten",
                 kind: .background,
-                title: "background dev process",
-                detail: "Detached from its original parent and still running in the background",
-                impact: orphanBonus,
+                title: "likely forgotten",
+                detail: forgotten.facts.isEmpty ? "Nothing suggests anyone is using it" : sentence(forgotten.facts.joined(separator: ", ")),
+                impact: forgottenImpact,
+                level: .watch
+            ))
+        }
+        if zombieChildCount >= 3 {
+            components.append(GhostScoreComponent(
+                slot: "zombies",
+                kind: .system,
+                title: "\(zombieChildCount) unreaped child processes",
+                detail: "The parent never collected its exited children; only restarting the parent clears them",
+                impact: 4,
                 level: .watch
             ))
         }
         if ageImpact > 0 {
             components.append(GhostScoreComponent(
+                slot: "age",
                 kind: .background,
                 title: "long-running dev session",
                 detail: "This process family has been alive for more than three hours",
@@ -129,7 +148,10 @@ struct FamilyEvidenceScorer: Sendable {
         if hardwareImpact > 0 {
             let rawHardwareImpact = hardwareSignals.reduce(0) { $0 + $1.impact }
             let hardwareScale = rawHardwareImpact > 0 ? hardwareImpact / rawHardwareImpact : 0
+            var signalIndex: [HardwareOffenderSignalKind: Int] = [:]
             components.append(contentsOf: hardwareSignals.map { signal in
+                let index = signalIndex[signal.kind, default: 0]
+                signalIndex[signal.kind] = index + 1
                 let kind: GhostScoreComponentKind = switch signal.kind {
                 case .memoryPressure: .memory
                 case .cpuPressure: .cpu
@@ -137,6 +159,7 @@ struct FamilyEvidenceScorer: Sendable {
                 case .threadPressure, .sampleOutlier: .system
                 }
                 return GhostScoreComponent(
+                    slot: "hardware.\(signal.kind.rawValue).\(index)",
                     kind: kind,
                     title: signal.reason,
                     detail: "Host-wide offender evidence: \(signal.kind.label.lowercased())",
@@ -163,7 +186,7 @@ struct FamilyEvidenceScorer: Sendable {
             reasons.append("GPU activity \(RadarFormat.percent(gpu))")
         }
         if leakRatio >= 1 {
-            reasons.append("memory climbing \(Int(trend.memoryVelocityMegabytesPerMinute.rounded())) MB/min")
+            reasons.append("memory climbing \(Int(leakVelocity.rounded())) MB/min")
         }
         for signal in hardwareSignals.prefix(3) where !reasons.contains(signal.reason) {
             reasons.append(signal.reason)
@@ -171,11 +194,14 @@ struct FamilyEvidenceScorer: Sendable {
         if childFanout > 0 {
             reasons.append("\(members.count - 1) child processes")
         }
-        if let duplicateCluster {
-            reasons.append("\(duplicateCluster.memberCount) matching instances")
+        if let copies {
+            reasons.append("\(copies.independentRootCount) independent copies")
         }
-        if orphanBonus > 0 {
-            reasons.append("background dev process")
+        if forgottenImpact > 0 {
+            reasons.append("likely forgotten")
+        }
+        if zombieChildCount >= 3 {
+            reasons.append("\(zombieChildCount) zombie children")
         }
         if ageMinutes > 180, confidence >= 0.45 {
             reasons.append("long-running dev session")
@@ -190,18 +216,21 @@ struct FamilyEvidenceScorer: Sendable {
         var heat = GhostHeatModel.initial(
             memoryRatio: memoryRatio,
             cpuRatio: cpuRatio,
+            cpuThreshold: settings.cpuPercent,
             gpuRatio: gpuRatio,
             leakRatio: leakRatio,
             trend: trend,
-            hardwareLevel: hardwareLevel
+            hardwareLevel: hardwareLevel,
+            cpuBehavior: cpuBehavior
         )
-        if let duplicateCluster, heat.level == .quiet {
+        if let copies, heat.level == .quiet {
             heat = GhostHeat(
                 value: max(30, heat.value),
                 level: .watch,
                 confidence: max(0.5, heat.confidence),
-                evidence: heat.evidence + ["\(duplicateCluster.memberCount) independent matching instances need review"],
-                sustainedSignalCount: heat.sustainedSignalCount
+                evidence: heat.evidence + ["\(copies.independentRootCount) independent copies need review"],
+                sustainedSignalCount: heat.sustainedSignalCount,
+                corroborationCount: heat.corroborationCount
             )
         }
 
@@ -212,5 +241,10 @@ struct FamilyEvidenceScorer: Sendable {
             components: GhostScoreComponentMath.normalized(components, to: value),
             heat: heat
         )
+    }
+
+    private func sentence(_ text: String) -> String {
+        guard let first = text.first else { return text }
+        return String(first).uppercased() + text.dropFirst()
     }
 }

@@ -40,6 +40,25 @@ public struct DuplicateProcessCluster: Identifiable, Equatable, Sendable {
     public let representativePIDs: [Int32]
     public private(set) var relatedFamilyKeys: [String]
     public private(set) var isInternalToSingleFamily: Bool
+    /// The topmost member of each independent copy.
+    public let copyRootIdentities: [ProcessIdentity]
+    /// The copy to keep running: the one in a terminal, else the most
+    /// recently active, else the newest.
+    public let keepIdentity: ProcessIdentity?
+    /// Why that copy is kept, e.g. "the newest copy".
+    public let keepReason: String
+    /// Listening ports of the redundant copies, when forensics knows them.
+    public let redundantPorts: [Int]
+
+    /// The copies worth stopping; stop the family that owns each one.
+    public let redundantRootIdentities: [ProcessIdentity]
+    /// Changes whenever the keep, the redundant copies or their ports do.
+    let copyPlanHash: Int
+
+    /// Two or more copies started independently, not one tool's worker pool.
+    public var countsAsIndependentCopies: Bool {
+        independentRootCount >= 2 && !isInternalToSingleFamily
+    }
 
     public init(
         key: DuplicateClusterKey,
@@ -49,7 +68,10 @@ public struct DuplicateProcessCluster: Identifiable, Equatable, Sendable {
         likelyKind: DevProcessKind,
         classificationReason: String,
         relatedFamilyKeys: [String] = [],
-        isInternalToSingleFamily: Bool = false
+        isInternalToSingleFamily: Bool = false,
+        copyRootIdentities: [ProcessIdentity] = [],
+        keepIdentity: ProcessIdentity? = nil,
+        keepReason: String = "the newest copy"
     ) {
         let sorted = members.sorted { lhs, rhs in
             if lhs.memoryForScoringBytes != rhs.memoryForScoringBytes {
@@ -74,6 +96,35 @@ public struct DuplicateProcessCluster: Identifiable, Equatable, Sendable {
         self.representativePIDs = sorted.prefix(8).map(\.pid)
         self.relatedFamilyKeys = relatedFamilyKeys.sorted()
         self.isInternalToSingleFamily = isInternalToSingleFamily
+        self.copyRootIdentities = copyRootIdentities
+        self.keepIdentity = keepIdentity
+        self.keepReason = keepReason
+        let redundant = keepIdentity == nil ? [] : copyRootIdentities.filter { $0 != keepIdentity }
+        self.redundantRootIdentities = redundant
+        self.redundantPorts = Self.ports(of: redundant, in: sorted)
+        var hasher = Hasher()
+        hasher.combine(keepIdentity)
+        hasher.combine(redundant)
+        hasher.combine(redundantPorts)
+        self.copyPlanHash = hasher.finalize()
+    }
+
+    private static func ports(of copies: [ProcessIdentity], in members: [ProcessMetrics]) -> [Int] {
+        guard !copies.isEmpty else { return [] }
+        let wanted = Set(copies)
+        let memberPIDs = Set(members.map(\.pid))
+        let byPID = Dictionary(members.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
+        // A copy's matching descendants serve its ports too.
+        func copyRoot(of member: ProcessMetrics) -> ProcessIdentity {
+            var current = member
+            var steps = 0
+            while memberPIDs.contains(current.parentPID), let parent = byPID[current.parentPID], steps < members.count {
+                current = parent
+                steps += 1
+            }
+            return current.identity
+        }
+        return Array(Set(members.filter { wanted.contains(copyRoot(of: $0)) }.flatMap(\.forensics.listeningPorts))).sorted()
     }
 
     public func resolving(relatedFamilyKeys: [String], isInternalToSingleFamily: Bool) -> DuplicateProcessCluster {
@@ -90,7 +141,7 @@ public struct DuplicateProcessCluster: Identifiable, Equatable, Sendable {
             return "\(memberCount) matching descendants inside one family"
         }
         if independentRootCount > 1 {
-            return "\(independentRootCount) independent matching roots"
+            return "\(independentRootCount) independent copies"
         }
         return "\(memberCount) matching instances"
     }
@@ -128,166 +179,6 @@ public struct DuplicateClusterSet: Equatable, Sendable {
 
     public var visibleClusters: [DuplicateProcessCluster] {
         clusters.filter { !$0.isInternalToSingleFamily }
-    }
-}
-
-public struct DuplicateClusterDetector: Sendable {
-    private let classifier: DevProcessClassifier
-    private let currentUserID: UInt32
-    private let minimumClusterSize: Int
-
-    public init(
-        classifier: DevProcessClassifier = DevProcessClassifier(),
-        currentUserID: UInt32 = UInt32(geteuid()),
-        minimumClusterSize: Int = 2
-    ) {
-        self.classifier = classifier
-        self.currentUserID = currentUserID
-        self.minimumClusterSize = max(2, minimumClusterSize)
-    }
-
-    public func detect(
-        processes: [ProcessMetrics],
-        classifications: [Int32: DevClassification],
-        children: [Int32: [ProcessMetrics]] = [:],
-        now: Date = Date()
-    ) -> DuplicateClusterSet {
-        let started = Date()
-        var buckets: [DuplicateClusterKey: [ProcessMetrics]] = [:]
-        buckets.reserveCapacity(processes.count / 2)
-
-        for process in processes {
-            let classification = classifications[process.pid] ?? classifier.classification(for: process)
-            guard shouldConsider(process, classification: classification) else {
-                continue
-            }
-            guard let key = key(for: process) else {
-                continue
-            }
-            buckets[key, default: []].append(process)
-        }
-
-        var clusters: [DuplicateProcessCluster] = []
-        clusters.reserveCapacity(buckets.count)
-        for (key, members) in buckets where members.count >= minimumClusterSize {
-            let classifications = members.map { process in
-                classifications[process.pid] ?? classifier.classification(for: process)
-            }
-            let bestClassification = classifications.max { lhs, rhs in
-                lhs.groupingPriority < rhs.groupingPriority
-            } ?? DevClassification(kind: .cliTool, confidence: 0.2, reason: "matching executable")
-            let independentRoots = independentRootCount(for: members, children: children)
-            clusters.append(
-                DuplicateProcessCluster(
-                    key: key,
-                    displayName: key.displayName,
-                    members: members,
-                    independentRootCount: independentRoots,
-                    likelyKind: bestClassification.kind,
-                    classificationReason: bestClassification.reason
-                )
-            )
-        }
-
-        let sorted = clusters.sorted(by: Self.sortClusters)
-        return DuplicateClusterSet(
-            clusters: sorted,
-            promotedIdentities: Set(sorted.flatMap { $0.members.map(\.identity) }),
-            detectorMilliseconds: Date().timeIntervalSince(started) * 1_000
-        )
-    }
-
-    private func shouldConsider(_ process: ProcessMetrics, classification: DevClassification) -> Bool {
-        guard process.userID == currentUserID else {
-            return false
-        }
-        guard !process.isSystemProcess else {
-            return false
-        }
-        if isSystemBundle(process.executablePath) {
-            return false
-        }
-        if classification.confidence >= 0.2 {
-            return true
-        }
-        if process.executablePath.hasPrefix("/Users/") ||
-            process.executablePath.hasPrefix("/opt/homebrew/") ||
-            process.executablePath.hasPrefix("/usr/local/") {
-            return true
-        }
-        return process.executablePath.isEmpty && !process.commandLine.isEmpty
-    }
-
-    private func key(for process: ProcessMetrics) -> DuplicateClusterKey? {
-        let path = normalizedPath(process.executablePath)
-        if !path.isEmpty {
-            return DuplicateClusterKey(
-                kind: .executablePath,
-                value: path,
-                displayName: URL(fileURLWithPath: path).lastPathComponent.ifNotEmpty ?? process.name
-            )
-        }
-        let name = normalizedToken(process.name)
-        guard !name.isEmpty else {
-            return nil
-        }
-        let prefix = commandPrefix(process.commandLine)
-        let value = prefix.isEmpty ? name : "\(name)|\(prefix)"
-        return DuplicateClusterKey(kind: .commandPrefix, value: value, displayName: process.name)
-    }
-
-    private func independentRootCount(for members: [ProcessMetrics], children: [Int32: [ProcessMetrics]]) -> Int {
-        let memberPIDs = Set(members.map(\.pid))
-        let roots = members.filter { member in
-            !memberPIDs.contains(member.parentPID)
-        }
-        return max(1, roots.count)
-    }
-
-    private func normalizedPath(_ path: String) -> String {
-        path.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
-    private func normalizedToken(_ value: String) -> String {
-        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
-    private func commandPrefix(_ command: String) -> String {
-        command
-            .split(whereSeparator: \.isWhitespace)
-            .prefix(4)
-            .map { piece in
-                let token = String(piece).lowercased()
-                if token.range(of: #"^\d+$"#, options: .regularExpression) != nil {
-                    return "<num>"
-                }
-                if token.hasPrefix("/private/var/") || token.hasPrefix("/var/folders/") {
-                    return "<tmp>"
-                }
-                return token
-            }
-            .joined(separator: " ")
-    }
-
-    private func isSystemBundle(_ path: String) -> Bool {
-        let lower = path.lowercased()
-        return lower.hasPrefix("/system/") ||
-            lower.hasPrefix("/usr/libexec/") ||
-            lower.hasPrefix("/library/apple/") ||
-            lower.hasPrefix("/applications/") && !lower.contains("visual studio code") && !lower.contains("cursor") && !lower.contains("codex")
-    }
-
-    private static func sortClusters(_ lhs: DuplicateProcessCluster, _ rhs: DuplicateProcessCluster) -> Bool {
-        if lhs.memberCount != rhs.memberCount {
-            return lhs.memberCount > rhs.memberCount
-        }
-        if lhs.totalPhysicalFootprintBytes != rhs.totalPhysicalFootprintBytes {
-            return lhs.totalPhysicalFootprintBytes > rhs.totalPhysicalFootprintBytes
-        }
-        if lhs.totalCPUPercent != rhs.totalCPUPercent {
-            return lhs.totalCPUPercent > rhs.totalCPUPercent
-        }
-        return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
     }
 }
 
