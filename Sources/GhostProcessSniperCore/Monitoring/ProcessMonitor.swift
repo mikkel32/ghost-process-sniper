@@ -53,6 +53,8 @@ public final class ProcessMonitor {
     @ObservationIgnored private(set) var coalescedCount = 0
     @ObservationIgnored private(set) var rerunCount = 0
     @ObservationIgnored var postKillTask: Task<Void, Never>?
+    @ObservationIgnored var activeStopCount = 0
+    @ObservationIgnored var activeStopWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored var settingsSaveTask: Task<Void, Never>?
     @ObservationIgnored private var didLoadPersistedSettings = false
     @ObservationIgnored var visibleSurfaces: Set<RadarSurface> = []
@@ -372,6 +374,8 @@ public final class ProcessMonitor {
         control: KillOperationControl? = nil,
         eventSink: (@Sendable (KillOperationEvent) -> Void)? = nil
     ) async -> KillReport {
+        beginStop()
+        defer { endStop() }
         await postKillTask?.value
         let plan = if let approvedPlan { approvedPlan } else { await killPlan(for: family) }
         let operationControl = control ?? KillOperationControl()

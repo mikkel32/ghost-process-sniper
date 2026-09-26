@@ -51,7 +51,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             replyToTermination()
         }
         Task {
-            // A stuck disk must never hold up quitting.
+            // A stop still in its grace finishes first, so its approved
+            // force goes out and its report is kept; shutdown() waits for it
+            // too. Past that, a stuck disk must never hold up quitting.
+            let limit = ContinuousClock.now + .seconds(60)
+            while coordinator.monitor.hasActiveStop, ContinuousClock.now < limit {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
             try? await Task.sleep(for: .seconds(1))
             replyToTermination()
         }

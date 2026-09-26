@@ -65,6 +65,49 @@ final class ProcessMonitorKillTests: XCTestCase {
         XCTAssertEqual(history.operationCount, 0, "forcing a held stop's survivors teaches nothing about the strategy")
     }
 
+    func testQuittingWaitsForAStopInItsGraceAndRecordsIt() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("gps-kill-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let monitor = ProcessMonitor(sampler: GatedSampler(), builder: ProcessFamilyBuilder(currentUserID: 501), store: RadarStore(url: url))
+        let table = FakeProcessTable()
+        let worker = KillProcessLite.fake(pid: 800, name: "cruncher")
+        table.add(worker, .ignoresTermination)
+        let family = Self.family(worker.asProcessMetrics())
+        let gate = GraceGate()
+        let tableSleeper = table.sleeper
+        let killer = table.killer(sleeper: { nanoseconds in
+            await gate.pass()
+            await tableSleeper(nanoseconds)
+        })
+        let order = OrderLog()
+
+        let stop = Task { @MainActor in
+            let report = await monitor.confirmKill(family: family, killer: killer, forceKillDelay: 2)
+            order.append("report")
+            return report
+        }
+        let inGrace = await waitUntil { await gate.waiterCount > 0 }
+        XCTAssertTrue(inGrace)
+        XCTAssertTrue(monitor.hasActiveStop)
+        let quit = Task { @MainActor in
+            await monitor.shutdown()
+            order.append("shutdown")
+        }
+        // Quitting must not close the store while the stop still waits.
+        let quitEarly = await waitUntil(timeout: 0.3) { !order.entries.isEmpty }
+        XCTAssertFalse(quitEarly, "shutdown finished while the stop was still in its grace")
+        await gate.release()
+        let report = await stop.value
+        await quit.value
+
+        XCTAssertEqual(report.forcedPIDs, [800], "the approved force still went out")
+        XCTAssertEqual(order.entries, ["report", "shutdown"])
+        XCTAssertFalse(monitor.hasActiveStop)
+        XCTAssertNil(monitor.storeError)
+        let recorded = try await RadarStore(url: url).recentKillOperations()
+        XCTAssertEqual(recorded.count, 1, "the stop was recorded before the store closed")
+    }
+
     private static func family(_ root: ProcessMetrics) -> ProcessFamily {
         ProcessFamily(root: root, members: [root], totalResidentMemoryBytes: root.residentMemoryBytes,
                       totalPhysicalFootprintBytes: root.physicalFootprintBytes, totalCPUPercent: root.cpuPercent,
@@ -90,5 +133,33 @@ private actor GateOpeningSampler: ProcessSampling {
         }
         wasOpened = true
         return ProcessSampleBatch(processes: [], sampledAt: plan.sampledAt, stats: .empty)
+    }
+}
+
+/// Holds the killer's grace sleeps until the test releases them.
+private actor GraceGate {
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+
+    var waiterCount: Int { waiting.count }
+
+    func pass() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func release() {
+        isOpen = true
+        waiting.forEach { $0.resume() }
+        waiting = []
+    }
+}
+
+@MainActor
+private final class OrderLog {
+    private(set) var entries: [String] = []
+
+    func append(_ entry: String) {
+        entries.append(entry)
     }
 }
