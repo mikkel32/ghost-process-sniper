@@ -188,6 +188,9 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
     public let actionTitle: String
     public let systemImage: String
     public let level: GhostLevel
+    /// What stopping the target would do, when it is confirmed trouble the
+    /// user can stop.
+    public let stopConsequence: String?
 
     public static let empty = RadarIntelligenceBrief(
         eyebrow: "Live guidance",
@@ -214,7 +217,8 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         familyName: String?,
         actionTitle: String,
         systemImage: String,
-        level: GhostLevel
+        level: GhostLevel,
+        stopConsequence: String? = nil
     ) {
         self.eyebrow = eyebrow
         self.title = title
@@ -227,6 +231,7 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         self.actionTitle = actionTitle
         self.systemImage = systemImage
         self.level = level
+        self.stopConsequence = stopConsequence
     }
 
     public static func build(
@@ -235,7 +240,9 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         warmingRows: [CompactSidebarRowModel],
         detailPanels: [String: FamilyDetailPanelModel]
     ) -> RadarIntelligenceBrief {
-        guard let row = topRiskRows.first ?? warmingRows.first,
+        // Confirmed trouble outranks a hotter spike that may still settle.
+        let confirmed = topRiskRows.first { detailPanels[$0.familyKey]?.heatConfirmed == true }
+        guard let row = confirmed ?? topRiskRows.first ?? warmingRows.first,
               let panel = detailPanels[row.familyKey]
         else {
             let hasFamilies = summary.familyCount > 0
@@ -264,8 +271,12 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         let hasCredibleForecastEscalation = row.forecastState >= .leaking && row.forecastConfidence >= 0.55
         let isConfirmedUrgent = row.level >= .hot && panel.heatConfirmed
         let isUnconfirmedHeat = row.level >= .hot && !panel.heatConfirmed
+        let stopRisk = isConfirmedUrgent && panel.hasOwnedTargets ? panel.stopRisk : nil
+        let consequence = stopRisk.flatMap(Self.consequence(of:))
         let recommendation: String
-        if isConfirmedUrgent, panel.hasOwnedTargets {
+        if let consequence {
+            recommendation = consequence
+        } else if isConfirmedUrgent, panel.hasOwnedTargets {
             recommendation = "Review the process tree, then use Kill Preview only if this work is no longer needed."
         } else if isConfirmedUrgent {
             recommendation = "Inspect the process tree and its evidence; no user-owned target is available to stop."
@@ -281,7 +292,7 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         let actionTitle: String
         if isConfirmedUrgent {
             eyebrow = "Recommended now"
-            actionTitle = "Review family"
+            actionTitle = stopRisk.map(Self.actionTitle(for:)) ?? "Review family"
         } else if isUnconfirmedHeat {
             eyebrow = "Confirming activity"
             actionTitle = "Inspect signals"
@@ -301,8 +312,32 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
             familyName: row.title,
             actionTitle: actionTitle,
             systemImage: panel.verdict.systemImage,
-            level: max(row.level, panel.verdict.level)
+            level: max(row.level, panel.verdict.level),
+            stopConsequence: stopRisk?.headline
         )
+    }
+
+    /// The headline, then the hazard most worth knowing first: a supervisor
+    /// that restarts the process makes stopping it pointless.
+    private static func consequence(of risk: KillRiskAssessment) -> String? {
+        let hazard = risk.hazards.first { $0.kind == .respawn } ?? risk.hazards.first
+        let parts = [risk.headline, hazard?.detail].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// Mirrors the stop planner's strategy choice for the cases it takes
+    /// from the risk assessment alone.
+    private static func actionTitle(for risk: KillRiskAssessment) -> String {
+        if risk.appQuitPID != nil {
+            return "Quit app"
+        }
+        if risk.kind == .dataStore || risk.kind == .containerRuntime {
+            return "Stop safely"
+        }
+        if risk.supervisor != nil || risk.risks.contains(where: { $0.kind == .respawn }) {
+            return "Review supervisor"
+        }
+        return "Review family"
     }
 }
 
