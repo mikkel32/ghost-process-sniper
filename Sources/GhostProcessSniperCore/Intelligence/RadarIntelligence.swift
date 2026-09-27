@@ -146,13 +146,16 @@ public struct RadarRuleEngine: Sendable {
 public struct RadarIntelligence: Sendable {
     private let ruleEngine: RadarRuleEngine
     private let forecaster: FamilyRiskForecaster
+    let ownPID: Int32
 
     public init(
         ruleEngine: RadarRuleEngine = RadarRuleEngine(),
-        forecaster: FamilyRiskForecaster = FamilyRiskForecaster()
+        forecaster: FamilyRiskForecaster = FamilyRiskForecaster(),
+        ownPID: Int32 = getpid()
     ) {
         self.ruleEngine = ruleEngine
         self.forecaster = forecaster
+        self.ownPID = ownPID
     }
 
     public func enrich(
@@ -161,6 +164,9 @@ public struct RadarIntelligence: Sendable {
         settings: ThresholdSettings,
         now: Date
     ) -> ProcessFamily {
+        if isOwnFamily(family) {
+            return ownFamily(family, now: now)
+        }
         guard family.hasRecentMeasurements(at: now) else {
             return unscorable(family: family, context: context, now: now)
         }
