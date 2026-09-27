@@ -98,6 +98,8 @@ struct EnergyLedger: Sendable {
     private(set) var energyAccounted = false
     private var counters: [ProcessIdentity: Counters] = [:]
     private var lastPrune: Date?
+    /// What each group was charged in the last recorded scan, for the daily history.
+    private(set) var tickCharges: [String: EnergyMinute] = [:]
 
     /// Records one tick. `assign` names each process's group; `familyKey`
     /// names the radar family that owns it, when one does.
@@ -111,6 +113,8 @@ struct EnergyLedger: Sendable {
         let start = Self.minuteStart(now)
         var seen: Set<String> = []
         var hostMinute = EnergyMinute(start: start)
+        tickCharges.removeAll(keepingCapacity: true)
+        var charges = tickCharges
 
         for process in processes where !process.isZombie {
             let assignment = assign(process)
@@ -151,8 +155,10 @@ struct EnergyLedger: Sendable {
                         group.currentMeasuredCount += 1
                     }
                     if let previous {
-                        Self.charge(&group.minutes[group.minutes.count - 1], host: &hostMinute, process: process,
-                                    since: previous)
+                        let charge = Self.charge(process, since: previous, start: start)
+                        Self.add(charge, to: &group.minutes[group.minutes.count - 1])
+                        Self.add(charge, to: &hostMinute)
+                        Self.add(charge, to: &charges[assignment.key, default: EnergyMinute(start: start)])
                     }
                 }
                 if let owner {
@@ -176,6 +182,7 @@ struct EnergyLedger: Sendable {
             }
         }
 
+        tickCharges = charges
         Self.open(&host, at: start)
         host[host.count - 1].observedSeconds += gap
         host[host.count - 1].joules += hostMinute.joules
@@ -212,30 +219,29 @@ struct EnergyLedger: Sendable {
         return (old + alpha * (instant - old), since)
     }
 
-    /// Adds the growth of one process's lifetime counters since its last read.
-    private static func charge(_ minute: inout EnergyMinute, host: inout EnergyMinute, process: ProcessMetrics,
-                               since previous: Counters) {
+    /// The growth of one process's lifetime counters since its last read.
+    private static func charge(_ process: ProcessMetrics, since previous: Counters, start: Date) -> EnergyMinute {
         let power = process.power
+        var charge = EnergyMinute(start: start)
         if power.lifetimeEnergyNanojoules >= previous.energy {
-            let joules = Double(power.lifetimeEnergyNanojoules - previous.energy) / 1_000_000_000
-            minute.joules += joules
-            host.joules += joules
+            charge.joules = Double(power.lifetimeEnergyNanojoules - previous.energy) / 1_000_000_000
         }
         if power.lifetimeWakeups >= previous.wakeups {
-            let wakeups = Double(power.lifetimeWakeups - previous.wakeups)
-            minute.wakeups += wakeups
-            host.wakeups += wakeups
+            charge.wakeups = Double(power.lifetimeWakeups - previous.wakeups)
         }
         if power.lifetimeDiskBytesWritten >= previous.diskWrites {
-            let bytes = Double(power.lifetimeDiskBytesWritten - previous.diskWrites)
-            minute.diskBytesWritten += bytes
-            host.diskBytesWritten += bytes
+            charge.diskBytesWritten = Double(power.lifetimeDiskBytesWritten - previous.diskWrites)
         }
         let cpu = process.totalProcessorSeconds - previous.cpuSeconds
-        if cpu.isFinite, cpu > 0 {
-            minute.cpuSeconds += cpu
-            host.cpuSeconds += cpu
-        }
+        if cpu.isFinite, cpu > 0 { charge.cpuSeconds = cpu }
+        return charge
+    }
+
+    private static func add(_ charge: EnergyMinute, to minute: inout EnergyMinute) {
+        minute.joules += charge.joules
+        minute.wakeups += charge.wakeups
+        minute.diskBytesWritten += charge.diskBytesWritten
+        minute.cpuSeconds += charge.cpuSeconds
     }
 
     /// The trailing `minutes` of a group, the one in progress included.

@@ -19,6 +19,7 @@ struct EnergyConsoleView: View {
                 EnergyHero(report: report)
                 findings
                 consumers
+                if report.perProcessEnergy { EnergyTodaySection(today: report.today) }
                 blockers
                 Text(coverageNote)
                     .font(.caption)

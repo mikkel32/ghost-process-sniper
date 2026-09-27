@@ -61,6 +61,13 @@ public struct BatteryReading: Equatable, Sendable {
         return capacity * volts / 1_000_000
     }
 
+    /// What a full charge holds today.
+    public var fullChargeWattHours: Double? {
+        guard let capacity = fullChargeCapacityMilliampHours, let volts = voltageMillivolts,
+              capacity > 0, volts > 0 else { return nil }
+        return capacity * volts / 1_000_000
+    }
+
     /// How much of its design capacity the battery still holds.
     public var healthPercent: Double? {
         guard let full = fullChargeCapacityMilliampHours, let design = designCapacityMilliampHours,

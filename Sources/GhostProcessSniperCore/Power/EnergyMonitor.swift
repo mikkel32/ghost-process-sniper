@@ -20,11 +20,13 @@ struct EnergyMonitor: Sendable {
     private var assertionsReadAt: Date?
     private var rules = EnergyFindingRules()
     private var familyFigures: [String: FamilyPowerFigures] = [:]
+    private var history: EnergyHistoryTracker
 
     init(battery: (any BatterySource)? = IOKitBatterySource(),
-         assertions: (any SleepAssertionSource)? = IOKitSleepAssertionSource()) {
+         assertions: (any SleepAssertionSource)? = IOKitSleepAssertionSource(), persistsHistory: Bool = false) {
         batterySource = battery
         assertionSource = assertions
+        history = EnergyHistoryTracker(persists: persistsHistory)
     }
 
     mutating func update(
@@ -47,6 +49,8 @@ struct EnergyMonitor: Sendable {
                                          kind: assignment.kind, applicationPath: assignment.applicationPath,
                                          hostAppName: assignment.hostAppName)
         }, familyKey: { owners[$0.identity] })
+        history.record(ledger.tickCharges.compactMap { key, charge in ledger.groups[key].map { ($0.assignment, charge) } },
+                       now: now)
 
         readBattery(uiVisible: uiVisible, now: now)
         readAssertions(uiVisible: uiVisible, now: now)
@@ -74,9 +78,21 @@ struct EnergyMonitor: Sendable {
             minuteWatts: ledger.host.map(\.watts),
             measuredProcessCount: measured,
             unmeasuredProcessCount: processes.count - measured,
-            families: familyFigures
+            families: familyFigures,
+            today: history.summary(fullChargeWattHours: battery?.hasBattery == true ? battery?.fullChargeWattHours : nil,
+                                   now: now)
         )
     }
+
+    // MARK: - Daily history (the worker does the store's async calls)
+
+    func needsHistoryLoad(now: Date) -> Bool { history.needsLoad(now: now) }
+    mutating func loadHistory(_ rows: [EnergyDayUsage], now: Date) { history.load(rows, now: now) }
+    mutating func noteHistoryLoadFailed(now: Date) { history.noteLoadFailed(now: now) }
+    mutating func takeHistoryFlush(now: Date, force: Bool = false) -> [(day: String, usages: [EnergyUsage])]? {
+        history.takeFlush(now: now, force: force)
+    }
+    mutating func restoreHistory(_ batches: [(day: String, usages: [EnergyUsage])]) { history.restore(batches) }
 
     /// Averages each family's member rates over about a minute, so a family
     /// page reads a steady figure rather than one scan's.

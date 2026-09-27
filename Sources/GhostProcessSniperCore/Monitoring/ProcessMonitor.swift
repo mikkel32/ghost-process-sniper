@@ -49,7 +49,7 @@ public final class ProcessMonitor {
     @ObservationIgnored var notifyTask: Task<Void, Never>?
     @ObservationIgnored var pendingNotification: RadarModel?
     @ObservationIgnored let store: RadarStore?
-    @ObservationIgnored private let worker: RadarRefreshWorker
+    @ObservationIgnored let worker: RadarRefreshWorker
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     /// The loop's current sleep; cancelling it runs the next tick now.
     @ObservationIgnored var sleeper: Task<Void, Never>?

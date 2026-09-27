@@ -454,6 +454,10 @@ extension RadarStore {
         try ensureOpen().execute(sql, values: values)
     }
 
+    func query(_ sql: String, _ values: [BindingValue] = [], row: (SQLiteRow) throws -> Void) throws {
+        try ensureOpen().query(sql, values, row: row)
+    }
+
     func prepare(_ sql: String) throws -> OpaquePointer? {
         try ensureOpen().prepare(sql)
     }

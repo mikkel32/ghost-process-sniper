@@ -155,6 +155,8 @@ public struct EnergyReport: Equatable, Sendable {
     public let unmeasuredProcessCount: Int
     /// Per radar family, by family key.
     public let families: [String: FamilyPowerFigures]
+    /// Today's heaviest apps and the last week's daily totals, kept across restarts.
+    public let today: EnergyToday
 
     public static let empty = EnergyReport(
         generatedAt: .distantPast, perProcessEnergy: false, battery: nil, measuredWatts: 0, lastHourWattHours: 0,
@@ -165,7 +167,8 @@ public struct EnergyReport: Equatable, Sendable {
         generatedAt: Date, perProcessEnergy: Bool, battery: BatteryOutlook?, measuredWatts: Double,
         lastHourWattHours: Double, consumers: [EnergyConsumer], blockers: [SleepBlocker], findings: [EnergyFinding],
         minuteWatts: [Double], measuredProcessCount: Int, unmeasuredProcessCount: Int,
-        families: [String: FamilyPowerFigures] = [:]
+        families: [String: FamilyPowerFigures] = [:],
+        today: EnergyToday = .empty
     ) {
         self.generatedAt = generatedAt
         self.perProcessEnergy = perProcessEnergy
@@ -179,6 +182,7 @@ public struct EnergyReport: Equatable, Sendable {
         self.measuredProcessCount = measuredProcessCount
         self.unmeasuredProcessCount = unmeasuredProcessCount
         self.families = families
+        self.today = today
     }
 
     public func consumer(id: String) -> EnergyConsumer? {

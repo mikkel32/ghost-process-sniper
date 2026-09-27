@@ -146,7 +146,7 @@ public actor RadarRefreshWorker {
         self.sampler = sampler
         self.store = store
         self.sentinel = sentinel
-        self.energy = EnergyMonitor(battery: battery, assertions: sleepAssertions)
+        self.energy = EnergyMonitor(battery: battery, assertions: sleepAssertions, persistsHistory: store != nil)
         self.pipeline = RadarPipeline(builder: builder, intelligence: intelligence)
     }
 
@@ -344,6 +344,7 @@ public actor RadarRefreshWorker {
         let thermalActivity = thermalHistory.record(currentActivity, at: request.now)
         let energyReport = energy.update(processes: batch.processes, families: scored.families,
                                          resolver: &resolver, uiVisible: request.uiVisible, now: request.now)
+        await syncEnergyHistory(now: request.now)
         let sentinelReport = await sentinel?.ingest(
             processes: batch.processes, uiVisible: request.uiVisible, now: request.now) ?? .empty
 
@@ -366,6 +367,30 @@ public actor RadarRefreshWorker {
             sentinel: sentinelReport,
             energy: energyReport
         )
+    }
+
+    /// Loads today's stored energy once, then adds what was measured every
+    /// five minutes; `force` writes whatever is pending, for quitting.
+    public func syncEnergyHistory(now: Date, force: Bool = false) async {
+        guard let store else { return }
+        if energy.needsHistoryLoad(now: now) {
+            do {
+                energy.loadHistory(try await store.energyHistory(days: EnergyHistory.dayCount, now: now), now: now)
+            } catch {
+                energy.noteHistoryLoadFailed(now: now)
+                RadarLogger.store.error("Energy history load failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        guard let batches = energy.takeHistoryFlush(now: now, force: force) else { return }
+        for (index, batch) in batches.enumerated() {
+            do {
+                try await store.recordEnergy(batch.usages, day: batch.day, now: now)
+            } catch {
+                energy.restoreHistory(Array(batches[index...]))
+                RadarLogger.store.error("Energy history write failed: \(error.localizedDescription, privacy: .public)")
+                return
+            }
+        }
     }
 
     private func metrics(

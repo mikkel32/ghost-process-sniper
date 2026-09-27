@@ -14,6 +14,9 @@ enum RadarStoreSchema {
     /// relearning.
     static let baselineStatisticsVersion: Int32 = 5
 
+    /// The version that adds each day's energy per app and job.
+    static let energyHistoryVersion: Int32 = 6
+
     /// Append new versions; never edit a version that has shipped.
     static let migrations = [
         // Version 1 is the schema from before versioning. Its statements are
@@ -64,6 +67,26 @@ enum RadarStoreSchema {
                 SQLiteAddedColumn(table: "baselines", column: "cpu_variance", definition: "REAL NOT NULL DEFAULT 0"),
                 SQLiteAddedColumn(table: "baselines", column: "observed_seconds", definition: "REAL NOT NULL DEFAULT 0"),
                 SQLiteAddedColumn(table: "baselines", column: "session_count", definition: "INTEGER NOT NULL DEFAULT 1")
+            ]
+        ),
+        // One row per local day and app or job, added to every few minutes.
+        SQLiteMigration(
+            version: energyHistoryVersion,
+            statements: [
+                """
+                CREATE TABLE IF NOT EXISTS energy_days(
+                    day TEXT NOT NULL,
+                    group_key TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    application_path TEXT,
+                    joules REAL NOT NULL DEFAULT 0,
+                    wakeups REAL NOT NULL DEFAULT 0,
+                    disk_bytes REAL NOT NULL DEFAULT 0,
+                    cpu_seconds REAL NOT NULL DEFAULT 0,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY(day, group_key)
+                ) WITHOUT ROWID
+                """
             ]
         )
     ]

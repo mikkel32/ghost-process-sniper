@@ -31,6 +31,10 @@ Sleep assertions a daemon holds for an app are blamed on the app: when coreaudio
 
 `EnergyLedger` keeps an hour of one-minute buckets per group: joules, wake-ups, bytes written, CPU seconds and the time actually observed. Each bucket adds the growth of every member's lifetime counters since its last read, so totals are exact at any scan rate, and a gap longer than 30 s (sleep, a stalled scan) is charged but not counted as observed time. Averages are over the time observed.
 
+## Today and this week
+
+Each scan's charges also go into today's totals, keyed so the same work adds up across runs: an app by its path, a known source by name, and a command-line job by its command (two runs of `vite` are one row). Every five minutes, and when Ghost quits, what has not been written yet is added to that day's row in the `energy_days` table (schema v6). At launch today's rows are read back, so a restart continues the day. The **Today** card shows the heaviest apps, today's measured total against a full charge, and a bar per day for the last week. Days older than five weeks are deleted by the daily maintenance.
+
 ## Findings
 
 A finding says what, shows the numbers, and gives one next step. It stays until its measure falls below 80% of the threshold, so it does not flicker at the edge.
