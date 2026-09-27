@@ -4,6 +4,10 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 
 ## [Unreleased]
 
+### Smarter detection
+- One large allocation, such as a language server loading a project, is no longer called a slow leak 20–60 minutes later. A slow leak now has to keep growing through most of its window.
+- Waking the Mac no longer makes every quiet process "idle for 8 h": idleness counts only time the Mac was awake, so a dev server you used just before closing the lid is not "probably forgotten" in the morning.
+
 ### Energy
 - A new **Energy** section (⌘4) shows what uses energy in real watts, measured by macOS for every process, next to the whole Mac's draw, the battery time left, battery health and cycle count, and the last hour as a sparkline.
 - On battery, every app and job says how much longer the battery would last without it ("+40 min").
