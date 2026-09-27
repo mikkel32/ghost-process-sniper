@@ -45,7 +45,9 @@ enum CommandPatterns {
         "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/",
     ]
 
-    static let pipeToRunner = regex(#"\b(curl|wget|fetch)\b[^|;&\n]{0,400}\|\s*(sudo\s+(-\S+\s+)*)?(env\s+)?(/bin/|/usr/bin/)?(ba|z|da|k|fi)?sh\b|\b(curl|wget)\b[^|;&\n]{0,400}\|\s*(sudo\s+)?(python[0-9.]*|perl|ruby|node|osascript|php)\b"#)
+    /// A download piped into a shell or interpreter, through any decoders
+    /// or decompressors in between (`curl … | base64 -d | bash`).
+    static let pipeToRunner = regex(#"\b(curl|wget|fetch)\b[^|;&\n]{0,400}(\|\s*(base64|b64|openssl|xxd|gunzip|zcat|gzip|bzip2|xz|rev|tr)\b[^|;&\n]{0,160})*\|\s*(sudo\s+(-\S+\s+)*)?(env\s+)?(/bin/|/usr/bin/)?(ba|z|da|k|fi)?sh\b|\b(curl|wget)\b[^|;&\n]{0,400}(\|\s*(base64|b64|openssl|xxd|gunzip|zcat|gzip|bzip2|xz|rev|tr)\b[^|;&\n]{0,160})*\|\s*(sudo\s+)?(python[0-9.]*|perl|ruby|node|osascript|php)\b"#)
     static let substitutionRun = regex(#"\b(ba|z|da|k)?sh\s+-c\s+["']?\$\(\s*(curl|wget)\b|\beval\s+["']?\$\(\s*(curl|wget)\b|do shell script\s+["'\\]*\s*(curl|wget)\b"#)
     /// A saved download later made executable or run, even with other
     /// steps (like stripping the quarantine mark) in between.

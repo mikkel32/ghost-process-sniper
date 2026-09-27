@@ -42,6 +42,8 @@ public actor SentinelEngine {
         var downloadedFrom: [String] = []
         /// Evidence from outside the rules: the signature, the download mark, the microphone.
         var extraSignals: [SentinelSignal] = []
+        /// The pipeline this stdin runner belongs to, once its siblings were seen.
+        var pipeline: PipelineCorrelator.Pipeline?
     }
 
     static let feedCapacity = 300
@@ -70,6 +72,7 @@ public actor SentinelEngine {
     /// Numbers feed entries: an exec keeps its process's identity, so one
     /// process can appear twice with different commands.
     private var launchSequence: UInt64 = 0
+    private var pipelines = PipelineCorrelator()
     private var sensors = PrivacySensorState.unknown
     private var watchedAppNames: [String] = []
     private var ticks: UInt64 = 0
@@ -149,7 +152,8 @@ public actor SentinelEngine {
             let subject = SentinelSubject(
                 identity: capture.identity, parentPID: capture.parentPID, userID: capture.userID,
                 name: capture.name, executablePath: capture.executablePath, commandLine: capture.commandLine,
-                isSystemProcess: SentinelCatalog.isSystemLocation(capture.executablePath))
+                isSystemProcess: SentinelCatalog.isSystemLocation(capture.executablePath),
+                processGroupID: capture.processGroupID)
             if byPID[subject.identity.pid] == nil { byPID[subject.identity.pid] = subject }
             if let record = records[subject.identity], record.subject.commandLine == subject.commandLine { continue }
             let exited = !alive.contains(subject.identity)
@@ -213,7 +217,7 @@ public actor SentinelEngine {
         // Judged again (late arguments, new ports): what is known about the
         // same file still holds; an exec into another program starts over.
         let known = previous.flatMap { $0.subject.executablePath == subject.executablePath ? $0 : nil }
-        let evaluation = SentinelRules.evaluate(subject, ancestors: ancestors, signing: known?.signing)
+        let evaluation = SentinelRules.evaluate(subject, ancestors: ancestors, signing: known?.signing, pipeline: previous?.pipeline)
         // System binaries are Apple's; only third-party programs get a signature check.
         let needsProvenance = !subject.isSystemLocation && subject.executablePath.hasPrefix("/")
             && known?.provenanceApplied != true
@@ -221,8 +225,11 @@ public actor SentinelEngine {
             subject: subject, ancestors: ancestors, lineage: lineage, evaluation: evaluation,
             firstSeen: previous?.firstSeen ?? at, provenanceApplied: !needsProvenance, provenance: known?.provenance,
             signing: known?.signing,
-            downloadedFrom: known?.downloadedFrom ?? [], extraSignals: known?.extraSignals ?? [])
+            downloadedFrom: known?.downloadedFrom ?? [], extraSignals: known?.extraSignals ?? [], pipeline: previous?.pipeline)
         if needsProvenance { pendingProvenance.insert(subject.identity) }
+        for pipeline in pipelines.observe(subject, now: now) {
+            correlate(pipeline, running: pipeline.runner == subject.identity ? running : nil, now: now)
+        }
 
         if feed, Self.belongsInFeed(subject, parent: ancestors.first, severity: evaluation.severity),
            !launches.contains(where: { $0.identity == subject.identity && $0.commandLine == subject.commandLine }) {
@@ -237,6 +244,17 @@ public actor SentinelEngine {
             launchTimes.append(at)
         }
         upsertFinding(for: subject.identity, running: running, now: now)
+    }
+
+    /// A stdin runner turned out to be the end of `curl … | sh`: judged again
+    /// as the whole pipeline, whichever member arrived last.
+    private func correlate(_ pipeline: PipelineCorrelator.Pipeline, running: Bool?, now: Date) {
+        guard var record = records[pipeline.runner], record.pipeline != pipeline else { return }
+        record.pipeline = pipeline
+        record.evaluation = SentinelRules.evaluate(record.subject, ancestors: record.ancestors, signing: record.signing,
+                                                   pipeline: pipeline)
+        records[pipeline.runner] = record
+        upsertFinding(for: pipeline.runner, running: running ?? findings[pipeline.runner]?.isRunning ?? true, now: now)
     }
 
     /// Rebuilds a finding from the record: the rules' verdict plus the
@@ -303,6 +321,7 @@ public actor SentinelEngine {
         where !alive.contains(identity) && now.timeIntervalSince(record.firstSeen) >= Self.exitedRecordRetention {
             records[identity] = nil
         }
+        pipelines.prune(now: now)
         return changed || findings.count != before
     }
 
@@ -337,7 +356,8 @@ public actor SentinelEngine {
             }
             record.downloadedFrom = provenance.downloadedFrom
             // Rules that weigh the signer (a shared folder, a listener) run again now that it is known.
-            record.evaluation = SentinelRules.evaluate(record.subject, ancestors: record.ancestors, signing: provenance.signing)
+            record.evaluation = SentinelRules.evaluate(record.subject, ancestors: record.ancestors, signing: provenance.signing,
+                                                       pipeline: record.pipeline)
             let oddly = record.evaluation.signals.contains {
                 [.temporaryLocation, .hiddenLocation, .deletedExecutable, .downloadedExecutable].contains($0.kind) && $0.severity >= .notable
             }

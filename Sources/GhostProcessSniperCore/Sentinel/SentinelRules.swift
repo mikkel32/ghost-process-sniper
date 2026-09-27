@@ -12,6 +12,8 @@ struct SentinelSubject: Sendable {
     let isSystemProcess: Bool
     /// TCP ports it listens on, when the sampler has read them.
     var listeningPorts: [Int] = []
+    /// A shell puts each pipeline in a process group of its own.
+    var processGroupID: Int32?
 
     init(_ process: ProcessMetrics) {
         identity = process.identity
@@ -22,10 +24,12 @@ struct SentinelSubject: Sendable {
         commandLine = process.commandLine
         isSystemProcess = process.isSystemProcess
         listeningPorts = process.forensics.listeningPorts
+        processGroupID = process.processGroupID
     }
 
     init(identity: ProcessIdentity, parentPID: Int32, userID: UInt32, name: String, executablePath: String,
-         commandLine: String, isSystemProcess: Bool) {
+         commandLine: String, isSystemProcess: Bool, processGroupID: Int32? = nil) {
+        self.processGroupID = processGroupID
         self.identity = identity
         self.parentPID = parentPID
         self.userID = userID
@@ -72,7 +76,10 @@ enum SentinelRules {
     /// `ancestors` runs from the process's parent upward (nearest first).
     /// `signing` is the executable's signature once the inspector has read
     /// it; until then the rules that depend on it give the quieter verdict.
+    /// `pipeline` is the command a stdin runner is part of, put back together
+    /// from its siblings (`curl … | sh`), when the correlator found one.
     static func evaluate(_ subject: SentinelSubject, ancestors: [SentinelSubject], signing: CodeSigningSummary? = nil,
+                         pipeline: PipelineCorrelator.Pipeline? = nil,
                          fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> SentinelEvaluation {
         var signals: [SentinelSignal] = []
 
@@ -96,6 +103,16 @@ enum SentinelRules {
         // What it runs.
         if subject.commandIsWorthReading {
             signals += CommandPatterns.signals(commandLine: subject.commandLine, program: subject.program)
+        }
+        if let pipeline {
+            // The runner is where the download runs, so it carries the finding.
+            let whole = CommandPatterns.signals(commandLine: pipeline.text, program: subject.program)
+                .filter { [.downloadAndExecute, .encodedPayload].contains($0.kind) && !signals.map(\.kind).contains($0.kind) }
+            signals += whole.map { signal in
+                SentinelSignal(signal.kind, signal.severity,
+                               signal.detail + " Put together from \(pipeline.processCount) processes started as one pipeline: \(pipeline.text)",
+                               evidence: signal.evidence)
+            }
         }
 
         // Where it lives.

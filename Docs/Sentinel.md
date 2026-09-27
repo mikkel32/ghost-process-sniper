@@ -19,6 +19,8 @@ Each process identity (PID plus start time) is judged once, when it first appear
 
 A listening port adds evidence: a shell waiting for connections is Dangerous and `nc`/`socat` listening is Suspicious. A program in a temporary or hidden folder that listens is Suspicious; it is Dangerous only when nobody vouches for its signature, nobody started it from a terminal, and it shows another sign of an attack. A program signed by Apple, the App Store or a Developer ID that listens adds nothing. Dev servers listening are normal.
 
+A command pasted into a terminal reaches Sentinel as separate processes: `curl -fsSL https://x | sh` is a `curl` and a bare `sh` whose arguments never contain the `|`. `PipelineCorrelator` puts them back together: a downloader writing to standard output (curl without `-o`, `wget -O-`), any decoders or decompressors, and a shell or interpreter reading standard input (no script, no `-c`; `sudo` and `env` are looked through), all children of one shell in one process group, started within two seconds. The runner is judged on the whole command, whichever member arrived first, so the installer allowlist, the "pasted" advice and the stealer's-chain escalation (`curl … | base64 -d | bash` is Dangerous) apply as if it had been typed as one argument.
+
 Signals that describe an attack chain together outrank each alone (`SentinelRules.escalate`):
 
 - a content app launching a runner whose command carries a payload,
@@ -53,7 +55,7 @@ A trusted program whose file no longer matches becomes a Suspicious finding that
 
 ## Watching without polling
 
-- **Spawns.** `SpawnWatcher` subscribes to kernel process events (`fork`, `exec`, `exit`) for running browsers, mail, chat and document apps, and terminals. A fork wakes its queue, the child is followed to its `exec`, and its path and arguments are read while it runs, several levels down (Terminal › login › zsh › curl). A command that lives for 200 ms is caught with its full arguments. An app's own helpers are not followed. A runner started by a content app wakes the radar at once.
+- **Spawns.** `SpawnWatcher` subscribes to kernel process events (`fork`, `exec`, `exit`) for running browsers, mail, chat and document apps, and terminals. Shells already open when watching starts (tabs opened before Ghost, or before it relaunched) are adopted and followed without being reported, and each new watch looks once for a child that appeared while it was being armed. A fork wakes its queue, the child is followed to its `exec`, and its path and arguments are read while it runs, several levels down (Terminal › login › zsh › curl). A command that lives for 200 ms is caught with its full arguments. An app's own helpers are not followed. A runner started by a content app wakes the radar at once.
 - **Startup items.** `PersistenceMonitor` reads `~/Library/LaunchAgents`, `/Library/LaunchAgents` and `/Library/LaunchDaemons`, and watches those folders with file-system events. A new item is judged by what it runs and from where, marked NEW, and announced with a notification. Inline shell scripts, Apple-style labels in your Library folder and targets in odd folders are flagged.
 - **Microphone and camera.** `PrivacySensorMonitor` registers Core Audio and CoreMediaIO property listeners and re-reads only when a device starts or stops or the audio client list changes. macOS names the processes recording audio (macOS 14 and later), but only says whether a camera is on. A shell or script recording audio becomes a finding; a meeting app is only listed.
 
