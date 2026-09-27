@@ -10,6 +10,7 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 - A trusted program that changes — another signer, a rebuild, an edited script — is flagged again as Suspicious, saying what was trusted and what is there now.
 - A binary swapped in place can no longer inherit the signature of the file it replaced, even when back-dated with `touch -r`.
 - The Security page lists what you trusted, with Revoke. Paths trusted in earlier versions are carried over once; shells and tools among them are dropped.
+- A download-and-run command is excused as a known installer only when the address it downloads is that installer's own https host: look-alikes such as `sh.rustup.rs.evil.example` or `sh.rustup.rs@evil.example`, and a harmless installer URL placed elsewhere in the same command, no longer hide it.
 - Dismissed findings stop counting once they expire, and a program that runs a second command inside the same process gets its own launch-feed entry.
 
 ### Smarter detection

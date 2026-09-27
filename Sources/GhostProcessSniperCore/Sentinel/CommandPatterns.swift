@@ -57,15 +57,19 @@ enum CommandPatterns {
                              "anonfiles", "discord.com/api/webhooks", "cdn.discordapp.com", "ngrok", "trycloudflare.com"]
 
     static func downloadAndExecute(_ lower: String, original: String) -> SentinelSignal? {
-        guard let match = firstMatch(pipeToRunner, lower, original) ?? firstMatch(substitutionRun, lower, original)
-                ?? firstMatch(downloadThenRun, lower, original) else { return nil }
-        let link = firstMatch(url, lower, original)
-        let lowerLink = link?.lowercased() ?? ""
-        if !lowerLink.isEmpty, knownInstallers.contains(where: lowerLink.hasPrefix) {
+        guard let span = downloadSpan(lower) else { return nil }
+        let match = quote(span, lower, original)
+        // Only the addresses this download fetches count, and every one of
+        // them must be a known installer: an allowlisted URL elsewhere in the
+        // command, or a look-alike host, must not vouch for it.
+        let links = url.matches(in: lower, range: span).map { quote($0.range, lower, original) }
+        if !links.isEmpty, links.allSatisfy(isKnownInstaller) {
             return SentinelSignal(.downloadAndExecute, .info,
-                "Runs a well-known installer script straight from the internet.", evidence: link)
+                "Runs a well-known installer script straight from the internet.", evidence: links.first)
         }
-        let risky = lowerLink.hasPrefix("http://") || firstMatch(ipHost, lower, original) != nil
+        let link = links.first { !isKnownInstaller($0) }
+        let lowerLink = link?.lowercased() ?? ""
+        let risky = lowerLink.hasPrefix("http://") || ipHost.firstMatch(in: lowerLink, range: NSRange(location: 0, length: (lowerLink as NSString).length)) != nil
             || pasteHosts.contains(where: lowerLink.contains)
         if risky {
             return SentinelSignal(.downloadAndExecute, .suspicious,
@@ -74,6 +78,45 @@ enum CommandPatterns {
         }
         return SentinelSignal(.downloadAndExecute, .notable,
             "Downloads code and runs it immediately, without saving it for review.", evidence: link ?? match)
+    }
+
+    /// Where a download is run: `curl … | sh`, `bash -c "$(curl …)"` up to its
+    /// closing parenthesis (the address comes after the matched `curl`), or
+    /// a saved download that is then run.
+    static func downloadSpan(_ lower: String) -> NSRange? {
+        let whole = NSRange(location: 0, length: (lower as NSString).length)
+        if let match = pipeToRunner.firstMatch(in: lower, range: whole) { return match.range }
+        if let match = substitutionRun.firstMatch(in: lower, range: whole) {
+            let text = lower as NSString
+            let after = NSRange(location: match.range.upperBound, length: min(600, text.length - match.range.upperBound))
+            let close = text.range(of: ")", options: [], range: after)
+            let end = close.location == NSNotFound ? after.upperBound : close.upperBound
+            return NSRange(location: match.range.location, length: end - match.range.location)
+        }
+        return downloadThenRun.firstMatch(in: lower, range: whole)?.range
+    }
+
+    /// The installers, parsed once: host and path prefix.
+    private static let installerAddresses: [(host: String, path: String)] = knownInstallers.compactMap { text in
+        URLComponents(string: text).flatMap { parts in parts.host.map { ($0.lowercased(), parts.path.lowercased()) } }
+    }
+
+    /// An https address on an installer's exact host, under its path, with
+    /// no user name in front of the host: `sh.rustup.rs.evil.example` and
+    /// `sh.rustup.rs@evil.example` are other hosts.
+    static func isKnownInstaller(_ link: String) -> Bool {
+        guard let parts = URLComponents(string: link), parts.scheme?.lowercased() == "https",
+              parts.user == nil, parts.password == nil, let host = parts.host?.lowercased() else { return false }
+        let path = parts.path.lowercased()
+        return installerAddresses.contains { $0.host == host && path.hasPrefix($0.path) }
+    }
+
+    /// The original text of a range found in the lowercased text.
+    static func quote(_ range: NSRange, _ lower: String, _ original: String) -> String {
+        if original.utf16.count == lower.utf16.count, let span = Range(range, in: original) {
+            return String(original[span]).trimmingCharacters(in: .whitespaces)
+        }
+        return Range(range, in: lower).map { String(lower[$0]).trimmingCharacters(in: .whitespaces) } ?? ""
     }
 
     // MARK: - Encoded payloads

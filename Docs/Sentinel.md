@@ -25,7 +25,7 @@ Signals that describe an attack chain together outrank each alone (`SentinelRule
 - download-and-run plus decoding, a password prompt or quarantine removal (how password stealers install),
 - a binary in a temporary or hidden folder that also carries a payload, a miner, a tunnel command or a listener judged a backdoor.
 
-Well-known installer one-liners (Homebrew, rustup, bun, uv, nvm, Ollama and others, matched by URL prefix) are recorded as context, not flagged. The tests pin both sides: attack shapes are caught, and everyday developer commands (`git pull`, `cargo build`, `vite`, `python3 -m http.server`, `security find-identity`, `curl` to an API, `curl -c cookies.txt`, `wget -nc -e robots=off`, a `</dev/tcp/localhost/5432` port check, compiling `threadpool.c`, `brew install --cask exodus`, a booted simulator) raise nothing.
+Well-known installer one-liners (Homebrew, rustup, bun, uv, nvm, Ollama and others) are recorded as context, not flagged, when every address the command downloads and runs is an installer's: https, the installer's exact host (so `sh.rustup.rs.evil.example` and `sh.rustup.rs@evil.example` are not it) and its path. An installer address elsewhere in the command does not vouch for another download. The tests pin both sides: attack shapes are caught, and everyday developer commands (`git pull`, `cargo build`, `vite`, `python3 -m http.server`, `security find-identity`, `curl` to an API, `curl -c cookies.txt`, `wget -nc -e robots=off`, a `</dev/tcp/localhost/5432` port check, compiling `threadpool.c`, `brew install --cask exodus`, a booted simulator) raise nothing.
 
 ## Signatures and download marks
 
