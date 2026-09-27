@@ -9,7 +9,7 @@ struct RadarConsoleToolbar: ToolbarContent {
         switch session.state.focusedSelection {
         case .overview, .processes, .family, .duplicates:
             true
-        case .incidents, .rules:
+        case .incidents, .rules, .security:
             false
         }
     }

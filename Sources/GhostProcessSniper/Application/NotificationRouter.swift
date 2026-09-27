@@ -6,6 +6,7 @@ import UserNotifications
 /// banners while the console was frontmost.
 final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, Sendable {
     static let familyCategory = "ghost.family"
+    static let sentinelCategory = "ghost.sentinel"
     static let stopAction = "ghost.stop"
     static let snoozeAction = "ghost.snooze"
     static let showAction = "ghost.show"
@@ -27,7 +28,10 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, Send
             UNNotificationAction(identifier: Self.showAction, title: "Show", options: [.foreground])
         ]
         center.setNotificationCategories([
-            UNNotificationCategory(identifier: Self.familyCategory, actions: actions, intentIdentifiers: [], options: [])
+            UNNotificationCategory(identifier: Self.familyCategory, actions: actions, intentIdentifiers: [], options: []),
+            UNNotificationCategory(identifier: Self.sentinelCategory,
+                                   actions: [UNNotificationAction(identifier: Self.showAction, title: "Review", options: [.foreground])],
+                                   intentIdentifiers: [], options: [])
         ])
     }
 
@@ -44,6 +48,10 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, Send
     ) async {
         let action = response.actionIdentifier
         let userInfo = response.notification.request.content.userInfo
+        if userInfo["sentinelFinding"] != nil {
+            await coordinator.showSecurityCommand()
+            return
+        }
         let familyKey = userInfo["familyKey"] as? String
         let signatureID = userInfo["signatureID"] as? String
         let familyName = userInfo["familyName"] as? String

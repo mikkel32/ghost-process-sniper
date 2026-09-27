@@ -93,7 +93,7 @@ extension ProcessMonitor {
 
     /// Runs the next loop tick now: ends a sleep in progress, or skips the
     /// one about to start when a tick is running.
-    private func wake() {
+    func wake() {
         wakePending = true
         sleeper?.cancel()
     }

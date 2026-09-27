@@ -15,11 +15,13 @@ struct PopoverView: View {
     let onStop: (QuickStopAction) -> Void
     let onOpenSettings: () -> Void
     let onQuit: () -> Void
+    var onOpenSecurity: () -> Void = {}
     var refreshesOnAppear = true
 
     var body: some View {
         VStack(spacing: 12) {
             PopoverVerdictBar(monitor: monitor)
+            PopoverSecurityRow(monitor: monitor, onOpen: onOpenSecurity)
             PopoverStoreWarning(monitor: monitor)
             PopoverCulprits(monitor: monitor, quickStops: quickStops, onOpenFamily: onOpenFamily, onStop: onStop)
             PopoverVitals(monitor: monitor)
@@ -38,6 +40,49 @@ struct PopoverView: View {
             if refreshesOnAppear {
                 await monitor.refresh()
             }
+        }
+    }
+}
+
+/// One line while a suspicious or dangerous process or startup item needs a
+/// look; nothing at all otherwise.
+private struct PopoverSecurityRow: View {
+    let monitor: ProcessMonitor
+    let onOpen: () -> Void
+
+    var body: some View {
+        let report = monitor.sentinel
+        let finding = report.findings.first { $0.isRunning && $0.severity >= .suspicious }
+        let item = report.flaggedLaunchItems.first
+        if finding != nil || item != nil {
+            let severity = finding?.severity ?? item?.severity ?? .suspicious
+            let tint = SentinelStyle.color(for: severity)
+            Button(action: onOpen) {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.shield.fill")
+                        .font(.title3)
+                        .foregroundStyle(tint.gradient)
+                        .symbolEffect(.bounce, value: finding?.id ?? item?.id)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(finding?.headline ?? "Startup item: \(item?.label ?? "")")
+                            .font(.callout.weight(.semibold))
+                            .lineLimit(1)
+                        Text(report.attentionCount > 1 ? "\(report.attentionCount) things need a look" : "Security needs a look")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    Text("Review")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tint)
+                }
+                .padding(10)
+                .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tint.opacity(0.3), lineWidth: 0.75) }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Security: \(finding?.headline ?? item?.label ?? ""). Review")
         }
     }
 }

@@ -34,8 +34,9 @@ struct RadarQuickGuideView: View {
                     shortcut("Open best match", keys: "↩")
                     shortcut("Scan now", keys: "⌘R")
                     shortcut("Overview · All Processes", keys: "⌘1 · ⌘2")
-                    shortcut("Duplicates · Incidents", keys: "⌘3 · ⌘4")
-                    shortcut("Rules", keys: "⌘5")
+                    shortcut("Security", keys: "⌘3")
+                    shortcut("Duplicates · Incidents", keys: "⌘4 · ⌘5")
+                    shortcut("Rules", keys: "⌘6")
                     shortcut("Back · Forward", keys: "⌘[ · ⌘]")
                     shortcut("Settings", keys: "⌘,")
                 }

@@ -57,6 +57,8 @@ struct RadarConsoleDetail: View {
                 IncidentsConsoleView(session: session)
             case .rules:
                 RulesConsoleView(session: session)
+            case .security:
+                SentinelConsoleView(session: session)
             }
         }
         // The column's hosting view re-asks for its minimum size on every
@@ -75,6 +77,7 @@ private extension RadarFocusedSelection {
         case .duplicates: "Duplicates"
         case .incidents: "Incidents"
         case .rules: "Rules"
+        case .security: "Security"
         }
     }
 }

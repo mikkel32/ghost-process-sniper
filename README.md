@@ -32,6 +32,7 @@ Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a 
 ## Highlights
 
 - **Menu-bar radar.** A tiny scope whose shape and color change with the state, and a popover that leads with one verdict, the culprits, and a **Quick Stop** for the ones worth stopping.
+- **Sentinel security watch.** Catches the shapes attacks take on a Mac: a browser, mail or chat app starting a shell, a pasted command that downloads and runs code (the "fake CAPTCHA" trick), hidden base64 payloads, homemade password dialogs, keychain and browser-cookie theft, reverse shells and backdoor listeners, miners, programs impersonating system processes (even with look-alike letters), apps disguised as documents, and unsigned programs in temporary or hidden folders. Browsers and terminals are watched with kernel process events, so a command that runs for 200 ms is still seen with its full arguments. New launch agents and daemons are caught the moment they are written, and the microphone and camera show who is using them. Every finding shows the chain that launched it, the exact evidence, and one next step ([how it works](Docs/Sentinel.md)).
 - **Leak and runaway detection.** CPU and memory are measured for every one of your processes on every scan. Slow leaks are caught from up to 90 minutes of per-process history, and the helper that is growing is named. Builds, busy loops, idle services that start burning CPU, and a saturated Mac are told apart, so a long compile is not a "runaway".
 - **Process families.** Apps, helpers, dev servers, and the workers they spawn are grouped, so you see "Slack" or "vite dev" — not forty anonymous PIDs. Language servers, databases and notebook kernels an editor starts get their own family.
 - **Forgotten processes.** Judged on real evidence — a job that outlived its terminal, no CPU use for half an hour, a deleted working directory, a port held while idle — never on "its parent is launchd", which is true of every app.
@@ -40,7 +41,7 @@ Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a 
 - **Incident history.** A local timeline of leaks, spikes, and runaways, one entry per episode, so recurring offenders stand out.
 - **Rules.** Notify, highlight, snooze, ignore, or suggest stopping matching families.
 - **Careful, thorough stopping.** Every stop knows what it interrupts, so apps can save and databases can flush, and nothing that can lose data is forced unless you allow it. It offers to stop the launchd service or supervisor that would otherwise restart the process, catches children born mid-stop, and then says by name what exited and whether each port is really free ([details](#what-a-stop-does)).
-- **Light on your Mac.** Background scans run at utility priority and slow down when nothing is wrong, on battery, in Low Power Mode, and when the Mac is hot; temperatures are read only while a window shows them. **Settings › Diagnostics** shows what the radar itself costs.
+- **Light on your Mac.** Background scans run at utility priority and slow down when nothing is wrong, on battery, in Low Power Mode, and when the Mac is hot; temperatures are read only while a window shows them. An open console relaxes its refresh rate when nobody has touched the Mac for a while, and its layout work was cut roughly in half ([measurements](Docs/Performance.md)). Sentinel's watchers are event-driven, so they cost nothing while nothing happens. **Settings › Diagnostics** shows what the radar itself costs.
 
 ## Private and unprivileged by design
 
@@ -48,6 +49,7 @@ Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a 
 - **No admin rights.** No privileged helper, kernel extension, or Full Disk Access. Sensor reads are read-only.
 - **Your processes only.** It can only signal processes owned by your user, and only after you confirm. A protection floor below that refuses to stop Ghost itself, the terminal or app it runs inside, `loginwindow`, `WindowServer`, `launchd`, and processes macOS marks as system processes.
 - **Local data.** Settings and history live in one SQLite file in `~/Library/Application Support/Ghost Process Sniper/`.
+- **Sentinel stays on your Mac.** Launch feeds and captured command lines live only in memory and are never written to disk. Microphone and camera status is read from Core Audio and CoreMediaIO without opening a device or asking for permission. Findings never act on their own: stopping goes through the same preview and confirmation as everything else.
 
 ## Install
 
@@ -85,11 +87,12 @@ Click the menu-bar scope for a summary; **Open Dashboard** opens the console (ri
 | --- | --- |
 | **Overview** | One verdict — what needs doing, and the button that does it — then what is urgent, what is trending the wrong way, and why. |
 | **All Processes** | Every family plus every other running process, searchable by name, helper, command, path, PID, or port — typo-tolerant, with filters like `cpu>20`, `port:3000` or `is:leaking`. |
+| **Security** | Whether anything running looks like an attack, what starts automatically, who is using the microphone or camera, and a live feed of every new process. |
 | **Duplicates** | Which work is running more than once, which copy to keep, and which extras can go. |
 | **Incidents** | What has leaked, spiked, or run away before, and how often. |
 | **Rules** | What is snoozed or ignored, and how the radar should treat specific apps or commands. |
 
-Handy shortcuts: **⌘F** search (**↩** opens the best match) · **⌘R** scan now · **⌘1–⌘5** switch sections · **⌘[** / **⌘]** back and forward · **⇧⌘⌫** stop the selection · **⌥⌘I** inspector · **⌘,** settings.
+Handy shortcuts: **⌘F** search (**↩** opens the best match) · **⌘R** scan now · **⌘1–⌘6** switch sections · **⌘[** / **⌘]** back and forward · **⇧⌘⌫** stop the selection · **⌥⌘I** inspector · **⌘,** settings.
 
 ### What a stop does
 

@@ -1,0 +1,53 @@
+# Sentinel: security watch
+
+Sentinel looks at every process the radar samples for the shapes attacks take on macOS, and explains each finding with the chain of processes that launched it and the exact text that matched. It runs without administrator rights, sends nothing anywhere, and never acts on its own.
+
+Code lives in `Sources/GhostProcessSniperCore/Sentinel` (detection) and `Sources/GhostProcessSniper/Features/Sentinel` (the Security page).
+
+## How a process is judged
+
+Each process identity (PID plus start time) is judged once, when it first appears, together with its ancestors at that moment. A parent that exits takes that evidence with it, so the chain is captured at first sight. A process is judged again only when its arguments arrive a tick late or it starts listening on a port.
+
+`SentinelRules` combines four kinds of evidence:
+
+| Evidence | Examples | Severity |
+| --- | --- | --- |
+| **Who launched it** | A browser, mail app or document app starting a shell, AppleScript, an interpreter or a download tool (`Google Chrome › zsh › curl`). Chat apps count as notable. A command runner in between (Chrome › sh › curl) still counts. | Suspicious; Dangerous with a payload |
+| **What it runs** (`CommandPatterns`) | `curl … \| sh` and `bash -c "$(curl …)"`; base64/`xxd`/`openssl` decoding piped to a shell or `exec(base64…)`; `osascript` dialogs asking for a password; `dscl -authonly`; `security find-generic-password … Chrome Safe Storage`; copying `Login Data`, `Cookies` or wallet folders; `xattr -d com.apple.quarantine`, `spctl --master-disable`; writing to `LaunchAgents`; `/dev/tcp`, `nc -e`, `socat exec:`; mining pools; silent `screencapture`, `ffmpeg -f avfoundation` | Info to Dangerous |
+| **Where it lives** | `/tmp`, per-user temporary folders, `/Users/Shared`, hidden home folders that are not known tool caches (`~/.cargo`, `~/.nvm` and about 50 others are allowed), `~/Downloads`, mounted disk images, the Trash, a deleted executable | Notable to Suspicious |
+| **What it pretends to be** | A system name from the wrong folder (`launchd` outside `/sbin`), look-alike letters (`Fіnder` with a Cyrillic і), an app named `Invoice.pdf.app` | Suspicious to Dangerous |
+
+A listening port adds evidence: a shell waiting for connections is Dangerous, `nc`/`socat` listening is Suspicious, and anything in an odd folder listening is Dangerous. Dev servers listening are normal.
+
+Signals that describe an attack chain together outrank each alone (`SentinelRules.escalate`):
+
+- a content app launching a runner whose command carries a payload,
+- download-and-run plus decoding, a password prompt or quarantine removal (how password stealers install),
+- a binary in a temporary or hidden folder that also carries a payload, a tunnel or a miner.
+
+Well-known installer one-liners (Homebrew, rustup, bun, uv, nvm, Ollama and others, matched by URL prefix) are recorded as context, not flagged. The tests pin both sides: attack shapes are caught, and everyday developer commands (`git pull`, `cargo build`, `vite`, `python3 -m http.server`, `security find-identity`, `curl` to an API) raise nothing.
+
+## Signatures and download marks
+
+`CodeSignatureInspector` checks every third-party executable once per (path, inode, modification time), one file at a time at utility priority, off the refresh path. It uses basic validation (the signature and certificate chain, without hashing every page of a large binary) and classifies the signer as Apple, Mac App Store, Developer ID, another certificate, ad hoc, unsigned or invalid. It also reads the quarantine mark and `kMDItemWhereFroms`, so a finding can say which page a program was downloaded from.
+
+Ad hoc signatures are normal for Homebrew and anything you compile, so they only count for a program that was downloaded, hidden or temporary. Unsigned is notable; an invalid signature is suspicious.
+
+## Watching without polling
+
+- **Spawns.** `SpawnWatcher` subscribes to kernel process events (`fork`, `exec`, `exit`) for running browsers, mail, chat and document apps, and terminals. A fork wakes its queue, the child is followed to its `exec`, and its path and arguments are read while it runs, several levels down (Terminal › login › zsh › curl). A command that lives for 200 ms is caught with its full arguments. An app's own helpers are not followed. A runner started by a content app wakes the radar at once.
+- **Startup items.** `PersistenceMonitor` reads `~/Library/LaunchAgents`, `/Library/LaunchAgents` and `/Library/LaunchDaemons`, and watches those folders with file-system events. A new item is judged by what it runs and from where, marked NEW, and announced with a notification. Inline shell scripts, Apple-style labels in your Library folder and targets in odd folders are flagged.
+- **Microphone and camera.** `PrivacySensorMonitor` registers Core Audio and CoreMediaIO property listeners and re-reads only when a device starts or stops or the audio client list changes. macOS names the processes recording audio (macOS 14 and later), but only says whether a camera is on. A shell or script recording audio becomes a finding; a meeting app is only listed.
+
+None of these open a device, ask for a permission, or poll while nothing happens.
+
+## Limits
+
+- Sentinel sees processes owned by any user, but reads arguments only where macOS allows (your own processes, and system tools it can inspect). It is not Endpoint Security: a process that starts and exits between two scans is seen only if a watched app started it.
+- Patterns describe known techniques. A novel attack that looks like normal software will not match, and some legitimate tools will. Every finding shows its evidence so you can judge.
+- Screen recording by a particular app cannot be observed with public APIs; Sentinel flags known capture commands instead.
+- The launch feed and captured command lines stay in memory (the last 300 launches) and are never written to disk.
+
+## Using it
+
+The **Security** page (⌘3) leads with a shield that shows the worst live finding. Below it are the microphone and camera, findings, what starts automatically, and the launch feed. The feed filters to flagged launches, commands, or everything. **Stop…** opens the usual stop preview. **Trust** never flags that program again, and **Dismiss** hides one finding. A live suspicious or dangerous finding also appears above the Overview, raises the menu-bar icon, and sends one notification.
