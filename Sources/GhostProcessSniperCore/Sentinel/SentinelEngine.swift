@@ -109,7 +109,7 @@ public actor SentinelEngine {
     /// its exact build or file, or one script or command of a shell or tool.
     @discardableResult
     public func trust(findingID: String) -> SentinelTrustEntry? {
-        guard let (identity, record) = records.first(where: { SentinelFinding.key(for: $0.key) == findingID }),
+        guard let record = records.first(where: { SentinelFinding.key(for: $0.key) == findingID })?.value,
               let entry = SentinelTrust.offer(for: record.subject, provenance: record.provenance, now: Date())
         else { return nil }
         trust.insert(entry)
