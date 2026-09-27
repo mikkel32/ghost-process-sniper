@@ -73,6 +73,9 @@ public struct MemberTrendStore: Sendable {
     static let maturitySeconds: TimeInterval = 15
     /// Long-term slopes come from members watched at least this long.
     static let longTermMinutes: Double = 10
+    /// A gap between two scans longer than this is time nobody observed (the
+    /// Mac asleep); scans are at most 8 s apart while Ghost runs.
+    static let unobservedGap: TimeInterval = 300
 
     struct FineSample {
         /// Seconds since the series origin.
@@ -117,6 +120,11 @@ public struct MemberTrendStore: Sendable {
     private var series: [ProcessIdentity: Series] = [:]
     private var chains: [String: Chain] = [:]
     private var lastPrune: Date?
+    private var lastScan: Date?
+    /// Seconds of unobserved gaps so far. Minute buckets count minutes the
+    /// Mac was awake: memory does not move while it sleeps, so a night
+    /// between two readings must not dilute a leak's rate or lengthen its span.
+    private var unobservedSeconds: TimeInterval = 0
 
     public init() {}
 
@@ -132,6 +140,10 @@ public struct MemberTrendStore: Sendable {
     }
 
     mutating func advance(familyKey: String, members: [ProcessMetrics], now: Date) -> FamilyTrendStep {
+        if let lastScan, now.timeIntervalSince(lastScan) > Self.unobservedGap {
+            unobservedSeconds += now.timeIntervalSince(lastScan)
+        }
+        lastScan = max(lastScan ?? now, now)
         var newest: Date?
         var current: [ProcessIdentity: (held: UInt64, mature: Bool)] = [:]
         current.reserveCapacity(members.count)
@@ -188,7 +200,7 @@ public struct MemberTrendStore: Sendable {
             coarse.reserveCapacity(Self.coarseCapacity)
             var created = Series(origin: measured, name: member.name, fine: fine, coarse: coarse,
                                  lastMeasured: measured, heldBytes: bytes, lastSeen: now, longTerm: nil)
-            Self.append(bytes, at: measured, to: &created)
+            Self.append(bytes, at: measured, minute: observedMinute(measured), to: &created)
             series[member.identity] = created
             return measured
         }
@@ -199,11 +211,15 @@ public struct MemberTrendStore: Sendable {
         }
         series.values[index].lastMeasured = measured
         series.values[index].heldBytes = bytes
-        Self.append(bytes, at: measured, to: &series.values[index])
+        Self.append(bytes, at: measured, minute: observedMinute(measured), to: &series.values[index])
         return measured
     }
 
-    private static func append(_ bytes: UInt64, at date: Date, to entry: inout Series) {
+    private func observedMinute(_ date: Date) -> Int32 {
+        Int32(((date.timeIntervalSince1970 - unobservedSeconds) / 60).rounded(.down))
+    }
+
+    private static func append(_ bytes: UInt64, at date: Date, minute: Int32, to entry: inout Series) {
         let megabytes = Float(Double(bytes) / 1_048_576)
         let time = Float(date.timeIntervalSince(entry.origin))
         // Drop before appending: appending to a full ring would double its
@@ -216,8 +232,7 @@ public struct MemberTrendStore: Sendable {
         }
         entry.fine.append(FineSample(time: time, megabytes: megabytes))
 
-        let minute = Int32((date.timeIntervalSince1970 / 60).rounded(.down))
-        if let last = entry.coarse.last, last.minute == minute {
+        if let last = entry.coarse.last, last.minute >= minute {
             var bucket = last
             bucket.minimum = min(bucket.minimum, megabytes)
             bucket.maximum = max(bucket.maximum, megabytes)

@@ -62,3 +62,36 @@ final class SleepIdlenessTests: XCTestCase {
         XCTAssertFalse(assessment.facts.contains { $0.hasPrefix("no CPU use") })
     }
 }
+
+/// A leak's rate is per minute awake: memory does not move while the Mac sleeps.
+final class SleepTrendTests: XCTestCase {
+    private func leaking(_ megabytes: Double, at date: Date) -> ProcessMetrics {
+        IntelligenceFixture.process(pid: 710, name: "node", megabytes: megabytes, started: Date(timeIntervalSince1970: 1_000),
+                                    date: date)
+    }
+
+    func testALeakKeepsItsRateAcrossASleep() {
+        var store = MemberTrendStore()
+        var date = Date(timeIntervalSince1970: 3_000_000)
+        var megabytes = 400.0
+        var step = FamilyTrendStep(total: 0, historyShift: 0, newestMeasurement: nil, longTerm: .none)
+        func tick() {
+            step = store.advance(familyKey: "node", members: [leaking(megabytes, at: date)], now: date)
+            date += 20
+            megabytes += 8.0 / 3
+        }
+        for _ in 0..<(70 * 3) { tick() }
+        XCTAssertTrue(step.longTerm.isSlowLeak(physicalMemoryBytes: 16 << 30))
+        date += 8 * 3_600
+        var spans: [Double] = []
+        for index in 0..<(45 * 3) {
+            tick()
+            if index % 15 == 14 {
+                spans.append(step.longTerm.spanMinutes)
+                XCTAssertEqual(step.longTerm.slopeMegabytesPerMinute, 8, accuracy: 1.5, "\(index / 3) min after waking")
+                XCTAssertTrue(step.longTerm.isSlowLeak(physicalMemoryBytes: 16 << 30), "\(index / 3) min after waking")
+            }
+        }
+        XCTAssertLessThanOrEqual(spans.max() ?? 0, 90, "the span counts minutes awake, not the night")
+    }
+}
