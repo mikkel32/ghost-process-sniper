@@ -61,7 +61,7 @@ struct EnergyMonitor: Sendable {
         let builder = EnergyReportBuilder(ledger: ledger, battery: outlook, processes: processes,
                                           families: families, now: now)
         let consumers = builder.consumers()
-        let blockers = builder.blockers(assertions, consumers: consumers)
+        let blockers = builder.blockers(assertions)
         let findings = rules.evaluate(consumers: consumers, blockers: blockers, battery: outlook,
                                       classifications: builder.classifications, now: now)
         updateFamilies(families, blockers: blockers, now: now)

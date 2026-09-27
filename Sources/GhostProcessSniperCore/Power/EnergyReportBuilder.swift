@@ -97,7 +97,7 @@ struct EnergyReportBuilder {
         return Array(result.prefix(Self.consumerLimit))
     }
 
-    func blockers(_ assertions: [SleepAssertion], consumers: [EnergyConsumer]) -> [SleepBlocker] {
+    func blockers(_ assertions: [SleepAssertion]) -> [SleepBlocker] {
         var groupByPID: [Int32: String] = [:]
         for (key, group) in ledger.groups { for pid in group.pids { groupByPID[pid] = key } }
         var byKey: [String: SleepBlocker] = [:]
