@@ -1,0 +1,706 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghost Process Sniper — the menu-bar radar for your Mac's runaway processes</title>
+<meta name="description" content="A free, open-source macOS menu-bar app that finds runaway, leaking, duplicated and forgotten processes, watches for attack-shaped activity, shows real CPU and GPU temperatures, and stops things safely. Offline, no admin rights.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#070b16">
+<link rel="canonical" href="{{site_url}}">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Ghost Process Sniper">
+<meta property="og:title" content="Ghost Process Sniper">
+<meta property="og:description" content="The menu-bar radar for runaway, leaking and forgotten processes on your Mac. Free, open source, offline.">
+<meta property="og:url" content="{{site_url}}">
+<meta property="og:image" content="{{site_url}}social-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Ghost Process Sniper: the menu-bar radar for runaway, leaking and forgotten processes on your Mac.">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Ghost Process Sniper",
+  "operatingSystem": "macOS 26 or later",
+  "applicationCategory": "UtilitiesApplication",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "license": "https://opensource.org/licenses/MIT",
+  "downloadUrl": "{{download_url}}",
+  "softwareVersion": "{{version}}",
+  "codeRepository": "{{repository_url}}"
+}
+</script>
+<style>
+:root {
+  --bg: #070b16;
+  --bg-raised: #0c1426;
+  --panel: rgba(255, 255, 255, 0.035);
+  --panel-strong: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text: #eaf0f8;
+  --muted: #a3b0c4;
+  --faint: #7c8aa2;
+  --brand: #29b8e0;
+  --brand-bright: #6fd6f2;
+  --brand-2: #616bfa;
+  --warn: #ff9e33;
+  --hot: #ff545c;
+  --ok: #3ddc97;
+  --radius: 18px;
+  --wrap: 1120px;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background:
+    radial-gradient(1100px 700px at 12% -8%, rgba(97, 107, 250, 0.20), transparent 60%),
+    radial-gradient(900px 600px at 92% 4%, rgba(41, 184, 224, 0.13), transparent 60%),
+    var(--bg);
+  color: var(--text);
+  font: 17px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+a { color: var(--brand-bright); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+img { max-width: 100%; height: auto; display: block; }
+code, kbd, pre { font-family: var(--mono); font-size: 0.88em; }
+:not(pre) > code {
+  background: var(--panel-strong); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.1em 0.38em; white-space: nowrap;
+}
+kbd {
+  background: var(--panel-strong); border: 1px solid var(--border-strong); border-bottom-width: 2px;
+  border-radius: 6px; padding: 0.05em 0.4em; font-size: 0.85em;
+}
+:focus-visible { outline: 2px solid var(--brand-bright); outline-offset: 3px; border-radius: 6px; }
+.skip { position: absolute; left: -9999px; }
+.skip:focus { left: 16px; top: 12px; z-index: 100; background: var(--bg-raised); padding: 8px 14px; }
+.wrap { width: min(var(--wrap), 100% - 40px); margin-inline: auto; }
+
+/* Header */
+.site-header {
+  position: sticky; top: 0; z-index: 50;
+  backdrop-filter: saturate(160%) blur(18px); -webkit-backdrop-filter: saturate(160%) blur(18px);
+  background: rgba(7, 11, 22, 0.72); border-bottom: 1px solid var(--border);
+}
+.site-header .wrap { display: flex; align-items: center; gap: 24px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; }
+.brand:hover { text-decoration: none; }
+.brand img { width: 30px; height: 30px; }
+.site-nav { display: flex; gap: 22px; margin-left: auto; font-size: 15px; }
+.site-nav a { color: var(--muted); }
+.site-nav a:hover { color: var(--text); text-decoration: none; }
+.site-header .header-download { font-size: 14px; padding: 7px 16px; box-shadow: none; }
+
+/* Buttons */
+.button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 14px 24px; border-radius: 999px; font-weight: 650; font-size: 17px;
+  border: 1px solid transparent; transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.button:hover { text-decoration: none; transform: translateY(-1px); }
+.button svg { width: 20px; height: 20px; flex: none; }
+.button-primary {
+  color: #041620;
+  background: linear-gradient(180deg, #5fd3f3, #22a9d3);
+  box-shadow: 0 10px 30px -10px rgba(41, 184, 224, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+.button-primary:hover { box-shadow: 0 14px 38px -10px rgba(41, 184, 224, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.5); }
+.button-secondary { color: var(--text); background: var(--panel-strong); border-color: var(--border-strong); }
+.button-secondary:hover { background: rgba(255, 255, 255, 0.1); }
+
+/* Hero */
+.hero { padding: 72px 0 40px; text-align: center; }
+.radar { position: relative; width: 208px; height: 208px; margin: 0 auto 30px; }
+.radar img { position: relative; width: 168px; height: 168px; margin: 20px; filter: drop-shadow(0 18px 40px rgba(41, 184, 224, 0.35)); }
+.radar::before, .radar::after {
+  content: ""; position: absolute; inset: -46px; border-radius: 50%;
+  border: 1px solid rgba(41, 184, 224, 0.22);
+}
+.radar::after { inset: -96px; border-color: rgba(41, 184, 224, 0.10); }
+.sweep {
+  position: absolute; inset: -96px; border-radius: 50%;
+  background: conic-gradient(from 0deg, rgba(41, 184, 224, 0.20), rgba(41, 184, 224, 0) 70deg, transparent 360deg);
+  -webkit-mask: radial-gradient(circle, #000 55%, transparent 71%); mask: radial-gradient(circle, #000 55%, transparent 71%);
+  animation: sweep 7s linear infinite;
+}
+@keyframes sweep { to { transform: rotate(360deg); } }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px; margin-bottom: 22px;
+  padding: 6px 14px 6px 8px; border-radius: 999px; font-size: 14px; font-weight: 550;
+  color: var(--text); background: rgba(41, 184, 224, 0.10); border: 1px solid rgba(41, 184, 224, 0.35);
+}
+.eyebrow:hover { text-decoration: none; background: rgba(41, 184, 224, 0.16); }
+.eyebrow .tag { background: var(--brand); color: #041620; border-radius: 999px; padding: 1px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+h1, h2, h3 { font-family: var(--display); letter-spacing: -0.022em; line-height: 1.1; margin: 0; }
+h1 { font-size: clamp(2.5rem, 6.2vw, 4.4rem); font-weight: 750; max-width: 20ch; margin-inline: auto; text-wrap: balance; }
+h1 .accent { white-space: nowrap; }
+h1 .accent {
+  background: linear-gradient(92deg, #7fe0f7 0%, #29b8e0 45%, #8a92ff 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.lead { font-size: clamp(1.1rem, 2vw, 1.3rem); color: var(--muted); max-width: 44em; margin: 22px auto 0; }
+.cta { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin-top: 34px; }
+.meta { margin-top: 16px; color: var(--faint); font-size: 14px; }
+.meta strong { color: var(--muted); font-weight: 550; }
+.not-mac { display: none; margin: 14px auto 0; max-width: 34em; font-size: 14px; color: var(--warn); }
+.shot {
+  position: relative; margin: 64px auto 0; border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 40px 120px -30px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(0, 0, 0, 0.4), 0 0 90px -20px rgba(41, 184, 224, 0.28);
+}
+
+/* Sections */
+section { padding: 96px 0; }
+.section-head { max-width: 46em; margin-bottom: 44px; }
+.section-head.center { margin-inline: auto; text-align: center; }
+.kicker { font-size: 13px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--brand); margin-bottom: 14px; }
+h2 { font-size: clamp(1.9rem, 3.6vw, 2.8rem); font-weight: 720; text-wrap: balance; }
+.section-head p { color: var(--muted); font-size: 1.12rem; margin: 16px 0 0; }
+.divider { border: 0; height: 1px; margin: 0; background: linear-gradient(90deg, transparent, var(--border-strong), transparent); }
+
+/* Pain points */
+.pains { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.pain { padding: 22px; border-radius: var(--radius); background: var(--panel); border: 1px solid var(--border); }
+.pain p { margin: 12px 0 0; color: var(--text); font-weight: 550; line-height: 1.45; }
+.pain .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 14px var(--warn); }
+.pain:nth-child(2) .dot { background: var(--hot); box-shadow: 0 0 14px var(--hot); }
+.pain:nth-child(3) .dot { background: var(--brand-2); box-shadow: 0 0 14px var(--brand-2); }
+.pain:nth-child(4) .dot { background: var(--brand); box-shadow: 0 0 14px var(--brand); }
+.answer { margin: 34px auto 0; max-width: 46em; text-align: center; font-size: 1.2rem; color: var(--muted); }
+.answer strong { color: var(--text); }
+
+/* Feature grid */
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.card {
+  padding: 26px; border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--border);
+}
+.card h3 { font-size: 1.12rem; font-weight: 650; letter-spacing: -0.01em; margin-top: 16px; }
+.card p { margin: 8px 0 0; color: var(--muted); font-size: 0.98rem; line-height: 1.55; }
+.icon {
+  width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
+  background: rgba(41, 184, 224, 0.12); border: 1px solid rgba(41, 184, 224, 0.28); color: var(--brand-bright);
+}
+.icon svg { width: 22px; height: 22px; }
+.icon.warm { background: rgba(255, 158, 51, 0.12); border-color: rgba(255, 158, 51, 0.3); color: #ffbd70; }
+.icon.hot { background: rgba(255, 84, 92, 0.12); border-color: rgba(255, 84, 92, 0.3); color: #ff8a90; }
+.icon.violet { background: rgba(97, 107, 250, 0.14); border-color: rgba(97, 107, 250, 0.35); color: #a4aaff; }
+.icon.green { background: rgba(61, 220, 151, 0.12); border-color: rgba(61, 220, 151, 0.3); color: #7eecbb; }
+
+/* Security */
+.security {
+  background:
+    radial-gradient(800px 500px at 85% 20%, rgba(255, 84, 92, 0.10), transparent 60%),
+    radial-gradient(700px 500px at 10% 90%, rgba(97, 107, 250, 0.12), transparent 60%);
+}
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+.split.top { align-items: start; }
+.split.top .checks { margin-top: 0; }
+.checks { list-style: none; padding: 0; margin: 26px 0 0; display: grid; gap: 12px; }
+.checks li { display: grid; grid-template-columns: 22px 1fr; gap: 12px; color: var(--muted); line-height: 1.5; }
+.checks li strong { color: var(--text); font-weight: 600; }
+.checks svg { width: 20px; height: 20px; margin-top: 2px; color: var(--brand-bright); }
+.note {
+  margin-top: 26px; padding: 16px 18px; border-radius: 14px; font-size: 0.95rem; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--border);
+}
+.note strong { color: var(--text); }
+.chain {
+  display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; font-family: var(--mono); font-size: 13px;
+  padding: 8px 12px; border-radius: 10px; background: rgba(255, 84, 92, 0.08); border: 1px solid rgba(255, 84, 92, 0.3); color: #ffc1c4;
+}
+.frame { border-radius: 14px; overflow: hidden; border: 1px solid var(--border-strong); box-shadow: 0 30px 90px -30px rgba(0, 0, 0, 0.9); }
+
+/* Stopping */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; counter-reset: step; }
+.step { position: relative; padding: 28px 26px 26px; border-radius: var(--radius); background: var(--panel); border: 1px solid var(--border); }
+.step::before {
+  counter-increment: step; content: counter(step);
+  display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
+  font-weight: 700; color: #041620; background: linear-gradient(180deg, #5fd3f3, #22a9d3);
+}
+.step h3 { margin-top: 18px; font-size: 1.15rem; }
+.step p { margin: 8px 0 0; color: var(--muted); font-size: 0.98rem; }
+.after { margin-top: 18px; color: var(--muted); font-size: 0.98rem; max-width: 60em; }
+
+/* Privacy */
+.privacy-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 16px; }
+.stat { padding: 24px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--panel); }
+.stat b { display: block; font-family: var(--display); font-size: 2.2rem; font-weight: 750; letter-spacing: -0.03em; color: var(--text); }
+.stat span { color: var(--muted); font-size: 0.95rem; }
+
+/* Install */
+.install { display: grid; grid-template-columns: 1.05fr 1fr; gap: 56px; align-items: start; }
+.numbered { counter-reset: n; list-style: none; padding: 0; margin: 0; display: grid; gap: 18px; }
+.numbered > li { counter-increment: n; display: grid; grid-template-columns: 34px 1fr; gap: 14px; color: var(--muted); }
+.numbered > li::before {
+  content: counter(n); display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
+  font-weight: 700; font-size: 15px; color: var(--brand-bright); border: 1px solid rgba(41, 184, 224, 0.45); background: rgba(41, 184, 224, 0.08);
+}
+.numbered strong { color: var(--text); }
+details {
+  margin-top: 14px; border-radius: 14px; border: 1px solid var(--border); background: var(--panel);
+}
+details[open] { background: var(--panel-strong); }
+summary {
+  cursor: pointer; list-style: none; padding: 16px 44px 16px 18px; font-weight: 600; position: relative;
+}
+summary::-webkit-details-marker { display: none; }
+summary::after {
+  content: ""; position: absolute; right: 20px; top: 50%; width: 8px; height: 8px; margin-top: -6px;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform 0.2s;
+}
+details[open] summary::after { transform: rotate(-135deg); margin-top: -2px; }
+details .body { padding: 0 18px 18px; color: var(--muted); }
+details .body p { margin: 0 0 12px; }
+details .body p:last-child { margin-bottom: 0; }
+.code {
+  display: flex; align-items: flex-start; margin: 12px 0 0; border-radius: 12px; background: #050912; border: 1px solid var(--border);
+}
+.code pre { flex: 1; min-width: 0; margin: 0; padding: 14px 16px; overflow-x: auto; color: #d6e4f5; line-height: 1.55; }
+.copy {
+  flex: none; margin: 9px 9px 0 0; font: 600 12px var(--sans); color: var(--muted); cursor: pointer;
+  background: var(--panel-strong); border: 1px solid var(--border-strong); border-radius: 8px; padding: 5px 9px;
+}
+.copy:hover { color: var(--text); }
+.hash { font-family: var(--mono); font-size: 13px; word-break: break-all; color: var(--text); }
+.installer { border-radius: 14px; overflow: hidden; border: 1px solid var(--border-strong); box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.9); }
+.caption { margin-top: 12px; font-size: 14px; color: var(--faint); text-align: center; }
+
+/* Open source */
+.source {
+  padding: 48px; border-radius: 26px; border: 1px solid var(--border-strong);
+  background:
+    radial-gradient(600px 300px at 100% 0%, rgba(41, 184, 224, 0.14), transparent 70%),
+    radial-gradient(500px 300px at 0% 100%, rgba(97, 107, 250, 0.16), transparent 70%),
+    var(--bg-raised);
+  display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: center;
+}
+.links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.links a {
+  font-size: 15px; font-weight: 550; color: var(--text); padding: 8px 14px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--panel);
+}
+.links a:hover { text-decoration: none; background: var(--panel-strong); }
+
+/* FAQ */
+.faq { max-width: 820px; margin-inline: auto; }
+.faq details { margin-top: 10px; }
+
+/* Closing */
+.closing { text-align: center; padding-bottom: 110px; }
+.closing img { width: 96px; height: 96px; margin: 0 auto 24px; }
+
+footer { border-top: 1px solid var(--border); padding: 36px 0 48px; color: var(--faint); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; justify-content: space-between; }
+footer nav { display: flex; flex-wrap: wrap; gap: 20px; }
+footer a { color: var(--muted); }
+
+@media (max-width: 960px) {
+  .grid, .steps { grid-template-columns: 1fr 1fr; }
+  .pains, .privacy-grid, .stats { grid-template-columns: 1fr 1fr; }
+  .split, .install, .source { grid-template-columns: 1fr; gap: 36px; }
+  .source { padding: 32px; }
+}
+@media (max-width: 720px) {
+  .site-nav { display: none; }
+  .header-download { margin-left: auto; }
+  section { padding: 72px 0; }
+  .hero { padding-top: 56px; }
+}
+@media (max-width: 560px) {
+  body { font-size: 16px; }
+  .wrap { width: calc(100% - 32px); }
+  .grid, .steps, .pains, .privacy-grid, .stats { grid-template-columns: 1fr; }
+  .radar { width: 160px; height: 160px; }
+  .radar img { width: 128px; height: 128px; }
+  .cta .button { width: 100%; }
+  .brand span { font-size: 15px; }
+  .source { padding: 24px; border-radius: 20px; }
+  .shot { margin-top: 44px; border-radius: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .sweep { animation: none; }
+  .button { transition: none; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Ghost Process Sniper, back to top">
+      <img src="favicon.png" alt="" width="30" height="30">
+      <span>Ghost Process Sniper</span>
+    </a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="#features">Features</a>
+      <a href="#security">Security</a>
+      <a href="#privacy">Privacy</a>
+      <a href="#install">Install</a>
+      <a href="{{repository_url}}">GitHub</a>
+    </nav>
+    <a class="button button-primary header-download" href="{{download_url}}">Download</a>
+  </div>
+</header>
+
+<main id="main">
+  <div class="hero" id="top">
+    <div class="wrap">
+      <div class="radar" aria-hidden="true">
+        <div class="sweep"></div>
+        <img src="assets/icon.png" alt="" width="168" height="168">
+      </div>
+      <a class="eyebrow" href="#security"><span class="tag">NEW</span> Sentinel security watch in 2.1 →</a>
+      <h1>Find the process that's <span class="accent">heating your Mac.</span></h1>
+      <p class="lead">Ghost Process Sniper is a menu-bar radar for runaway, leaking, duplicated and forgotten processes — and for anything that looks like an attack. It tells you in plain language what's wrong, shows the evidence, and stops things only when you say so.</p>
+      <div class="cta">
+        <a class="button button-primary" href="{{download_url}}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>
+          Download for Mac
+        </a>
+        <a class="button button-secondary" href="{{repository_url}}">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.56-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+          View the source
+        </a>
+      </div>
+      <p class="meta"><strong>{{download_meta}}</strong><br>macOS 26 Tahoe or later · Apple silicon and Intel · MIT licensed</p>
+      <p class="not-mac" id="not-mac">Ghost Process Sniper is a Mac app. Open this page on your Mac to download it.</p>
+      <div class="shot">
+        <img src="assets/screenshot-overview.png" width="2000" height="998" alt="The Ghost Process Sniper console: one recommended action with a Quit button, a risk queue, a warming-up queue, and summary cards for families, leaks, duplicates and memory.">
+      </div>
+    </div>
+  </div>
+
+  <section aria-labelledby="familiar">
+    <div class="wrap">
+      <div class="section-head center">
+        <div class="kicker">Sound familiar?</div>
+        <h2 id="familiar">Something is always running that shouldn't be.</h2>
+      </div>
+      <div class="pains">
+        <div class="pain"><div class="dot"></div><p>A dev server from yesterday still holds port 3000.</p></div>
+        <div class="pain"><div class="dot"></div><p>An Electron helper quietly grows by 50 MB a minute.</p></div>
+        <div class="pain"><div class="dot"></div><p>Three copies of the same watcher, from terminals you closed.</p></div>
+        <div class="pain"><div class="dot"></div><p>The fans spin up, and nothing tells you why.</p></div>
+      </div>
+      <p class="answer">Ghost watches every process you own, groups helpers into <strong>families</strong>, learns what normal looks like, and tells you — with the evidence — <strong>which ones deserve attention</strong>.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <section id="features" aria-labelledby="features-title">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">Features</div>
+        <h2 id="features-title">Everything it notices, explained in plain language.</h2>
+        <p>Every verdict comes with the numbers behind it, and every number comes from your Mac — never an estimate dressed up as a measurement.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12 18.4 5.6"/></svg></div>
+          <h3>Menu-bar radar</h3>
+          <p>A tiny scope that changes shape and color with the state. Click it for one verdict, the culprits, and a Quick Stop for the ones worth stopping.</p>
+        </article>
+        <article class="card">
+          <div class="icon hot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17 9 11l4 4 8-8"/><path d="M15 7h6v6"/></svg></div>
+          <h3>Leaks and runaways</h3>
+          <p>CPU and memory for every process, every scan. Slow leaks are caught from 90 minutes of history and the growing helper is named. A long compile is not a "runaway".</p>
+        </article>
+        <article class="card">
+          <div class="icon violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="5" rx="1.5"/><rect x="3" y="16" width="6" height="5" rx="1.5"/><rect x="15" y="16" width="6" height="5" rx="1.5"/><path d="M12 8v4M6 16v-2h12v2"/></svg></div>
+          <h3>Process families</h3>
+          <p>You see "Slack", not forty anonymous PIDs. Apps, helpers, dev servers and their workers are grouped; language servers and databases get their own family.</p>
+        </article>
+        <article class="card">
+          <div class="icon warm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a7 7 0 0 0-7 7v11l2.3-1.6L9.7 21l2.3-1.6 2.3 1.6 2.4-1.6L19 21V10a7 7 0 0 0-7-7Z"/><circle cx="9.5" cy="10.5" r="1" fill="currentColor"/><circle cx="14.5" cy="10.5" r="1" fill="currentColor"/></svg></div>
+          <h3>Forgotten processes</h3>
+          <p>Judged on real evidence: a job that outlived its terminal, half an hour without CPU, a deleted working directory, a port held while idle.</p>
+        </article>
+        <article class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6.5A2.5 2.5 0 0 0 13.5 4h-7A2.5 2.5 0 0 0 4 6.5v7A2.5 2.5 0 0 0 6.5 16H8"/></svg></div>
+          <h3>Duplicate finder</h3>
+          <p>Spots independently started copies of the same work, says which one to keep and why, and stops the orphaned extras.</p>
+        </article>
+        <article class="card">
+          <div class="icon hot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0Z"/><path d="M12 9v7"/></svg></div>
+          <h3>Real temperatures</h3>
+          <p>Measured CPU and GPU Celsius from hardware sensors — never invented per-app temperatures — plus the app or job actually doing the work.</p>
+        </article>
+        <article class="card">
+          <div class="icon violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg></div>
+          <h3>Search everything</h3>
+          <p>Every running process by name, command, path, PID or port. Typo-tolerant, with filters like <code>port:3000</code>, <code>cpu&gt;20</code> and <code>is:leaking</code>.</p>
+        </article>
+        <article class="card">
+          <div class="icon warm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></svg></div>
+          <h3>Incident history</h3>
+          <p>A local timeline of leaks, spikes and runaways — one entry per episode — so the apps that keep misbehaving stand out.</p>
+        </article>
+        <article class="card">
+          <div class="icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></div>
+          <h3>Rules</h3>
+          <p>Notify, highlight, snooze, ignore, or suggest stopping matching apps and commands — so the radar learns what you care about.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="security" class="security" aria-labelledby="security-title">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">New in 2.1 · Sentinel</div>
+        <h2 id="security-title">A security watch that shows its work.</h2>
+        <p>Sentinel looks at every process for the shapes attacks take on a Mac, and explains each finding with the chain that launched it, the exact evidence and one next step.</p>
+      </div>
+      <div class="split top">
+        <ul class="checks">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg><span><strong>Browsers, mail and chat apps starting shells</strong>, and pasted download-and-run commands — the "fake CAPTCHA" trick.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg><span><strong>Hidden payloads and fake password dialogs</strong>, keychain, browser-cookie and crypto-wallet theft.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg><span><strong>Reverse shells, backdoor listeners, tunnels and miners.</strong></span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg><span><strong>Impostors</strong>: system names in the wrong folder or spelled with look-alike letters, apps disguised as documents, unsigned programs in hidden folders.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg><span><strong>New launch agents and daemons</strong> the moment they're written, and <strong>who is using the microphone</strong> or camera.</span></li>
+        </ul>
+        <div>
+          <p style="margin:0 0 6px;color:var(--faint);font-size:14px">A browser that starts a shell to run a downloaded script reads as:</p>
+          <p style="margin:0"><span class="chain">Google Chrome <span aria-hidden="true">›</span> zsh <span aria-hidden="true">›</span> curl … | sh</span></p>
+          <div class="note"><strong>Findings never act on their own.</strong> Browsers and terminals are watched with kernel process events, so even a command that runs for 200 ms is seen with its arguments — at no cost while nothing starts. Sentinel isn't an antivirus: it complements the protection built into macOS by showing you clearly what's running.</div>
+        </div>
+      </div>
+      <div class="frame" style="margin-top:48px">
+        <img src="assets/screenshot-security.png" width="2000" height="799" loading="lazy" alt="The Security page: a shield reporting one suspicious process, microphone and camera status, and a finding that shows its launch chain, the decoded-payload evidence and the full command, with Stop, Reveal and Copy Details buttons.">
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="stopping-title">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">Careful stopping</div>
+        <h2 id="stopping-title">Stops that don't lose your work.</h2>
+        <p>Every stop knows what it's interrupting — apps get to save, databases get to flush — and nothing that can lose data is forced unless you allow it.</p>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <h3>Preview</h3>
+          <p>See exactly which processes would stop, what each one is doing, and the risks. Targets are pinned by PID and start time, so a recycled PID is never hit.</p>
+        </div>
+        <div class="step">
+          <h3>Confirm</h3>
+          <p>Nothing stops until you press <kbd>⌘</kbd><kbd>↩</kbd>. Apps are asked to quit like <kbd>⌘</kbd><kbd>Q</kbd>; dev servers get Ctrl-C; databases get their own shutdown signal.</p>
+        </div>
+        <div class="step">
+          <h3>Verify</h3>
+          <p>Afterwards it says by name what exited, what needed force, and whether each port the workload held is really free.</p>
+        </div>
+      </div>
+      <p class="after">It offers to stop the <code>launchd</code> service or supervisor (like <code>brew services</code> or pm2) that would restart the process, catches children born mid-stop — and it can never stop itself, your terminal, <code>WindowServer</code>, <code>launchd</code> or processes macOS marks as system processes.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <section id="privacy" aria-labelledby="privacy-title">
+    <div class="wrap">
+      <div class="section-head center">
+        <div class="kicker">Private by design</div>
+        <h2 id="privacy-title">Nothing leaves your Mac. Ever.</h2>
+        <p>There is no networking code in the app at all — not for telemetry, analytics or update checks.</p>
+      </div>
+      <div class="privacy-grid">
+        <article class="card">
+          <div class="icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M5 12.5a10 10 0 0 1 5-3.2M19 12.5a10 10 0 0 0-3.4-2.6M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/><path d="M3 3l18 18"/></svg></div>
+          <h3>No network access</h3>
+          <p>No telemetry, no analytics, no update pings, no accounts.</p>
+        </article>
+        <article class="card">
+          <div class="icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 7.6-1.7"/></svg></div>
+          <h3>No admin rights</h3>
+          <p>No privileged helper, kernel extension or Full Disk Access. Sensor reads are read-only.</p>
+        </article>
+        <article class="card">
+          <div class="icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></div>
+          <h3>Your processes only</h3>
+          <p>It can only signal processes owned by you, and only after you confirm.</p>
+        </article>
+        <article class="card">
+          <div class="icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/></svg></div>
+          <h3>Local data</h3>
+          <p>Settings and history live in one SQLite file on your Mac. Sentinel's launch feed never touches the disk.</p>
+        </article>
+      </div>
+      <div class="stats">
+        <div class="stat"><b>~1%</b><span>of one core while it sits in the menu bar</span></div>
+        <div class="stat"><b>0</b><span>network connections, ever</span></div>
+        <div class="stat"><b>880+</b><span>automated tests run on every change</span></div>
+        <div class="stat"><b>2 min</b><span>to build it yourself from source</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" aria-labelledby="install-title">
+    <div class="wrap install">
+      <div>
+        <div class="kicker">Install</div>
+        <h2 id="install-title">Up and running in a minute.</h2>
+        <ol class="numbered" style="margin-top:30px">
+          <li><span><strong><a href="{{download_url}}">Download the disk image</a></strong> — one universal app for Apple silicon and Intel Macs running macOS 26 Tahoe or later.</span></li>
+          <li><span><strong>Open it and drag Ghost Process Sniper into Applications.</strong></span></li>
+          <li><span><strong>Open it from Applications.</strong> It lives in the menu bar (there's no Dock icon); choose <em>Open Dashboard</em> for the full console.</span></li>
+        </ol>
+        <details open>
+          <summary>macOS says "Apple could not verify…" — what now?</summary>
+          <div class="body">
+            <p>Ghost Process Sniper is free and open source, and it isn't notarized by Apple (that needs a paid developer account), so macOS asks you to confirm the first launch — once:</p>
+            <p>Click <strong>Done</strong>, open <strong>System Settings › Privacy &amp; Security</strong>, scroll to <em>Security</em>, click <strong>Open Anyway</strong> next to Ghost Process Sniper, and confirm with your password or Touch ID.</p>
+            <p>Prefer the terminal? After copying the app to Applications:</p>
+            <div class="code"><pre><code>xattr -dr com.apple.quarantine "/Applications/Ghost Process Sniper.app"</code></pre></div>
+          </div>
+        </details>
+        <details>
+          <summary>Verify your download</summary>
+          <div class="body">
+            <!--sha256--><p>The SHA-256 of <code>{{dmg_name}}</code> is</p>
+            <p class="hash">{{sha256}}</p><!--/sha256-->
+            <p>Check it with:</p>
+            <div class="code"><pre><code>shasum -a 256 ~/Downloads/GhostProcessSniper-*.dmg</code></pre></div>
+            <p style="margin-top:14px">Every release is built from its tagged source by GitHub Actions, which publishes a signed build-provenance attestation. With the <a href="https://cli.github.com">GitHub CLI</a> you can prove the file came from that build:</p>
+            <div class="code"><pre><code>gh attestation verify ~/Downloads/GhostProcessSniper-*.dmg --repo mikkel32/ghost-process-sniper</code></pre></div>
+          </div>
+        </details>
+      </div>
+      <div>
+        <div class="installer">
+          <img src="assets/installer.png" width="1320" height="896" loading="lazy" alt="The installer window: drag Ghost Process Sniper onto the Applications folder.">
+        </div>
+        <p class="caption">The installer: drag the app onto Applications.</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="source-title">
+    <div class="wrap">
+      <div class="source">
+        <div>
+          <div class="kicker">Open source · MIT</div>
+          <h2 id="source-title">Read every line. Build it yourself.</h2>
+          <p style="color:var(--muted);margin:16px 0 0">Ghost Process Sniper is written in Swift and SwiftUI, and all of it is on GitHub — the sampling engine, the detection rules, the stop logic and the release pipeline that builds the download.</p>
+          <div class="links">
+            <a href="{{repository_url}}">Source code</a>
+            <a href="{{release_url}}">Release notes</a>
+            <a href="{{repository_url}}/blob/main/Docs/User-Guide.md">User guide</a>
+            <a href="{{repository_url}}/blob/main/Docs/Sentinel.md">How Sentinel works</a>
+            <a href="{{repository_url}}/issues/new/choose">Report a bug</a>
+          </div>
+        </div>
+        <div>
+          <p style="margin:0;color:var(--muted)">With macOS 26 and Xcode 26:</p>
+          <div class="code"><pre><code>git clone https://github.com/mikkel32/ghost-process-sniper.git
+cd ghost-process-sniper
+Scripts/dev.sh run</code></pre></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="faq" aria-labelledby="faq-title" style="padding-top:24px">
+    <div class="wrap">
+      <div class="section-head center" style="margin-bottom:28px">
+        <h2 id="faq-title">Questions</h2>
+      </div>
+      <details>
+        <summary>Is it really free?</summary>
+        <div class="body"><p>Yes. It's MIT licensed, with no accounts, subscriptions, ads or in-app purchases.</p></div>
+      </details>
+      <details>
+        <summary>Which Macs does it run on?</summary>
+        <div class="body"><p>macOS 26 Tahoe or later, on Apple silicon or Intel. Temperatures come from verified sensor maps on M1, M2 and Intel Macs, from catalog maps on M3 and M4, and from sensors discovered on the Mac for M5 and later; the app always says which.</p></div>
+      </details>
+      <details>
+        <summary>Could it stop something important by accident?</summary>
+        <div class="body"><p>Every stop starts with a preview and needs <kbd>⌘</kbd><kbd>↩</kbd> to confirm — Return alone never stops anything. It can only signal your own processes, and a protection floor refuses to stop Ghost itself, the terminal it runs in, <code>loginwindow</code>, <code>WindowServer</code>, <code>launchd</code> and system processes.</p></div>
+      </details>
+      <details>
+        <summary>Is Sentinel an antivirus?</summary>
+        <div class="body"><p>No. It doesn't scan files or quarantine anything. It watches running processes for the shapes attacks take and explains what it sees, so you can decide. Keep macOS's own protections on; Sentinel adds visibility, not a replacement.</p></div>
+      </details>
+      <details>
+        <summary>How do I update?</summary>
+        <div class="body"><p>Download the new version, quit Ghost from its menu, and replace the app in Applications. Settings and history are kept. Because the app never goes online, it won't tell you about updates — <a href="{{repository_url}}">watch the repository</a> (Watch › Custom › Releases) to be notified.</p></div>
+      </details>
+      <details>
+        <summary>How do I uninstall it?</summary>
+        <div class="body"><p>If you turned on <em>Launch Ghost Process Sniper at login</em>, turn it off in Settings first. Then quit the app, drag it from Applications to the Trash, and, if you want its history gone too, delete <code>~/Library/Application Support/Ghost Process Sniper</code>.</p></div>
+      </details>
+    </div>
+  </section>
+
+  <section class="closing" aria-labelledby="closing-title">
+    <div class="wrap">
+      <img src="assets/icon.png" alt="" width="96" height="96">
+      <h2 id="closing-title">Give your Mac a radar.</h2>
+      <div class="cta">
+        <a class="button button-primary" href="{{download_url}}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>
+          Download for Mac
+        </a>
+      </div>
+      <p class="meta"><strong>{{download_meta}}</strong><br>macOS 26 Tahoe or later · Apple silicon and Intel</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 Mikkel Mynderup · MIT License · This page uses no cookies and loads nothing from other sites.</span>
+    <nav aria-label="Project">
+      <a href="{{repository_url}}">GitHub</a>
+      <a href="{{repository_url}}/releases">Releases</a>
+      <a href="{{repository_url}}/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="{{repository_url}}/blob/main/SECURITY.md">Security policy</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  // Copy buttons for command blocks.
+  document.querySelectorAll(".code").forEach(function (block) {
+    if (!navigator.clipboard) return;
+    var button = document.createElement("button");
+    button.className = "copy";
+    button.type = "button";
+    button.textContent = "Copy";
+    button.addEventListener("click", function () {
+      navigator.clipboard.writeText(block.querySelector("code").textContent).then(function () {
+        button.textContent = "Copied";
+        setTimeout(function () { button.textContent = "Copy"; }, 1600);
+      });
+    });
+    block.appendChild(button);
+  });
+  // A gentle note for visitors who aren't on a Mac.
+  var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+  var mobile = /iPhone|iPad|Android/i.test(navigator.userAgent) && !/Macintosh/i.test(navigator.userAgent);
+  if (mobile || (platform && !/mac/i.test(platform))) {
+    document.getElementById("not-mac").style.display = "block";
+  }
+</script>
+</body>
+</html>

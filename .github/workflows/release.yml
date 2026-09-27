@@ -1,0 +1,88 @@
+name: Release
+
+# Pushing a tag vX.Y.Z builds the universal disk image from that tag, attests its build
+# provenance, and opens a draft GitHub release with the image, its checksum and notes from
+# CHANGELOG.md. Publishing the draft is a person's decision (see Docs/Releasing.md).
+# Run it by hand to build and attest an image without creating a release.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    name: Build, attest and draft
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select the newest Xcode 26
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)"
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          xcodebuild -version
+          swift --version
+
+      - name: Read the version
+        id: version
+        run: |
+          source Scripts/lib/project.sh
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$RADAR_VERSION" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match RADAR_VERSION $RADAR_VERSION in Scripts/lib/project.sh."
+            exit 1
+          fi
+          Scripts/release_notes.sh "$RADAR_VERSION" > /dev/null
+          echo "version=$RADAR_VERSION" >> "$GITHUB_OUTPUT"
+          echo "dmg=dist/release/$RADAR_PRODUCT-$RADAR_VERSION.dmg" >> "$GITHUB_OUTPUT"
+
+      - name: Architecture, build-script, unit tests, core checks, release build
+        run: Scripts/verify.sh
+
+      - name: Build the universal disk image
+        env:
+          RADAR_REQUIRE_DMG_LAYOUT: "1"
+        run: Scripts/release.sh
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ steps.version.outputs.dmg }}
+
+      - name: Keep the disk image with the run
+        uses: actions/upload-artifact@v7
+        with:
+          name: GhostProcessSniper-${{ steps.version.outputs.version }}
+          path: |
+            ${{ steps.version.outputs.dmg }}
+            ${{ steps.version.outputs.dmg }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Draft the GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          DMG: ${{ steps.version.outputs.dmg }}
+        run: |
+          Scripts/release_notes.sh "$VERSION" "$DMG.sha256" > "$RUNNER_TEMP/notes.md"
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$DMG" "$DMG.sha256" --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$GITHUB_REF_NAME" "$DMG" "$DMG.sha256" \
+              --draft --verify-tag \
+              --title "Ghost Process Sniper $VERSION" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+          fi

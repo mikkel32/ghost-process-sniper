@@ -8,6 +8,9 @@
 #   RADAR_SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" \
 #   RADAR_NOTARY_PROFILE="ghost-notary" Scripts/release.sh
 #
+# RADAR_REQUIRE_DMG_LAYOUT=1 makes a missing installer-window layout an error instead of a
+# warning; the release workflow sets it so a published image always has its artwork.
+#
 # Everything is assembled and signed in a temporary directory (iCloud Drive folders re-tag app
 # bundles with Finder info that codesign rejects); only the finished files are copied to
 # dist/release. The running app and dist/Ghost Process Sniper.app are never touched.
@@ -126,6 +129,7 @@ fi
 if [[ -f "$MOUNT/.DS_Store" ]]; then
   printf 'Installer window layout applied.\n' >&2
 else
+  [[ "${RADAR_REQUIRE_DMG_LAYOUT:-0}" != 1 ]] || fail "Finder did not save the installer window layout."
   printf 'warning: Finder did not save a window layout (Automation permission for Finder may be\n' >&2
   printf '         missing). The disk image still installs normally, with a default window.\n' >&2
 fi
