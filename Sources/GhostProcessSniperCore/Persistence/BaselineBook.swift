@@ -116,14 +116,15 @@ final class BaselineBook {
     }
 
     /// Learns one model into the staged baselines. Nothing is written.
-    func learn(from families: [ProcessFamily], at date: Date) throws {
+    func learn(from families: [ProcessFamily], at date: Date,
+               leakVelocityLimit: Double = ThresholdSettings.smart.leakVelocityMegabytesPerMinute) throws {
         let candidates = updateCandidates(from: families)
         let existing = try baselines(for: candidates.map(\.signature.id), at: date)
         let learner = FamilyBaselineLearner()
         for family in candidates {
             let signatureID = family.signature.id
             let previous = existing[signatureID]
-            let baseline = learner.updated(existing: previous, family: family, now: date)
+            let baseline = learner.updated(existing: previous, family: family, now: date, leakVelocityLimit: leakVelocityLimit)
             guard baseline != previous else { continue }
             staged[signatureID] = baseline
             if currentDirty(signatureID) == nil {
