@@ -68,12 +68,13 @@ public struct OverviewThermalBandTracker: Sendable {
 }
 
 public enum OverviewLayoutPlan {
-    /// The verdict and the queues stay above the fold; thermals move up to
-    /// second only while the Mac is genuinely hot.
+    /// The verdict and the queues stay above the fold, the Live Radar right
+    /// after them; thermals move up to second only while the Mac is
+    /// genuinely hot.
     public static func sections(thermal: OverviewThermalBand) -> [OverviewSectionID] {
         switch thermal {
-        case .normal: [.verdict, .queues, .metrics, .thermals, .analytics]
-        case .elevated: [.verdict, .thermals, .queues, .metrics, .analytics]
+        case .normal: [.verdict, .queues, .analytics, .metrics, .thermals]
+        case .elevated: [.verdict, .thermals, .queues, .analytics, .metrics]
         }
     }
 }

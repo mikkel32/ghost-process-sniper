@@ -19,9 +19,9 @@ The **Overview** leads with one verdict: what, if anything, needs doing. Its hea
 Below it:
 
 - **Risk Queue** and **Warming Up**: families that need attention now, and early warnings. Risk rows show their Quick Stop on hover or keyboard focus; warming rows offer it only in the context menu, because an early warning is not yet a reason to stop.
+- **Where your resources go**: the Live Radar, memory share, the memory pulse and recent incidents.
 - **Summary cards**: **Families** opens every family, **Needs review** the ones that need attention, **Leaks** the credible leaks, **Duplicates** the overlap review, and **Memory** the processes ordered by footprint.
 - **Heat & CPU activity**: temperatures and the work behind them (see [Temperatures](#temperatures)). It moves up to second place, under the verdict, only while macOS reports serious throttling or the hottest sensor has stayed at 90 °C or more for 30 seconds, and moves back after a calm minute.
-- **Where your resources go**: the Live Radar, memory share, the memory pulse and recent incidents.
 
 ### Reading the Live Radar
 

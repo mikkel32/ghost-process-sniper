@@ -12,6 +12,7 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 - A contacts list beside the scope names the same families worst first; pointing at a row lights its blip and the other way round, with an instant callout instead of a tooltip.
 - The sweep lights each blip as it passes, on the render server. In Low Power Mode it steps at 10 frames a second instead of stopping; before, a Mac always in Low Power Mode only ever showed a frozen beam.
 - Contacts say why a family is there ("Memory footprint · 2.7 GB"). The radar costs about the same CPU as the scope it replaced.
+- The Live Radar follows the Risk Queue on the Overview, so it starts on screen instead of below the summary cards and temperatures.
 
 ### Stopping
 - Asking an app to quit (⌘Q) now confirms it is still the same process right before the request goes out, on the main thread, instead of before waiting for it; a process ID reused in between can never receive the request.

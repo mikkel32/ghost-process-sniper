@@ -5,9 +5,11 @@ import XCTest
 final class OverviewLayoutPlanTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 50_000)
 
+    /// The Live Radar follows the queues it draws, so it starts on screen
+    /// instead of below the tiles and thermals.
     func testQueuesStayAboveThermalsUntilTheMacIsHot() {
-        XCTAssertEqual(OverviewLayoutPlan.sections(thermal: .normal), [.verdict, .queues, .metrics, .thermals, .analytics])
-        XCTAssertEqual(OverviewLayoutPlan.sections(thermal: .elevated), [.verdict, .thermals, .queues, .metrics, .analytics])
+        XCTAssertEqual(OverviewLayoutPlan.sections(thermal: .normal), [.verdict, .queues, .analytics, .metrics, .thermals])
+        XCTAssertEqual(OverviewLayoutPlan.sections(thermal: .elevated), [.verdict, .thermals, .queues, .analytics, .metrics])
     }
 
     func testOrdinaryHotReadingsNeverPromoteThermals() {
