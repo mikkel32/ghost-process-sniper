@@ -13,6 +13,7 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 - A download-and-run command is excused as a known installer only when the address it downloads is that installer's own https host: look-alikes such as `sh.rustup.rs.evil.example` or `sh.rustup.rs@evil.example`, and a harmless installer URL placed elsewhere in the same command, no longer hide it.
 - A command pasted into a terminal that downloads and runs code (`curl … | sh`) is caught: the shell starts it as separate processes, and Sentinel now puts the pipeline back together from its process group. The "pasted command" warning appears, and decoding on the way (`curl … | base64 -d | bash`) is Dangerous. Official installers such as rustup and Homebrew stay quiet.
 - Terminal tabs that were already open when Ghost started are watched too; before, only tabs opened afterwards were.
+- Switching microphones or plugging cameras in and out no longer piles up listeners, and a camera that comes back is watched again at once instead of after a minute.
 - Dismissed findings stop counting once they expire, and a program that runs a second command inside the same process gets its own launch-feed entry.
 
 ### Smarter detection
