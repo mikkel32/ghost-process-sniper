@@ -10,7 +10,8 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 - Names are on the scope: everything at Watch or above, anything getting worse, and the biggest while there is room, placed so they never cover each other, a blip or a ring's name. Before, every blip was an anonymous dot until you hovered it.
 - A blip's size is its memory, and a dotted streak shows where it was five minutes ago, with an arrowhead when it is getting worse or easing off.
 - A contacts list beside the scope names the same families worst first; pointing at a row lights its blip and the other way round, with an instant callout instead of a tooltip.
-- The sweep lights each blip as it passes, on the render server. In Low Power Mode the sweep rests and the scope says so, instead of showing a frozen beam.
+- The sweep lights each blip as it passes, on the render server. In Low Power Mode it steps at 10 frames a second instead of stopping; before, a Mac always in Low Power Mode only ever showed a frozen beam.
+- Contacts say why a family is there ("Memory footprint · 2.7 GB"). The radar costs about the same CPU as the scope it replaced.
 
 ### Stopping
 - Asking an app to quit (⌘Q) now confirms it is still the same process right before the request goes out, on the main thread, instead of before waiting for it; a process ID reused in between can never receive the request.

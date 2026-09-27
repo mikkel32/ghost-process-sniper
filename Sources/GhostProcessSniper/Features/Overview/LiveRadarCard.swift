@@ -26,11 +26,6 @@ struct LiveRadarCard: View {
                     .frame(height: 360)
                 LiveRadarContacts(rows: rows, history: session.radarHistory, session: session, hoveredID: $hoveredID)
             }
-            if ProcessInfo.processInfo.isLowPowerModeEnabled {
-                Label("The sweep rests in Low Power Mode; blips still move with every scan.", systemImage: "leaf")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
         }
         .frame(maxWidth: .infinity)
     }
@@ -95,8 +90,7 @@ private struct LiveRadarContactRow: View, Equatable {
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.row.title == rhs.row.title && lhs.row.statusText == rhs.row.statusText && lhs.row.level == rhs.row.level &&
-            LiveRadarStyle.memory(lhs.row.memoryBytes) == LiveRadarStyle.memory(rhs.row.memoryBytes) &&
-            lhs.row.radarSector == rhs.row.radarSector && lhs.trend == rhs.trend && lhs.isHighlighted == rhs.isHighlighted
+            detail(lhs.row) == detail(rhs.row) && lhs.trend == rhs.trend && lhs.isHighlighted == rhs.isHighlighted
     }
 
     var body: some View {
@@ -122,7 +116,7 @@ private struct LiveRadarContactRow: View, Equatable {
                     HStack(spacing: 5) {
                         // What the scope shows, not the live CPU the sidebar
                         // already has: this text changes only when the blip does.
-                        Text("\(LiveRadarStyle.memory(row.memoryBytes)) \u{00B7} \(row.radarSector.label)")
+                        Text(Self.detail(row))
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -143,7 +137,14 @@ private struct LiveRadarContactRow: View, Equatable {
         .buttonStyle(.plain)
         .onHover(perform: onHover)
         .familyRowActions(row: row, session: session)
-        .accessibilityLabel("\(row.title), \(row.statusText), \(LiveRadarStyle.memory(row.memoryBytes))\(trendText.map { ", \($0)" } ?? "")")
+        .accessibilityLabel("\(row.title), \(row.statusText), \(Self.detail(row))\(trendText.map { ", \($0)" } ?? "")")
+    }
+
+    /// Why it is there when it matters, what it is otherwise; never the
+    /// live CPU the sidebar already has.
+    nonisolated static func detail(_ row: CompactSidebarRowModel) -> String {
+        let memory = LiveRadarStyle.memory(row.memoryBytes)
+        return row.level >= .watch ? "\(row.subtitle) \u{00B7} \(memory)" : "\(memory) \u{00B7} \(row.radarSector.label)"
     }
 
     private var trendText: String? {

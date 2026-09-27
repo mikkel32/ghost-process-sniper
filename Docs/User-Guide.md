@@ -31,7 +31,8 @@ Below it:
 - **A dotted streak is where it was five minutes ago.** A streak from further out with an arrowhead toward the center means it is getting worse; an arrowhead pointing out means it is easing off. Drifting inside the Quiet ring does not count.
 - **Names**: everything at Watch or above, and anything getting worse, is named on the scope, in the margin with a line when there is no room beside it. The biggest quiet families are named while there is room.
 - **Contacts** beside the scope lists the same families worst first. Point at a row or a blip to light the other and see why it is there; click either to open the family, right-click to snooze, ignore or stop it.
-- **The sweep** lights each blip as it passes. It rests in Low Power Mode, with Reduce Motion, and while the window is covered or in the background; the blips keep moving with every scan.
+- **Contacts** say why a family is there ("Memory footprint · 2.7 GB") when it is at Watch or above, and its size and quarter otherwise.
+- **The sweep** lights each blip as it passes. In Low Power Mode it steps at 10 frames a second; it rests with Reduce Motion and while the window is covered or Ghost is in the background. The blips move with every scan either way.
 
 The levels **Stable**, **Observe**, **Review**, **Urgent** and **Measuring** summarize how much attention a family needs. A Hot or Critical level is held until the family has read lower for 20 seconds and then steps down one level at a time, so a family hovering around a threshold does not flicker.
 

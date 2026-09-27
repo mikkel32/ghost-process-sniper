@@ -3,12 +3,21 @@ import XCTest
 @testable import GhostProcessSniperCore
 
 final class RadarPresentationTests: XCTestCase {
-    func testContinuousMotionNeedsEveryVisibilityAndPowerGate() {
-        XCTAssertTrue(RadarMotionPolicy.runsContinuousMotion(reduceMotion: false, lowPower: false, inViewport: true, windowVisible: true, applicationActive: true))
-        for gate in 0..<5 {
-            XCTAssertFalse(RadarMotionPolicy.runsContinuousMotion(reduceMotion: gate == 0, lowPower: gate == 1,
-                                                                 inViewport: gate != 2, windowVisible: gate != 3, applicationActive: gate != 4))
+    func testContinuousMotionNeedsEveryVisibilityGate() {
+        XCTAssertTrue(RadarMotionPolicy.runsContinuousMotion(reduceMotion: false, inViewport: true, windowVisible: true, applicationActive: true))
+        for gate in 0..<4 {
+            XCTAssertFalse(RadarMotionPolicy.runsContinuousMotion(reduceMotion: gate == 0, inViewport: gate != 1,
+                                                                 windowVisible: gate != 2, applicationActive: gate != 3))
         }
+    }
+
+    /// Low Power Mode is always on for some people: the sweep slows to a
+    /// stepped 10 frames a second there instead of never being seen.
+    func testLowPowerSlowsTheSweepInsteadOfStoppingIt() {
+        XCTAssertNil(RadarMotionPolicy.sweepFramesPerSecond(lowPower: false), "the display's own rate")
+        let slow = RadarMotionPolicy.sweepFramesPerSecond(lowPower: true)
+        XCTAssertNotNil(slow)
+        XCTAssertLessThanOrEqual(slow ?? 60, 12)
     }
 
     func testQuietSummaryProducesNoWarningChips() {

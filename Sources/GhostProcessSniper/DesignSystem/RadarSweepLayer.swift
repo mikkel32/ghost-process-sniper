@@ -6,7 +6,8 @@ import SwiftUI
 /// The sweep and its phosphor: a beam turning once per period and, on every
 /// blip, a glow that flares as the beam crosses it and fades behind it. Each
 /// is one committed Core Animation on the render server; SwiftUI draws no
-/// frames for it. It pauses when off screen, inactive or in Low Power Mode.
+/// frames for it. It pauses when off screen, covered or inactive, and steps
+/// at 10 frames a second in Low Power Mode.
 struct RadarSweepLayer: NSViewRepresentable {
     struct Glow: Equatable {
         let id: String
@@ -56,6 +57,8 @@ final class RadarSweepView: NSView {
     private var applied: (centerX: Double, centerY: Double, radius: Double, height: Double, glows: [RadarSweepLayer.Glow])?
     private var observers: [NSObjectProtocol] = []
     private var inViewport = false
+    /// The frame rate the animations were made with; they are remade when it changes.
+    private var framesPerSecond: Float??
     private static let epoch: CFTimeInterval = 1
 
     override init(frame frameRect: NSRect) {
@@ -168,7 +171,7 @@ final class RadarSweepView: NSView {
             if let bearing = glowBearings[glow.id], abs(bearing - glow.bearing) < 0.004 { continue }
             glowBearings[glow.id] = glow.bearing
             layer.removeAnimation(forKey: "phosphor")
-            layer.add(Self.phosphor(bearing: glow.bearing), forKey: "phosphor")
+            layer.add(Self.phosphor(bearing: glow.bearing, framesPerSecond: framesPerSecond ?? nil), forKey: "phosphor")
         }
         for (id, layer) in glowLayers where !present.contains(id) {
             layer.removeFromSuperlayer()
@@ -194,7 +197,7 @@ final class RadarSweepView: NSView {
     /// Bright the moment the beam's leading edge reaches this bearing, then
     /// fading over two fifths of a turn. The beam starts at 3 o'clock and
     /// turns clockwise, as screen bearings are measured.
-    static func phosphor(bearing: Double) -> CAKeyframeAnimation {
+    static func phosphor(bearing: Double, framesPerSecond: Float?) -> CAKeyframeAnimation {
         let period = RadarSweepLayer.period
         let turn = 2 * Double.pi
         let crossing = (bearing.truncatingRemainder(dividingBy: turn) + turn).truncatingRemainder(dividingBy: turn) / turn * period
@@ -206,13 +209,19 @@ final class RadarSweepView: NSView {
         animation.beginTime = epoch
         animation.timeOffset = period - crossing
         animation.isRemovedOnCompletion = false
+        pace(animation, framesPerSecond)
         return animation
+    }
+
+    static func pace(_ animation: CAAnimation, _ framesPerSecond: Float?) {
+        guard let framesPerSecond else { return }
+        animation.preferredFrameRateRange = CAFrameRateRange(minimum: framesPerSecond - 2, maximum: framesPerSecond + 2,
+                                                             preferred: framesPerSecond)
     }
 
     private func updateRunning() {
         let shouldRun = RadarMotionPolicy.runsContinuousMotion(
             reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-            lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
             inViewport: inViewport,
             windowVisible: window?.occlusionState.contains(.visible) == true,
             applicationActive: NSApp.isActive
@@ -229,6 +238,16 @@ final class RadarSweepView: NSView {
             clock.beginTime = clock.convertTime(CACurrentMediaTime(), from: nil) - pausedTime
         }
         clock.isHidden = false
+        let rate = RadarMotionPolicy.sweepFramesPerSecond(lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
+        if framesPerSecond != .some(rate) {
+            // Entering or leaving Low Power Mode: the same sweep at the new pace.
+            framesPerSecond = .some(rate)
+            beam.removeAnimation(forKey: "sweep")
+            for (id, layer) in glowLayers {
+                layer.removeAnimation(forKey: "phosphor")
+                layer.add(Self.phosphor(bearing: glowBearings[id] ?? 0, framesPerSecond: rate), forKey: "phosphor")
+            }
+        }
         if beam.animation(forKey: "sweep") == nil {
             let rotation = CABasicAnimation(keyPath: "transform.rotation.z")
             rotation.fromValue = 0
@@ -237,6 +256,7 @@ final class RadarSweepView: NSView {
             rotation.duration = RadarSweepLayer.period
             rotation.repeatCount = .infinity
             rotation.isRemovedOnCompletion = false
+            Self.pace(rotation, rate)
             beam.add(rotation, forKey: "sweep")
         }
     }
