@@ -2,6 +2,10 @@ name: Website
 
 # Publishes Site/ to GitHub Pages with the latest release's download link, version, size and
 # checksum filled in. Runs when the site or its images change and when a release is published.
+#
+# A push to main whose RADAR_VERSION is not published yet builds but does not deploy: the site
+# would describe an unreleased version, and Pages ignores a second deployment of the same commit,
+# so the release's own deployment would be dropped.
 
 on:
   push:
@@ -28,28 +32,42 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.release.outputs.deploy }}
     steps:
       - uses: actions/checkout@v5
 
       - name: Read the latest release
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view --repo "$GITHUB_REPOSITORY" --json tagName,publishedAt,assets,url > release.json \
             || echo '{}' > release.json
+          source Scripts/lib/project.sh
+          LATEST="$(python3 -c 'import json; print(json.load(open("release.json")).get("tagName", ""))')"
+          if [[ "$GITHUB_EVENT_NAME" == push && "$LATEST" != "v$RADAR_VERSION" ]]; then
+            echo "::notice::v$RADAR_VERSION is not published yet (latest is ${LATEST:-none}); publishing the release deploys the site."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build the site
         run: python3 Scripts/build_site.py --out _site --release release.json
 
       - uses: actions/configure-pages@v6
+        if: steps.release.outputs.deploy == 'true'
 
       - uses: actions/upload-pages-artifact@v5
+        if: steps.release.outputs.deploy == 'true'
         with:
           path: _site
 
   deploy:
     name: Deploy
     needs: build
+    if: needs.build.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
