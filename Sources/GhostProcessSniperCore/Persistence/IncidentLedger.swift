@@ -150,7 +150,9 @@ final class IncidentLedger {
         // Identical instances share a signature, and so share one episode.
         var representatives: [String: ProcessFamily] = [:]
         var order: [String] = []
-        for family in families where family.score.heat.shouldRecordIncident {
+        // Being big is not an episode: an app at its usual size would
+        // otherwise log an incident every time it is open.
+        for family in families where family.score.heat.shouldRecordIncident && !family.hasOnlySizeAgainstIt {
             let signatureID = family.signature.id
             if let current = representatives[signatureID] {
                 if family.score.value > current.score.value {

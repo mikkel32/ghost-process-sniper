@@ -221,7 +221,7 @@ public struct FamilyBaselineLearner: Sendable {
             family.forecast.confidence >= 0.55 &&
             family.trend.sampleCount >= 4
         // An estimated total is fine to score but not to learn from.
-        let isIncidentSample = family.score.heat.shouldRecordIncident || trustedForecastIncident ||
+        let isIncidentSample = (family.score.heat.shouldRecordIncident && !family.hasOnlySizeAgainstIt) || trustedForecastIncident ||
             !family.measurementCoverage(at: now).isComplete
         let currentLeak = family.trend.credibleMemoryVelocity
         let memory = Double(family.totalPhysicalFootprintBytes)

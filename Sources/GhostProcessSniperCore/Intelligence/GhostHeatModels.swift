@@ -342,6 +342,23 @@ public enum GhostHeatModel {
     }
 }
 
+extension ProcessFamily {
+    /// Big, perhaps, and nothing else: no sustained signal, no CPU, GPU or
+    /// leak component, no growth, a quiet or warming forecast, and not above
+    /// a trusted learned normal. Such a family is neither an incident nor a
+    /// reason to skip learning its normal: before, an app that was Hot only
+    /// for its size was never learned, so it stayed Hot for good.
+    var hasOnlySizeAgainstIt: Bool {
+        guard score.heat.sustainedSignalCount == 0, forecast.state <= .warming,
+              trend.credibleMemoryVelocity < 1, longTermTrend.persistentSlopeMegabytesPerMinute < 1,
+              !score.components.contains(where: { [.cpu, .gpu, .leak].contains($0.kind) && $0.level >= .watch })
+        else { return false }
+        guard let baseline, baseline.isMeasurementTrusted else { return true }
+        let footprint = totalPhysicalFootprintBytes
+        return !(baseline.memoryZScore(for: footprint) >= 3 && baseline.memoryMultiple(for: footprint) >= 1.3)
+    }
+}
+
 extension GhostHeatModel {
     /// A family that is big and nothing else is worth watching, not a
     /// problem, once its learned normal says this size is usual for it: a
