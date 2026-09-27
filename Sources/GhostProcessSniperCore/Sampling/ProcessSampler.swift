@@ -185,7 +185,7 @@ public actor NativeProcessSampler: ProcessSampling {
         // rates: a stale watt figure must not read as current.
         var power = cached?.power ?? .unmeasured
         power.watts = nil
-        power.idleWakeupsPerSecond = nil
+        power.wakeupsPerSecond = nil
         power.diskWriteBytesPerSecond = nil
         if let usage { power = powerTracker.usage(for: identity, reading: usage, at: now) }
 

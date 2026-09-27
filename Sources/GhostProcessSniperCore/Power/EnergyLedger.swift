@@ -1,10 +1,10 @@
 import Foundation
 
-/// One minute of an app's or job's energy, idle wake-ups, disk writes and CPU.
+/// One minute of an app's or job's energy, wake-ups, disk writes and CPU.
 public struct EnergyMinute: Equatable, Sendable {
     public let start: Date
     public internal(set) var joules: Double = 0
-    public internal(set) var idleWakeups: Double = 0
+    public internal(set) var wakeups: Double = 0
     public internal(set) var diskBytesWritten: Double = 0
     public internal(set) var cpuSeconds: Double = 0
     /// Wall time inside the minute the group was observed.
@@ -16,7 +16,7 @@ public struct EnergyMinute: Equatable, Sendable {
 /// Sums over the trailing minutes of one group, with rates over the time observed.
 public struct EnergyWindow: Equatable, Sendable {
     public var joules = 0.0
-    public var idleWakeups = 0.0
+    public var wakeups = 0.0
     public var diskBytesWritten = 0.0
     public var cpuSeconds = 0.0
     public var observedSeconds = 0.0
@@ -24,7 +24,7 @@ public struct EnergyWindow: Equatable, Sendable {
     init(_ minutes: ArraySlice<EnergyMinute>) {
         for minute in minutes {
             joules += minute.joules
-            idleWakeups += minute.idleWakeups
+            wakeups += minute.wakeups
             diskBytesWritten += minute.diskBytesWritten
             cpuSeconds += minute.cpuSeconds
             observedSeconds += minute.observedSeconds
@@ -32,7 +32,7 @@ public struct EnergyWindow: Equatable, Sendable {
     }
 
     public var watts: Double { observedSeconds > 0 ? joules / observedSeconds : 0 }
-    public var idleWakeupsPerSecond: Double { observedSeconds > 0 ? idleWakeups / observedSeconds : 0 }
+    public var wakeupsPerSecond: Double { observedSeconds > 0 ? wakeups / observedSeconds : 0 }
     public var diskWriteBytesPerSecond: Double { observedSeconds > 0 ? diskBytesWritten / observedSeconds : 0 }
     /// Average cores busy: 1.0 is one core fully used.
     public var cores: Double { observedSeconds > 0 ? cpuSeconds / observedSeconds : 0 }
@@ -57,6 +57,9 @@ struct EnergyLedger: Sendable {
     static let bucketCount = 60
     /// The longest tick gap counted as observed time; longer gaps are sleep or a stall.
     static let maximumGap: TimeInterval = 30
+    /// Each process's wake-up rate is averaged with this time constant, the
+    /// window macOS's wake-ups monitor uses.
+    static let wakeupTimeConstant: TimeInterval = 300
 
     struct Group: Sendable {
         var assignment: EnergyGroupAssignment
@@ -70,6 +73,9 @@ struct EnergyLedger: Sendable {
         var familyWeight = -1.0
         /// Every pid currently in the group, for attributing sleep assertions.
         var pids: [Int32] = []
+        /// The member with the highest averaged wake-up rate that has been
+        /// averaged for long enough to judge (`wakeupTimeConstant` × 0.8).
+        var busiestWakeups: WakeupLeader?
     }
 
     private struct Counters: Sendable {
@@ -78,6 +84,10 @@ struct EnergyLedger: Sendable {
         var diskWrites: UInt64
         var cpuSeconds: TimeInterval
         var lastSeen: Date
+        /// When these counters were read; `lastSeen` also moves on scans without a read.
+        var readAt: Date
+        var wakeupRate: Double?
+        var rateSince: Date?
     }
 
     private(set) var groups: [String: Group] = [:]
@@ -108,6 +118,8 @@ struct EnergyLedger: Sendable {
             let firstThisTick = seen.insert(assignment.key).inserted
             let previous = counters[process.identity]
             let owner = familyKey(process)
+            let fresh = process.power.measuredAt == process.sampledAt
+            let rate = fresh ? previous.flatMap { Self.averagedWakeups(process, since: $0, now: now) } : nil
             // Mutated in place: a copy per process would copy the group's minutes each time.
             Self.update(&groups[assignment.key]!) { group in
                 if firstThisTick {
@@ -119,6 +131,7 @@ struct EnergyLedger: Sendable {
                     group.familyKey = nil
                     group.familyWeight = -1
                     group.pids.removeAll(keepingCapacity: true)
+                    group.busiestWakeups = nil
                     group.lastSeen = now
                     Self.open(&group.minutes, at: start)
                     group.minutes[group.minutes.count - 1].observedSeconds += gap
@@ -126,8 +139,13 @@ struct EnergyLedger: Sendable {
                 group.processCount += 1
                 group.pids.append(process.pid)
                 group.isSystem = group.isSystem && process.isSystemProcess
+                let averaged = rate ?? previous.flatMap { old in old.rateSince.map { (old.wakeupRate ?? 0, $0) } }
+                if let averaged, now.timeIntervalSince(averaged.1) >= Self.wakeupTimeConstant * 0.8,
+                   averaged.0 > (group.busiestWakeups?.perSecond ?? -1) {
+                    group.busiestWakeups = WakeupLeader(name: process.name, perSecond: averaged.0)
+                }
                 let power = process.power
-                if power.measuredAt == process.sampledAt {
+                if fresh {
                     if let watts = power.watts, watts.isFinite, watts >= 0 {
                         group.currentWatts += watts
                         group.currentMeasuredCount += 1
@@ -146,12 +164,13 @@ struct EnergyLedger: Sendable {
                     }
                 }
             }
-            if process.power.measuredAt == process.sampledAt {
+            if fresh {
                 if process.power.lifetimeEnergyNanojoules > 0 { energyAccounted = true }
                 counters[process.identity] = Counters(
-                    energy: process.power.lifetimeEnergyNanojoules, wakeups: process.power.lifetimeIdleWakeups,
+                    energy: process.power.lifetimeEnergyNanojoules, wakeups: process.power.lifetimeWakeups,
                     diskWrites: process.power.lifetimeDiskBytesWritten, cpuSeconds: process.totalProcessorSeconds,
-                    lastSeen: now)
+                    lastSeen: now, readAt: now, wakeupRate: rate?.0 ?? previous?.wakeupRate,
+                    rateSince: rate?.1 ?? previous?.rateSince)
             } else if previous != nil {
                 counters[process.identity]?.lastSeen = now
             }
@@ -160,7 +179,7 @@ struct EnergyLedger: Sendable {
         Self.open(&host, at: start)
         host[host.count - 1].observedSeconds += gap
         host[host.count - 1].joules += hostMinute.joules
-        host[host.count - 1].idleWakeups += hostMinute.idleWakeups
+        host[host.count - 1].wakeups += hostMinute.wakeups
         host[host.count - 1].diskBytesWritten += hostMinute.diskBytesWritten
         host[host.count - 1].cpuSeconds += hostMinute.cpuSeconds
 
@@ -176,6 +195,23 @@ struct EnergyLedger: Sendable {
 
     private static func update(_ group: inout Group, _ body: (inout Group) -> Void) { body(&group) }
 
+    /// The process's wake-ups per second, time-weighted over about five
+    /// minutes, and since when it has been averaged. Gaps longer than the
+    /// longest tick are sleep and skipped.
+    private static func averagedWakeups(_ process: ProcessMetrics, since previous: Counters,
+                                        now: Date) -> (Double, Date)? {
+        let seconds = now.timeIntervalSince(previous.readAt)
+        guard seconds > 0, seconds <= maximumGap, process.power.lifetimeWakeups >= previous.wakeups else {
+            return previous.wakeupRate.map { ($0, previous.rateSince ?? now) }
+        }
+        let instant = Double(process.power.lifetimeWakeups - previous.wakeups) / seconds
+        guard let old = previous.wakeupRate, let since = previous.rateSince else { return (instant, previous.readAt) }
+        // Cumulative until the window has filled, then exponential: unbiased from the first minutes on.
+        let span = now.timeIntervalSince(since)
+        let alpha = max(1 - exp(-seconds / wakeupTimeConstant), seconds / max(span, seconds))
+        return (old + alpha * (instant - old), since)
+    }
+
     /// Adds the growth of one process's lifetime counters since its last read.
     private static func charge(_ minute: inout EnergyMinute, host: inout EnergyMinute, process: ProcessMetrics,
                                since previous: Counters) {
@@ -185,10 +221,10 @@ struct EnergyLedger: Sendable {
             minute.joules += joules
             host.joules += joules
         }
-        if power.lifetimeIdleWakeups >= previous.wakeups {
-            let wakeups = Double(power.lifetimeIdleWakeups - previous.wakeups)
-            minute.idleWakeups += wakeups
-            host.idleWakeups += wakeups
+        if power.lifetimeWakeups >= previous.wakeups {
+            let wakeups = Double(power.lifetimeWakeups - previous.wakeups)
+            minute.wakeups += wakeups
+            host.wakeups += wakeups
         }
         if power.lifetimeDiskBytesWritten >= previous.diskWrites {
             let bytes = Double(power.lifetimeDiskBytesWritten - previous.diskWrites)

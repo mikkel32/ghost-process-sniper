@@ -73,7 +73,7 @@ struct EnergyReportBuilder {
                 wattsNow: group.currentWatts,
                 averageWatts: recent.watts,
                 lastHourWattHours: hour.joules / 3_600,
-                idleWakeupsPerSecond: recent.idleWakeupsPerSecond,
+                wakeupsPerSecond: recent.wakeupsPerSecond,
                 diskWriteBytesPerSecond: recent.diskWriteBytesPerSecond,
                 lastHourDiskBytesWritten: hour.diskBytesWritten,
                 shareOfMeasured: host.joules > 0 ? min(1, recent.joules / host.joules) : 0,
@@ -81,14 +81,15 @@ struct EnergyReportBuilder {
                 observedSeconds: recent.observedSeconds,
                 averageCores: recent.cores,
                 tenMinuteDiskWriteBytesPerSecond: ten.diskWriteBytesPerSecond,
-                tenMinuteObservedSeconds: ten.observedSeconds
+                tenMinuteObservedSeconds: ten.observedSeconds,
+                busiestWakeups: group.busiestWakeups
             ))
         }
         let energy = ledger.energyAccounted
         result.sort { lhs, rhs in
             if lhs.isRunning != rhs.isRunning { return lhs.isRunning }
-            let left = energy ? lhs.averageWatts : lhs.idleWakeupsPerSecond + lhs.diskWriteBytesPerSecond / 100_000
-            let right = energy ? rhs.averageWatts : rhs.idleWakeupsPerSecond + rhs.diskWriteBytesPerSecond / 100_000
+            let left = energy ? lhs.averageWatts : lhs.wakeupsPerSecond + lhs.diskWriteBytesPerSecond / 100_000
+            let right = energy ? rhs.averageWatts : rhs.wakeupsPerSecond + rhs.diskWriteBytesPerSecond / 100_000
             if left != right { return left > right }
             if lhs.lastHourWattHours != rhs.lastHourWattHours { return lhs.lastHourWattHours > rhs.lastHourWattHours }
             return lhs.id < rhs.id

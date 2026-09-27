@@ -70,7 +70,7 @@ public struct SearchMeasurements: Equatable, Sendable {
     public var children: Double?
     /// Nil until two reads of the process exist.
     public var energyWatts: Double?
-    public var idleWakeupsPerSecond: Double?
+    public var wakeupsPerSecond: Double?
     public var diskWriteBytesPerSecond: Double?
 
     public init(
@@ -81,7 +81,7 @@ public struct SearchMeasurements: Equatable, Sendable {
         leakMegabytesPerMinute: Double? = nil,
         children: Double? = nil,
         energyWatts: Double? = nil,
-        idleWakeupsPerSecond: Double? = nil,
+        wakeupsPerSecond: Double? = nil,
         diskWriteBytesPerSecond: Double? = nil
     ) {
         self.cpuPercent = cpuPercent
@@ -91,7 +91,7 @@ public struct SearchMeasurements: Equatable, Sendable {
         self.leakMegabytesPerMinute = leakMegabytesPerMinute
         self.children = children
         self.energyWatts = energyWatts
-        self.idleWakeupsPerSecond = idleWakeupsPerSecond
+        self.wakeupsPerSecond = wakeupsPerSecond
         self.diskWriteBytesPerSecond = diskWriteBytesPerSecond
     }
 
@@ -103,11 +103,11 @@ public struct SearchMeasurements: Equatable, Sendable {
         var writes: Double?
         for member in members {
             if let value = member.power.watts { watts = (watts ?? 0) + value }
-            if let value = member.power.idleWakeupsPerSecond { wakeups = (wakeups ?? 0) + value }
+            if let value = member.power.wakeupsPerSecond { wakeups = (wakeups ?? 0) + value }
             if let value = member.power.diskWriteBytesPerSecond { writes = (writes ?? 0) + value }
         }
         energyWatts = watts
-        idleWakeupsPerSecond = wakeups
+        wakeupsPerSecond = wakeups
         diskWriteBytesPerSecond = writes
     }
 
@@ -120,7 +120,7 @@ public struct SearchMeasurements: Equatable, Sendable {
         case .leak: leakMegabytesPerMinute
         case .children: children
         case .energy: energyWatts
-        case .wakeups: idleWakeupsPerSecond
+        case .wakeups: wakeupsPerSecond
         case .writes: diskWriteBytesPerSecond
         }
     }

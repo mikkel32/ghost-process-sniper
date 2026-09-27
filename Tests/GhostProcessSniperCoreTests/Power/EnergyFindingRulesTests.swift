@@ -12,10 +12,10 @@ final class EnergyFindingRulesTests: XCTestCase {
         EnergyConsumer(
             id: "group:\(name)", displayName: name, kind: kind, applicationPath: nil, hostAppName: nil,
             familyKey: familyKey, isSystem: isSystem, processCount: 3, wattsNow: watts, averageWatts: watts,
-            lastHourWattHours: watts, idleWakeupsPerSecond: wakeups, diskWriteBytesPerSecond: writes,
+            lastHourWattHours: watts, wakeupsPerSecond: wakeups, diskWriteBytesPerSecond: writes,
             lastHourDiskBytesWritten: writes * 3_600, shareOfMeasured: 0.5, batteryMinutesGained: gained,
             observedSeconds: observed, averageCores: cores, tenMinuteDiskWriteBytesPerSecond: writes,
-            tenMinuteObservedSeconds: observed * 2)
+            tenMinuteObservedSeconds: observed * 2, busiestWakeups: wakeups > 0 ? WakeupLeader(name: name, perSecond: wakeups) : nil)
     }
 
     private func blocker(
@@ -39,7 +39,7 @@ final class EnergyFindingRulesTests: XCTestCase {
         var rules = EnergyFindingRules()
         XCTAssertTrue(evaluate(&rules, consumers: [consumer(wakeups: 140)]).isEmpty)
         let findings = evaluate(&rules, consumers: [consumer(wakeups: 246)])
-        XCTAssertEqual(findings.map(\.kind), [.idleWakeups])
+        XCTAssertEqual(findings.map(\.kind), [.wakeups])
         XCTAssertEqual(findings.first?.headline, "Claude wakes the processor 246 times a second")
         XCTAssertEqual(findings.first?.severity, .notable)
         XCTAssertEqual(evaluate(&rules, consumers: [consumer(wakeups: 600)]).first?.severity, .attention)
@@ -114,6 +114,6 @@ final class EnergyFindingRulesTests: XCTestCase {
     func testFindingsLeadWithTheMostUrgent() {
         var rules = EnergyFindingRules()
         let findings = evaluate(&rules, consumers: [consumer(wakeups: 200)], blockers: [blocker(heldFor: 5 * 3_600)])
-        XCTAssertEqual(findings.map(\.kind), [.keepsMacAwake, .idleWakeups])
+        XCTAssertEqual(findings.map(\.kind), [.keepsMacAwake, .wakeups])
     }
 }

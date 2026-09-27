@@ -12,7 +12,7 @@ enum EnergyStyle {
     static func symbol(for kind: EnergyFindingKind) -> String {
         switch kind {
         case .keepsMacAwake: "moon.zzz.fill"
-        case .idleWakeups: "alarm.waves.left.and.right.fill"
+        case .wakeups: "alarm.waves.left.and.right.fill"
         case .heavyDiskWrites: "internaldrive.fill"
         case .batteryDrain: "battery.25percent"
         }
@@ -79,8 +79,8 @@ struct EnergyConsumerRow: View {
                 }
                 .frame(width: 76, alignment: .trailing)
             }
-            metric(EnergyFormat.rate(consumer.idleWakeupsPerSecond), caption: "wake-ups",
-                   highlighted: consumer.idleWakeupsPerSecond >= 150)
+            metric(EnergyFormat.rate(consumer.wakeupsPerSecond), caption: "wake-ups",
+                   highlighted: consumer.wakeupsPerSecond >= 150)
             metric(EnergyFormat.bytes(consumer.diskWriteBytesPerSecond) + "/s", caption: "writes",
                    highlighted: consumer.diskWriteBytesPerSecond >= 1_800_000)
             if let gained = consumer.batteryMinutesGained, gained >= 1 {

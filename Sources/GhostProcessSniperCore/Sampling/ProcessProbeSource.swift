@@ -33,8 +33,10 @@ struct ProbeUsage: Equatable, Sendable {
     var cpuSeconds: TimeInterval
     var physicalFootprintBytes: UInt64
     var residentBytes: UInt64
-    /// `ri_pkg_idle_wkups`: the wake-ups Activity Monitor calls "Idle Wake Ups".
-    var idleWakeups: UInt64
+    /// `ri_interrupt_wkups`: timer and interrupt wake-ups, the count macOS's
+    /// own wake-ups monitor limits. The package-idle counter barely moves on
+    /// Apple silicon.
+    var wakeups: UInt64
     var diskBytesWritten: UInt64
     /// `ri_energy_nj`; zero where the kernel does not account energy per task.
     var energyNanojoules: UInt64 = 0

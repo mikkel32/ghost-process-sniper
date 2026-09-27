@@ -11,13 +11,13 @@ final class PowerReadingTests: XCTestCase {
         source.advance(seconds: 4)
         source.update(pid: 900) {
             $0.energyNanojoules += 10_000_000_000
-            $0.idleWakeups += 800
+            $0.wakeups += 800
             $0.diskBytesWritten += 4_000_000
         }
         let batch = try await sampler.sample(plan: .fixture(at: 4))
         let power = try XCTUnwrap(batch.processes.first?.power)
         XCTAssertEqual(power.watts ?? 0, 2.5, accuracy: 1e-9)
-        XCTAssertEqual(power.idleWakeupsPerSecond ?? 0, 200, accuracy: 1e-9)
+        XCTAssertEqual(power.wakeupsPerSecond ?? 0, 200, accuracy: 1e-9)
         XCTAssertEqual(power.diskWriteBytesPerSecond ?? 0, 1_000_000, accuracy: 1e-6)
         XCTAssertEqual(power.lifetimeEnergyNanojoules, 10_000_000_000)
         XCTAssertEqual(power.measuredAt, batch.sampledAt)
@@ -28,7 +28,7 @@ final class PowerReadingTests: XCTestCase {
         let key = ProcessIdentity(pid: 5, startTimeSeconds: 1, startTimeMicroseconds: 0)
         let now = Date()
         func reading(_ energy: UInt64, at seconds: UInt64, stamp: UInt64) -> ProbeUsage {
-            ProbeUsage(cpuSeconds: 0, physicalFootprintBytes: 0, residentBytes: 0, idleWakeups: 0, diskBytesWritten: 0,
+            ProbeUsage(cpuSeconds: 0, physicalFootprintBytes: 0, residentBytes: 0, wakeups: 0, diskBytesWritten: 0,
                        energyNanojoules: energy, processStartAbsoluteTime: stamp,
                        sampledAtUptimeNanoseconds: seconds * 1_000_000_000)
         }
@@ -113,7 +113,7 @@ final class PowerReadingTests: XCTestCase {
         XCTAssertEqual(ProcessSearchQuery("power>1.5w").metrics.first?.value, 1.5)
 
         let hungry = SearchMeasurements(cpuPercent: 3, memoryBytes: 0, gpuPercent: 0, threads: 4,
-                                        energyWatts: 3.2, idleWakeupsPerSecond: 20, diskWriteBytesPerSecond: 0)
+                                        energyWatts: 3.2, wakeupsPerSecond: 20, diskWriteBytesPerSecond: 0)
         let unmeasured = SearchMeasurements(cpuPercent: 3, memoryBytes: 0, gpuPercent: 0, threads: 4)
         let filter = ProcessSearchQuery("watts>2").metrics[0]
         XCTAssertTrue(filter.accepts(hungry.value(for: .energy)))

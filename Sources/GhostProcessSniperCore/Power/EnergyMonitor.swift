@@ -93,7 +93,7 @@ struct EnergyMonitor: Sendable {
                 if power.measuredAt == member.sampledAt, let value = power.watts {
                     measured = true
                     watts += value
-                    wakeups += power.idleWakeupsPerSecond ?? 0
+                    wakeups += power.wakeupsPerSecond ?? 0
                     writes += power.diskWriteBytesPerSecond ?? 0
                 }
                 if let held = effects[member.pid], effect != .systemSleep { effect = held }
@@ -105,12 +105,12 @@ struct EnergyMonitor: Sendable {
                 }
                 continue
             }
-            var figures = FamilyPowerFigures(watts: watts, idleWakeupsPerSecond: wakeups,
+            var figures = FamilyPowerFigures(watts: watts, wakeupsPerSecond: wakeups,
                                              diskWriteBytesPerSecond: writes, keepsAwake: effect, updatedAt: now)
             if let previous = familyFigures[family.familyKey], now > previous.updatedAt {
                 let alpha = 1 - exp(-now.timeIntervalSince(previous.updatedAt) / Self.drawTimeConstant)
                 figures.watts = previous.watts + alpha * (watts - previous.watts)
-                figures.idleWakeupsPerSecond = previous.idleWakeupsPerSecond + alpha * (wakeups - previous.idleWakeupsPerSecond)
+                figures.wakeupsPerSecond = previous.wakeupsPerSecond + alpha * (wakeups - previous.wakeupsPerSecond)
                 figures.diskWriteBytesPerSecond = previous.diskWriteBytesPerSecond +
                     alpha * (writes - previous.diskWriteBytesPerSecond)
             }

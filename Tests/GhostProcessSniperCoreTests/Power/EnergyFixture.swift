@@ -26,7 +26,7 @@ enum EnergyFixture {
             threadCount: 4, isSystemProcess: isSystem, sampledAt: date,
             power: ProcessPowerUsage(
                 lifetimeEnergyNanojoules: UInt64(counters.joules * 1_000_000_000),
-                lifetimeIdleWakeups: counters.wakeups, lifetimeDiskBytesWritten: counters.diskBytes,
+                lifetimeWakeups: counters.wakeups, lifetimeDiskBytesWritten: counters.diskBytes,
                 watts: watts, measuredAt: date)
         )
     }

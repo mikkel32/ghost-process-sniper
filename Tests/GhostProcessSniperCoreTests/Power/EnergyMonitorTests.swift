@@ -69,7 +69,7 @@ final class EnergyMonitorTests: XCTestCase {
         }
         XCTAssertFalse(report.perProcessEnergy)
         XCTAssertEqual(report.consumers.map(\.displayName), ["busy", "quiet"])
-        XCTAssertEqual(report.consumers[0].idleWakeupsPerSecond, 400, accuracy: 0.001)
+        XCTAssertEqual(report.consumers[0].wakeupsPerSecond, 400, accuracy: 0.001)
     }
 
     func testAnXPCServiceIsAttributedToTheAppResponsibleForIt() {
@@ -88,6 +88,34 @@ final class EnergyMonitorTests: XCTestCase {
 
         var lookup = ResponsibleProcessLookup(query: { $0 == 510 ? 500 : nil })
         XCTAssertEqual(lookup.hints(for: [safari, tab], now: now), [tab.identity: 500])
+    }
+
+    func testWakeupsAreJudgedPerProcessLikeMacOSDoes() {
+        var driver = EnergyDriver()
+        let spread = driver.run(ticks: 70) { index, date in
+            let counters = EnergyFixture.Counters(wakeups: UInt64(index) * 500)
+            return [
+                EnergyFixture.process(pid: 80, name: "Slack", path: slack, counters: counters, at: date),
+                EnergyFixture.process(pid: 81, name: "Slack Helper", path: helper, parent: 80, counters: counters, at: date),
+                EnergyFixture.process(pid: 82, name: "Slack Helper", path: helper, parent: 80, counters: counters, at: date)
+            ]
+        }
+        XCTAssertEqual(spread.consumers[0].wakeupsPerSecond, 300, accuracy: 0.01)
+        XCTAssertEqual(spread.consumers[0].busiestWakeups?.perSecond ?? 0, 100, accuracy: 0.01)
+        XCTAssertTrue(spread.findings.isEmpty, "three helpers at 100 a second each stay under macOS's per-process limit")
+
+        var single = EnergyDriver()
+        let busy = single.run(ticks: 70) { index, date in
+            [
+                EnergyFixture.process(pid: 90, name: "Slack", path: slack, counters: .init(), at: date),
+                EnergyFixture.process(pid: 91, name: "Slack Helper (Renderer)", path: helper, parent: 90,
+                                      counters: .init(wakeups: UInt64(index) * 1_000), at: date)
+            ]
+        }
+        let finding = busy.findings.first
+        XCTAssertEqual(finding?.kind, .wakeups)
+        XCTAssertEqual(finding?.headline, "Slack wakes the processor 200 times a second")
+        XCTAssertTrue(finding?.detail.hasPrefix("Slack Helper (Renderer), one of its processes") ?? false)
     }
 
     // MARK: - Sleep blockers

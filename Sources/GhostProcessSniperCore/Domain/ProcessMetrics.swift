@@ -33,7 +33,7 @@ public struct ProcessMetrics: Identifiable, Equatable, Sendable {
     /// Process group, session, terminal and run state; `.unknown` when the
     /// sampler did not read them.
     public let session: ProcessSessionInfo
-    /// Energy, idle wake-ups and disk writes from the usage read.
+    /// Energy, wake-ups and disk writes from the usage read.
     public let power: ProcessPowerUsage
 
     public var measurementDate: Date? {

@@ -49,7 +49,7 @@ Narrow a search with filters; the chips under the filter bar show how the search
 | `name:` `cmd:` `path:` `user:` `kind:` | Search one field only. |
 | `pid:123,456` `port:3000` | Exact identities. |
 | `cpu>20` `mem>1.5gb` `gpu>5` `threads>100` | Measurements; memory without a unit means MB. |
-| `watts>2` `wakeups>150` `writes>5mb` | Energy in watts, idle wake-ups per second, disk writes per second (MB without a unit). |
+| `watts>2` `wakeups>150` `writes>5mb` | Energy in watts, processor wake-ups per second, disk writes per second (MB without a unit). |
 | `leak>2` `children>3` | Growth in MB/min and helper count (tracked families only). |
 | `is:attention` `is:hot` `is:critical` `is:quiet` `is:leaking` `is:killable` `is:dev` `is:duplicate` | Radar states (tracked families only); `is:stoppable` means `is:killable`. |
 | `is:mine` `is:system` `is:tracked` `is:untracked` | Ownership and tracking. |

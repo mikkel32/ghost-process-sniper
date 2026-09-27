@@ -57,7 +57,7 @@ struct NativeProcessProbeSource: ProcessProbeSource {
             cpuSeconds: ProcessCPUTime.seconds(user: info.ri_user_time, system: info.ri_system_time),
             physicalFootprintBytes: info.ri_phys_footprint,
             residentBytes: info.ri_resident_size,
-            idleWakeups: info.ri_pkg_idle_wkups,
+            wakeups: info.ri_interrupt_wkups,
             diskBytesWritten: info.ri_diskio_byteswritten,
             energyNanojoules: info.ri_energy_nj,
             processStartAbsoluteTime: info.ri_proc_start_abstime

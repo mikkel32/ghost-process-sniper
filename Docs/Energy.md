@@ -9,7 +9,7 @@ Code lives in `Sources/GhostProcessSniperCore/Power` (measurement and judgement)
 | Measure | Source | Notes |
 | --- | --- | --- |
 | **Energy per process** | `proc_pid_rusage(RUSAGE_INFO_V6)`: `ri_energy_nj` | The energy macOS attributes to the process's CPU work since it started. Read in the same call as CPU time, for every process, every scan. Macs whose kernel does not account it report zero; the page then ranks by wake-ups and writes. |
-| **Idle wake-ups** | `ri_pkg_idle_wkups` | What Activity Monitor calls "Idle Wake Ups": times the process woke a resting processor. |
+| **Wake-ups** | `ri_interrupt_wkups` | Times a timer or interrupt woke the processor for the process: the count macOS's own wake-ups monitor limits. (The package-idle counter barely moves on Apple silicon.) |
 | **Disk writes** | `ri_diskio_byteswritten` | Bytes written to storage. |
 | **The Mac's draw** | AppleSmartBattery `PowerTelemetryData` (`SystemLoad`, `BatteryPower`), else amperage × voltage | The whole Mac, display and graphics included. |
 | **Battery** | AppleSmartBattery raw capacity, voltage, design capacity, cycle count | Remaining watt-hours come from the raw capacity and voltage; health is full-charge capacity against design capacity. |
@@ -29,7 +29,7 @@ Sleep assertions a daemon holds for an app are blamed on the app: when coreaudio
 
 ## The energy ledger
 
-`EnergyLedger` keeps an hour of one-minute buckets per group: joules, idle wake-ups, bytes written, CPU seconds and the time actually observed. Each bucket adds the growth of every member's lifetime counters since its last read, so totals are exact at any scan rate, and a gap longer than 30 s (sleep, a stalled scan) is charged but not counted as observed time. Averages are over the time observed.
+`EnergyLedger` keeps an hour of one-minute buckets per group: joules, wake-ups, bytes written, CPU seconds and the time actually observed. Each bucket adds the growth of every member's lifetime counters since its last read, so totals are exact at any scan rate, and a gap longer than 30 s (sleep, a stalled scan) is charged but not counted as observed time. Averages are over the time observed.
 
 ## Findings
 
@@ -38,7 +38,7 @@ A finding says what, shows the numbers, and gives one next step. It stays until 
 | Finding | When | Level |
 | --- | --- | --- |
 | **Keeps your Mac awake** | An app or job (not macOS, not a keep-awake utility) has held a sleep or display assertion for 30 minutes while averaging under 1% of one core for the last ten | Attention after two hours, or on battery |
-| **Wakes the processor** | 150 idle wake-ups a second or more, averaged over five minutes, while using under a quarter of a core. 150 a second over five minutes is the limit macOS's own wake-ups monitor enforces | Attention at 500 a second, or 300 on battery |
+| **Wakes the processor** | One of its processes averages 150 wake-ups a second or more over about five minutes while the app or job uses under a quarter of a core. 150 a second per process over five minutes is the limit macOS's own wake-ups monitor enforces | Attention at 500 a second, or 300 on battery |
 | **Writing to disk** | About 1.7 MB/s for ten minutes (1 GB). Builds, tests, databases, container VMs and model runners write for a living, so for them it takes 20 MB/s | Attention at 20 MB/s |
 | **Costing battery** | On battery, at least a fifth of the Mac's draw (and 1.5 W) over five minutes, and stopping it would add 20 minutes or more | Attention at an hour or more |
 

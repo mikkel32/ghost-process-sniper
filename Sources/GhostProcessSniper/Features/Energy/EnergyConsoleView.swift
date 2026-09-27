@@ -216,7 +216,7 @@ struct EnergyHero: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
-                if report.perProcessEnergy, report.minuteWatts.count >= 2 {
+                if report.perProcessEnergy, report.minuteWatts.count >= 3 {
                     sparkline
                 }
             }

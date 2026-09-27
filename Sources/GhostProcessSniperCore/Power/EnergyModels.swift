@@ -1,5 +1,12 @@
 import Foundation
 
+/// The process in a group that wakes the processor most.
+public struct WakeupLeader: Equatable, Sendable {
+    public let name: String
+    /// Averaged over about five minutes.
+    public let perSecond: Double
+}
+
 /// An app, command-line job or known macOS source and the energy it used.
 public struct EnergyConsumer: Identifiable, Equatable, Sendable {
     public let id: String
@@ -19,7 +26,7 @@ public struct EnergyConsumer: Identifiable, Equatable, Sendable {
     public let averageWatts: Double
     public let lastHourWattHours: Double
     /// Five-minute averages.
-    public let idleWakeupsPerSecond: Double
+    public let wakeupsPerSecond: Double
     public let diskWriteBytesPerSecond: Double
     public let lastHourDiskBytesWritten: Double
     /// Share of all measured process energy over the last five minutes, 0–1.
@@ -32,6 +39,8 @@ public struct EnergyConsumer: Identifiable, Equatable, Sendable {
     public let averageCores: Double
     public let tenMinuteDiskWriteBytesPerSecond: Double
     public let tenMinuteObservedSeconds: TimeInterval
+    /// The member waking the processor most, averaged over about five minutes.
+    public let busiestWakeups: WakeupLeader?
 
     public var isRunning: Bool { processCount > 0 }
     public var knownSource: ThermalKnownSource? {
@@ -72,7 +81,7 @@ public enum EnergyFindingKind: String, Equatable, Sendable {
     /// Idle work holding a sleep assertion for a long time.
     case keepsMacAwake
     /// Frequent wake-ups of an idle processor.
-    case idleWakeups
+    case wakeups
     /// Sustained heavy disk writes.
     case heavyDiskWrites
     /// On battery, a large share of the Mac's draw for ten minutes or more.
@@ -104,7 +113,7 @@ public struct EnergyFinding: Identifiable, Equatable, Sendable {
 /// A radar family's energy, averaged over about a minute, for its page.
 public struct FamilyPowerFigures: Equatable, Sendable {
     public var watts: Double
-    public var idleWakeupsPerSecond: Double
+    public var wakeupsPerSecond: Double
     public var diskWriteBytesPerSecond: Double
     /// Sleep assertions its processes hold, directly or through macOS.
     public var keepsAwake: SleepAssertionEffect?

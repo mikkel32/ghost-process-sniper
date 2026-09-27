@@ -5,7 +5,7 @@ import Foundation
 /// stays until its measure falls below 80% of the threshold, so it does not
 /// flicker at the edge.
 struct EnergyFindingRules: Sendable {
-    /// The kernel's wake-ups monitor flags a process above 150 idle wake-ups a
+    /// The kernel's wake-ups monitor flags a process above 150 wake-ups a
     /// second averaged over five minutes.
     static let wakeupsPerSecond = 150.0
     static let busyWakeupsPerSecond = 500.0
@@ -103,9 +103,11 @@ struct EnergyFindingRules: Sendable {
     }
 
     private mutating func wakeups(_ consumer: EnergyConsumer, battery: BatteryOutlook?, now: Date) -> EnergyFinding? {
-        let id = "\(EnergyFindingKind.idleWakeups.rawValue)|\(consumer.id)"
-        let rate = consumer.idleWakeupsPerSecond
-        guard consumer.observedSeconds >= 240, rate >= threshold(Self.wakeupsPerSecond, id) else { return nil }
+        let id = "\(EnergyFindingKind.wakeups.rawValue)|\(consumer.id)"
+        // macOS's limit is per process, so the busiest member is judged, not the app's sum.
+        guard let busiest = consumer.busiestWakeups, consumer.observedSeconds >= 240,
+              busiest.perSecond >= threshold(Self.wakeupsPerSecond, id) else { return nil }
+        let rate = busiest.perSecond
         let cores = consumer.averageCores
         guard cores < Self.wakeupCoreLimit else { return nil }
         let name = consumer.displayName
@@ -115,9 +117,11 @@ struct EnergyFindingRules: Sendable {
         let advice = consumer.kind == .job || consumer.kind == .process
             ? "Check whether \(name) polls in a tight loop, and stop it if it isn\u{2019}t needed."
             : "Look for an animation, a spinning indicator or a busy page in \(name). Quitting and reopening it usually clears this."
-        return finding(.idleWakeups, consumerID: consumer.id, name: name, familyKey: consumer.familyKey,
+        let who = busiest.name == name ? "Averaged over about 5 minutes" :
+            "\(busiest.name), one of its processes, averaged this over about 5 minutes"
+        return finding(.wakeups, consumerID: consumer.id, name: name, familyKey: consumer.familyKey,
                        severity: severity, headline: "\(name) wakes the processor \(count) times a second",
-                       detail: "Averaged over 5 minutes while it used \(RadarFormat.percent(cores * 100)) of one core. macOS itself reports apps above 150 a second: every wake-up stops the processor from resting, which costs battery.",
+                       detail: "\(who), while \(name) used \(RadarFormat.percent(cores * 100)) of one core. macOS itself reports a process above 150 a second: every wake-up stops the processor from resting, which costs battery.",
                        advice: advice, now: now)
     }
 
