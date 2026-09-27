@@ -21,7 +21,17 @@ Below it:
 - **Risk Queue** and **Warming Up**: families that need attention now, and early warnings. Risk rows show their Quick Stop on hover or keyboard focus; warming rows offer it only in the context menu, because an early warning is not yet a reason to stop.
 - **Summary cards**: **Families** opens every family, **Needs review** the ones that need attention, **Leaks** the credible leaks, **Duplicates** the overlap review, and **Memory** the processes ordered by footprint.
 - **Heat & CPU activity**: temperatures and the work behind them (see [Temperatures](#temperatures)). It moves up to second place, under the verdict, only while macOS reports serious throttling or the hottest sensor has stayed at 90 °C or more for 30 seconds, and moves back after a calm minute.
-- **Where your resources go**: the Live Radar of the riskiest families, memory share, the memory pulse and recent incidents.
+- **Where your resources go**: the Live Radar, memory share, the memory pulse and recent incidents.
+
+### Reading the Live Radar
+
+- **Rings are verdicts.** Critical at the center, then Hot, Watch and Quiet. A family sits in the ring of its verdict, and further in the hotter it runs within it, so a big app held at Watch never sits closer than something actually flagged.
+- **Quarters say what it is.** Apps top right, servers (Node, Python, databases, containers, model runners) bottom right, developer tools (builds, tests, language servers) bottom left, background work and macOS top left. A family keeps its bearing, so you can find it again.
+- **Size is memory**: the bigger the blip, the more memory the family uses, up to 8 GB.
+- **A dotted streak is where it was five minutes ago.** A streak from further out with an arrowhead toward the center means it is getting worse; an arrowhead pointing out means it is easing off. Drifting inside the Quiet ring does not count.
+- **Names**: everything at Watch or above, and anything getting worse, is named on the scope, in the margin with a line when there is no room beside it. The biggest quiet families are named while there is room.
+- **Contacts** beside the scope lists the same families worst first. Point at a row or a blip to light the other and see why it is there; click either to open the family, right-click to snooze, ignore or stop it.
+- **The sweep** lights each blip as it passes. It rests in Low Power Mode, with Reduce Motion, and while the window is covered or in the background; the blips keep moving with every scan.
 
 The levels **Stable**, **Observe**, **Review**, **Urgent** and **Measuring** summarize how much attention a family needs. A Hot or Critical level is held until the family has read lower for 20 seconds and then steps down one level at a time, so a family hovering around a threshold does not flicker.
 

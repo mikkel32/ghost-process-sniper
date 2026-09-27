@@ -30,30 +30,6 @@ struct OverviewAnalyticsSection: View {
     }
 }
 
-/// Every tracked family, riskiest first — never the All Processes search,
-/// filter or sort — straight from the content-gated snapshot.
-private struct LiveRadarCard: View {
-    let session: RadarConsoleSession
-
-    var body: some View {
-        CompactRadarSection(
-            title: "Live Radar",
-            subtitle: "closer to center = higher risk",
-            systemImage: "dot.radiowaves.left.and.right",
-            tip: RadarTip(
-                title: "Live Radar",
-                message: "Every blip is a tracked process family. Distance from the center encodes risk — a blip drifting inward is getting worse. Each family keeps a fixed bearing, so you can watch the same blip over time. Click a blip to open its detail, right-click to snooze, ignore, or stop it.",
-                shortcut: "⌘1 Overview"
-            ),
-            accent: RadarTheme.accent(for: session.commandCenter.level)
-        ) {
-            RadarSweepView(rows: Array(session.compactSnapshot.allRows.prefix(24)), session: session)
-                .frame(height: 255)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
 private struct MemoryShareCard: View {
     let session: RadarConsoleSession
     let shares: [MemoryShare]

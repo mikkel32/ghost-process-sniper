@@ -31,22 +31,4 @@ final class RadarPresentationTests: XCTestCase {
         }
         XCTAssertTrue(chips.allSatisfy { $0.actionTitle?.isEmpty == false })
     }
-
-    func testRadarBearingIsStableAndUrgencyMovesInward() {
-        let quiet = RadarScopeGeometry.position(key: "node|pid:10", urgency: 0, width: 320, height: 240)
-        let urgent = RadarScopeGeometry.position(key: "node|pid:10", urgency: 100, width: 320, height: 240)
-        let center = CGPoint(x: 160, y: 120)
-        XCTAssertEqual(RadarScopeGeometry.angle(for: "node|pid:10"), RadarScopeGeometry.angle(for: "node|pid:10"))
-        XCTAssertGreaterThan(hypot(quiet.x - center.x, quiet.y - center.y), hypot(urgent.x - center.x, urgent.y - center.y))
-        XCTAssertEqual(atan2(quiet.y - center.y, quiet.x - center.x), atan2(urgent.y - center.y, urgent.x - center.x), accuracy: 0.00001)
-    }
-
-    func testRadarGeometryHandlesTinyAndInvalidBounds() {
-        for urgency in [Double.nan, .infinity, -100, 10_000] {
-            let point = RadarScopeGeometry.position(key: "tiny", urgency: urgency, width: 1, height: 1)
-            XCTAssertEqual(point, CGPoint(x: 0.5, y: 0.5))
-        }
-        let invalid = RadarScopeGeometry.position(key: "bad", urgency: 50, width: .nan, height: -.infinity)
-        XCTAssertEqual(invalid, .zero)
-    }
 }

@@ -94,6 +94,8 @@ public struct CompactSidebarRowModel: Identifiable, Equatable, Sendable {
     public let forecastState: ForecastState
     public let forecastConfidence: Double
     public let helpText: String
+    public let memoryBytes: UInt64
+    public let radarSector: LiveRadarSector
 
     public init(item: FamilyTriageViewModel) {
         familyKey = item.familyKey
@@ -110,6 +112,8 @@ public struct CompactSidebarRowModel: Identifiable, Equatable, Sendable {
         level = item.level
         forecastState = item.forecastState
         forecastConfidence = item.forecastConfidence
+        memoryBytes = item.memoryBytes
+        radarSector = LiveRadarSector.of(kind: item.kind, path: item.signature.canonicalPath)
         let gpuHelp = item.gpuPercent > 0.5 ? ", GPU \(item.gpuText)" : ""
         helpText = "\(item.assessment.cause). \(item.assessment.evidence)\n\(item.memoryText), \(item.cpuText)\(gpuHelp), \(item.leakText)"
     }

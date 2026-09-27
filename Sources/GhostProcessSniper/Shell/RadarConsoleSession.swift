@@ -27,6 +27,8 @@ final class RadarConsoleSession {
     /// what happened instead of "no longer running".
     private(set) var recentStops: [String: KillReport] = [:]
     private(set) var memoryPulse: [MemoryPulseSample] = []
+    /// Where each family sat on the Live Radar over the last five minutes.
+    private(set) var radarHistory = LiveRadarHistory()
     /// Set from the moment a stop is requested until its preview is ready.
     var preparingStop: PreparingStop?
     /// The open "Stop the extras" run. It lives here, not on the Duplicates
@@ -162,6 +164,8 @@ final class RadarConsoleSession {
         // Pulse points every few seconds are plenty for a 5-minute strip and
         // keep the chart from rebuilding on every refresh tick.
         let now = Date()
+        var history = radarHistory
+        if history.record(compactSnapshot.allRows.map(LiveRadarInput.init(row:)), at: now) { radarHistory = history }
         if let last = memoryPulse.last, now.timeIntervalSince(last.date) < 4 {
             return
         }

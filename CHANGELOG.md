@@ -4,6 +4,14 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 
 ## [Unreleased]
 
+### Live Radar
+- Rebuilt so it can be read, not just watched. Rings are verdicts (Critical at the center, then Hot, Watch and Quiet); before, distance was raw heat, so a big app held at Watch sat at the center, closer than the one family actually flagged.
+- Quarters say what a family is: apps, servers, developer tools, background work. Before, a blip's bearing was a hash with no meaning and every quiet process piled up on the rim.
+- Names are on the scope: everything at Watch or above, anything getting worse, and the biggest while there is room, placed so they never cover each other, a blip or a ring's name. Before, every blip was an anonymous dot until you hovered it.
+- A blip's size is its memory, and a dotted streak shows where it was five minutes ago, with an arrowhead when it is getting worse or easing off.
+- A contacts list beside the scope names the same families worst first; pointing at a row lights its blip and the other way round, with an instant callout instead of a tooltip.
+- The sweep lights each blip as it passes, on the render server. In Low Power Mode the sweep rests and the scope says so, instead of showing a frozen beam.
+
 ### Stopping
 - Asking an app to quit (⌘Q) now confirms it is still the same process right before the request goes out, on the main thread, instead of before waiting for it; a process ID reused in between can never receive the request.
 
