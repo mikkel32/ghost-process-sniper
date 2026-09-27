@@ -110,15 +110,17 @@ struct PipelineCorrelator: Sendable {
     /// No `-o file`, `-O` or `--output file`; `-o -` still writes to stdout.
     static func curlWritesToStdout(_ arguments: [String]) -> Bool {
         for (index, argument) in arguments.enumerated() {
+            let toStdout = arguments.indices.contains(index + 1) && arguments[index + 1] == "-"
             if argument == "-o" || argument == "--output" {
-                if arguments.indices.contains(index + 1), arguments[index + 1] == "-" { continue }
+                if toStdout { continue }
                 return false
             }
             if argument.hasPrefix("--output=") { return argument == "--output=-" }
             if argument == "-O" || argument.hasPrefix("--remote-name") { return false }
             // Clustered short flags such as -fsSLo or -sO.
-            if argument.hasPrefix("-"), !argument.hasPrefix("--"), argument.count > 2,
-               argument.contains("O") || argument.hasSuffix("o") { return false }
+            if argument.hasPrefix("-"), !argument.hasPrefix("--"), argument.count > 2 {
+                if argument.contains("O") || (argument.hasSuffix("o") && !toStdout) { return false }
+            }
         }
         return true
     }
@@ -139,10 +141,18 @@ struct PipelineCorrelator: Sendable {
     /// A shell with no script and no `-c`: it runs what arrives on stdin.
     /// Words after `-s` or `--` are arguments for that script.
     static func shellReadsStdin(_ arguments: [String]) -> Bool {
-        for argument in arguments {
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            index += 1
             if argument == "-s" || argument == "--" || argument == "-" { return true }
             if argument.hasPrefix("--") { continue }
-            if argument.hasPrefix("-") {
+            // `-o pipefail`, `+O extglob`: the next word is the option's name.
+            if ["-o", "+o", "-O", "+O"].contains(argument) {
+                index += 1
+                continue
+            }
+            if argument.hasPrefix("-") || argument.hasPrefix("+") {
                 if argument.dropFirst().contains("c") { return false }
                 continue
             }
@@ -164,13 +174,14 @@ struct PipelineCorrelator: Sendable {
 
     /// What `sudo` or `env` runs: options, `-u user` and `NAME=value` skipped.
     static func unwrapped(_ arguments: [String], wrapper: String) -> [String] {
+        let takesValue: Set<String> = wrapper == "sudo" ? ["-u", "-g", "-C", "-h", "-p", "-U", "-D", "-r", "-t"] : ["-u", "-P"]
         var index = 0
         while index < arguments.count {
             let argument = arguments[index]
             if wrapper == "env", argument.contains("="), !argument.hasPrefix("-") {
                 index += 1
             } else if argument.hasPrefix("-") {
-                index += (wrapper == "sudo" && ["-u", "-g", "-C", "-h", "-p"].contains(argument)) ? 2 : 1
+                index += takesValue.contains(argument) ? 2 : 1
             } else {
                 break
             }

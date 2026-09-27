@@ -64,6 +64,8 @@ public actor SentinelEngine {
     private var persistenceGeneration: UInt64 = .max
     private var records: [ProcessIdentity: Record] = [:]
     private var findings: [ProcessIdentity: SentinelFinding] = [:]
+    /// Who was running at the last scan.
+    private var alive: Set<ProcessIdentity> = []
     private var launches: [LaunchEvent] = []
     private var launchTimes: [Date] = []
     private var dismissed: Set<String> = []
@@ -111,21 +113,21 @@ public actor SentinelEngine {
               let entry = SentinelTrust.offer(for: record.subject, provenance: record.provenance, now: Date())
         else { return nil }
         trust.insert(entry)
-        trustChanged(path: entry.path, running: findings[identity]?.isRunning ?? false)
+        trustChanged(path: entry.path)
         return entry
     }
 
     public func revokeTrust(id: String) {
         guard let entry = trust.entries.first(where: { $0.id == id }), trust.remove(id: id) else { return }
-        trustChanged(path: entry.path, running: nil)
+        trustChanged(path: entry.path)
     }
 
     /// Saves, and judges every known process at the path again.
-    private func trustChanged(path: String, running: Bool?) {
+    private func trustChanged(path: String) {
         trustStore?.save(trust.entries)
         let now = Date()
         for (identity, record) in records where record.subject.executablePath == path {
-            upsertFinding(for: identity, running: running ?? findings[identity]?.isRunning ?? false, now: now)
+            upsertFinding(for: identity, running: alive.contains(identity), now: now)
         }
         revision &+= 1
         report = buildReport(now: now)
@@ -145,6 +147,7 @@ public actor SentinelEngine {
             byPID[process.pid] = SentinelSubject(process)
         }
         let alive = Set(processes.map(\.identity))
+        self.alive = alive
         let own = Self.family(of: ownPID, in: processes)
 
         // Spawns caught between scans come first, in the order they started.
@@ -254,7 +257,7 @@ public actor SentinelEngine {
         record.evaluation = SentinelRules.evaluate(record.subject, ancestors: record.ancestors, signing: record.signing,
                                                    pipeline: pipeline)
         records[pipeline.runner] = record
-        upsertFinding(for: pipeline.runner, running: running ?? findings[pipeline.runner]?.isRunning ?? true, now: now)
+        upsertFinding(for: pipeline.runner, running: running ?? alive.contains(pipeline.runner), now: now)
     }
 
     /// Rebuilds a finding from the record: the rules' verdict plus the

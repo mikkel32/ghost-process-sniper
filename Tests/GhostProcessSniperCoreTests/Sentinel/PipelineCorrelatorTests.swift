@@ -28,6 +28,12 @@ final class PipelineCorrelatorTests: XCTestCase {
         XCTAssertEqual(role("sudo -E bash"), .stdinRunner)
         XCTAssertEqual(role("env FOO=1 sh"), .stdinRunner)
         XCTAssertNil(role("sudo softwareupdate -l"))
+        XCTAssertEqual(role("curl -so - https://x"), .downloader, "-o - still writes to stdout")
+        XCTAssertNil(role("curl -so out.sh https://x"))
+        XCTAssertEqual(role("bash -o pipefail"), .stdinRunner, "an option's value is not a script")
+        XCTAssertNil(role("bash -o pipefail install.sh"))
+        XCTAssertEqual(role("env -u HOME sh"), .stdinRunner)
+        XCTAssertEqual(role("sudo -u root -H bash"), .stdinRunner)
     }
 
     private func process(_ pid: Int32, _ name: String, _ path: String, command: String? = nil, parent: Int32 = 1,
