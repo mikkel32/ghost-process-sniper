@@ -3,11 +3,20 @@ name: Release
 # Pushing a tag vX.Y.Z builds the universal disk image from that tag, attests its build
 # provenance, and opens a draft GitHub release with the image, its checksum and notes from
 # CHANGELOG.md. Publishing the draft is a person's decision (see Docs/Releasing.md).
-# Run it by hand to build and attest an image without creating a release.
+# Run it by hand to build and attest an image without creating a release. Pull requests that
+# change the packaging build the image as a dry run, without tests (CI runs them) or attestation.
 
 on:
   push:
     tags: ["v*.*.*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "Scripts/release.sh"
+      - "Scripts/release_notes.sh"
+      - "Scripts/bundle-app.sh"
+      - "Scripts/lib/**"
+      - "Packaging/**"
   workflow_dispatch:
 
 concurrency:
@@ -47,6 +56,7 @@ jobs:
           echo "dmg=dist/release/$RADAR_PRODUCT-$RADAR_VERSION.dmg" >> "$GITHUB_OUTPUT"
 
       - name: Architecture, build-script, unit tests, core checks, release build
+        if: github.event_name != 'pull_request'
         run: Scripts/verify.sh
 
       - name: Build the universal disk image
@@ -55,6 +65,7 @@ jobs:
         run: Scripts/release.sh
 
       - name: Attest build provenance
+        if: github.event_name != 'pull_request'
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ steps.version.outputs.dmg }}
