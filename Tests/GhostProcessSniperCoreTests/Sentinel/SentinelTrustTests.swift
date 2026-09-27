@@ -87,8 +87,8 @@ final class SentinelTrustTests: XCTestCase {
         let entries = store.load(now: now)
         XCTAssertEqual(entries.map(\.path), ["/opt/homebrew/bin/ngrok"])
         XCTAssertEqual(entries.first?.anchor, .earlierVersion)
-        XCTAssertNil(defaults.stringArray(forKey: SentinelTrustStore.legacyKey), "migrated once")
-        XCTAssertEqual(store.load(now: now), entries)
+        defaults.set(["/opt/homebrew/bin/other"], forKey: SentinelTrustStore.legacyKey)
+        XCTAssertEqual(store.load(now: now), entries, "migrated once; the old list stays for an earlier version")
 
         var trust = SentinelTrust(entries)
         let ngrok = ExecutableProvenance(signing: CodeSigningSummary(authority: .adHoc, teamIdentifier: nil,

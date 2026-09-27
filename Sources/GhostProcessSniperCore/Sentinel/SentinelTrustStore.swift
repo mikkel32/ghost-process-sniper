@@ -23,7 +23,8 @@ public struct SentinelTrustStore: Sendable {
     /// The saved entries. Paths trusted by an earlier version are carried
     /// over once: shells, interpreters and system tools are dropped (trusting
     /// one hid every later attack through it), the rest bind to the signature
-    /// read the next time they run.
+    /// read the next time they run. The old list is left in place, so going
+    /// back to an earlier version keeps its trust.
     public func load(now: Date = Date()) -> [SentinelTrustEntry] {
         let defaults = defaults
         if let data = defaults.data(forKey: Self.key),
@@ -39,7 +40,6 @@ public struct SentinelTrustStore: Sendable {
                                       anchor: .earlierVersion, added: now)
         }
         save(entries)
-        defaults.removeObject(forKey: Self.legacyKey)
         return entries
     }
 

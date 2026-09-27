@@ -51,7 +51,7 @@ Rules that depend on the signer (`/Users/Shared`, a listener in an odd folder) r
 
 Shells and tools are never trusted whole: trusting `bash` for a browser extension's native host would otherwise hide every later reverse shell or pasted download that runs through bash. An invalid signature is never trusted, and a program whose signature has not been read yet cannot be trusted until it has.
 
-A trusted program whose file no longer matches becomes a Suspicious finding that says what was trusted and what is there now ("You trusted Slack as signed by team BQR82RBBHL; the file there now is unsigned"). While a trusted program's signature is being read its finding waits, so it never flashes an alarm. The **Trusted** list on the Security page shows each entry's scope, with **Revoke**. Entries are saved as JSON under `Sentinel.trust.v2`; paths trusted by 2.1 and earlier are carried over once, shells and tools dropped, and each bound to the first signature read.
+A trusted program whose file no longer matches becomes a Suspicious finding that says what was trusted and what is there now ("You trusted Slack as signed by team BQR82RBBHL; the file there now is unsigned"). While a trusted program's signature is being read its finding waits, so it never flashes an alarm. The **Trusted** list on the Security page shows each entry's scope, with **Revoke**. Entries are saved as JSON under `Sentinel.trust.v2`; paths trusted by 2.1 and earlier are carried over once, shells and tools dropped, and each bound to the first signature read; the old list is left for an earlier version.
 
 ## Watching without polling
 
