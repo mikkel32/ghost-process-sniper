@@ -17,6 +17,7 @@ struct RadarConsoleSidebar: View {
                 destination("Overview", subtitle: "Your Mac at a glance", image: "square.grid.2x2", selection: .overview)
                 destination("All Processes", subtitle: "Search and explore every family", image: "list.bullet.rectangle", selection: .processes)
                 SidebarSecurityDestination(session: session, namespace: destinationNamespace)
+                SidebarEnergyDestination(session: session, namespace: destinationNamespace)
             }
             .padding(10)
 

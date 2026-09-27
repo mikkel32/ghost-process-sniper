@@ -48,6 +48,7 @@ ProcessKiller (Sendable)                          preview and stop, off the main
 - **Port census.** `ListeningSocketReader` counts TCP sockets in LISTEN only. In the background the scheduler picks up to 2 quiet developer processes (6 while visible) whose ports are older than 60 s (15 s); a `port:` search calls `ProcessMonitor.requestPortCensus()`, and that tick reads every same-user process with open files, capped at 40 ms.
 - **Session.** Process group, session (`getsid`, once per identity), controlling terminal, its foreground group and run state travel in `ProcessSessionInfo`.
 - **GPU.** IORegistry accelerator user clients, each counted once by registry ID.
+- **Energy.** The usage read is `RUSAGE_INFO_V6`, so the same call returns each process's lifetime energy (`ri_energy_nj`), idle wake-ups and disk writes. `PowerCounterTracker` turns them into rates per identity on the uptime clock and travels them in `ProcessMetrics.power`; a reading without a fresh read keeps its counters but loses its rates.
 
 Every reading carries fresh, cached or unavailable provenance. A cached reading keeps its original measurement date and adds no trend sample, and a missing reading never becomes zero.
 
@@ -133,6 +134,10 @@ The kill engine lives in `Interventions/`. Presentation code never widens a stop
 - **Incident episodes.** `IncidentLedger` keeps open episodes in memory, closes one after 90 s without activity (at its last activity), reopens it within ten minutes, and writes a row only when an episode starts, peaks, closes or every 30 s. Recurrence counts only resolved incidents.
 - **Maintenance.** Daily, never in the first minute: old incidents, kill history, stale baselines and expired rules are deleted, then incremental vacuum, `optimize` and a truncating checkpoint. `close()` on quit flushes, persists every learned baseline, checkpoints and closes.
 
+## Energy
+
+`RadarRefreshWorker` owns an `EnergyMonitor` and calls it after the thermal projection, over the full raw sample. It records every process into `EnergyLedger` (an hour of one-minute buckets per app, job or known source, grouped by `ThermalWorkloadResolver`), reads the battery (`IOKitBatterySource`: AppleSmartBattery registry keys, 2 s visible, 15 s hidden) and powerd's assertions (`IOKitSleepAssertionSource`, 5 s and 30 s), and builds an `EnergyReport`: ranked consumers with battery time gained, sleep blockers attributed through `AssertionOnBehalfOfPID`, per-family figures averaged over a minute, and findings from `EnergyFindingRules`. `ResponsibleProcessLookup` asks macOS once per identity which app is responsible for a launchd-started helper outside any bundle, and both the resolver and the heat panel group by it. `ProcessMonitor` publishes the report as `energy` and a bucketed `energyGlance` for the popover, sidebar and Overview. See [Energy](Energy.md).
+
 ## Thermals
 
 `ThermalSampler` reads AppleSMC read-only, before each refresh while a surface is visible and at most every 4 s while hidden; `ProcessMonitor` keeps the latest snapshot and a 180-second `ThermalObservationWindow`, so trends and traces are ready whenever a thermal view opens. `RadarRefreshWorker` calls `ThermalActivityAnalyzer.project` over the full raw sample on every refresh and records it in `ThermalActivityHistory` (a decayed load per app or job). The thermal views never signal a process; their stop shortcut goes through the regular preview. See [Thermals](Thermals.md).
@@ -145,7 +150,7 @@ The kill engine lives in `Interventions/`. Presentation code never widens a stop
 | `MenuBar` | `MenuBarCoordinator` (status item, status menu, the single main-menu definition), the popover, the status icon |
 | `Shell` | `RadarConsoleController` and `RadarConsoleSession` (selection, Back/Forward, stops, toasts), sidebar, toolbar, Quick Stop, Settings window |
 | `DesignSystem` | Theme, shared components, layouts, tips, motion, row actions, `RadarWaitLabel` |
-| `Features/<feature>` | Overview, Processes, Duplicates, Incidents, Rules, Interventions (the stop sheet), Thermals, Settings |
+| `Features/<feature>` | Overview, Processes, Duplicates, Incidents, Rules, Interventions (the stop sheet), Thermals, Energy, Sentinel, Settings |
 
 The console session outlives the window, so reopening keeps the selection and projection; presentation stops while the window is hidden. `ThinkingOrbsKit` (vendored in `Packages/`) is used only by the stop sheet's clean-exit wait, the duplicate cull sheet's stopping state (each copy waits out a grace of 2 s or more) and `RadarWaitLabel`, and only for waits of two seconds or more.
 

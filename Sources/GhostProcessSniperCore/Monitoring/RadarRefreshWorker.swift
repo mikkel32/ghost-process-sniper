@@ -76,6 +76,8 @@ public struct RefreshOutcome: Equatable, Sendable {
     public let processes: [ProcessMetrics]
     /// Security findings and the launch feed.
     public let sentinel: SentinelReport
+    /// Energy per app, the battery, and what keeps the Mac awake.
+    public let energy: EnergyReport
 
     public init(
         families: [ProcessFamily],
@@ -93,7 +95,8 @@ public struct RefreshOutcome: Equatable, Sendable {
         generatedAt: Date,
         thermalActivity: ThermalActivitySummary = .empty,
         processes: [ProcessMetrics] = [],
-        sentinel: SentinelReport = .empty
+        sentinel: SentinelReport = .empty,
+        energy: EnergyReport = .empty
     ) {
         self.families = families
         self.summary = summary
@@ -111,6 +114,7 @@ public struct RefreshOutcome: Equatable, Sendable {
         self.thermalActivity = thermalActivity
         self.processes = processes
         self.sentinel = sentinel
+        self.energy = energy
     }
 }
 
@@ -127,17 +131,22 @@ public actor RadarRefreshWorker {
     private var spikeRing = SpikeRingBuffer(limit: 8)
     private var thermalHistory = ThermalActivityHistory()
     private let sentinel: SentinelEngine?
+    private var energy: EnergyMonitor
+    private var responsibility = ResponsibleProcessLookup()
 
     public init(
         sampler: ProcessSampling = NativeProcessSampler(),
         store: RadarStore? = nil,
         builder: ProcessFamilyBuilder = ProcessFamilyBuilder(),
         intelligence: RadarIntelligence = RadarIntelligence(),
-        sentinel: SentinelEngine? = nil
+        sentinel: SentinelEngine? = nil,
+        battery: (any BatterySource)? = IOKitBatterySource(),
+        sleepAssertions: (any SleepAssertionSource)? = IOKitSleepAssertionSource()
     ) {
         self.sampler = sampler
         self.store = store
         self.sentinel = sentinel
+        self.energy = EnergyMonitor(battery: battery, assertions: sleepAssertions)
         self.pipeline = RadarPipeline(builder: builder, intelligence: intelligence)
     }
 
@@ -328,9 +337,13 @@ public actor RadarRefreshWorker {
             detailSignatures: request.focusedSignatureIDs.union(scored.families.prefix(8).map(\.familyKey)),
             processes: batch.processes
         )
+        var resolver = ThermalWorkloadResolver(
+            processes: batch.processes, responsiblePIDs: responsibility.hints(for: batch.processes, now: request.now))
         let currentActivity = ThermalActivityAnalyzer.project(
-            processes: batch.processes, families: scored.families, now: request.now)
+            processes: batch.processes, families: scored.families, now: request.now, resolver: &resolver)
         let thermalActivity = thermalHistory.record(currentActivity, at: request.now)
+        let energyReport = energy.update(processes: batch.processes, families: scored.families,
+                                         resolver: &resolver, uiVisible: request.uiVisible, now: request.now)
         let sentinelReport = await sentinel?.ingest(
             processes: batch.processes, uiVisible: request.uiVisible, now: request.now) ?? .empty
 
@@ -350,7 +363,8 @@ public actor RadarRefreshWorker {
             generatedAt: request.now,
             thermalActivity: thermalActivity,
             processes: batch.processes,
-            sentinel: sentinelReport
+            sentinel: sentinelReport,
+            energy: energyReport
         )
     }
 

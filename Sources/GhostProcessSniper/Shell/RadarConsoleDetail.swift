@@ -30,7 +30,8 @@ struct RadarConsoleDetail: View {
                         ),
                         actions: FamilyPageActions(session: session, family: family),
                         lastScoredAt: family.lastScoredAt,
-                        forensicsFreshness: family.forensicsFreshness
+                        forensicsFreshness: family.forensicsFreshness,
+                        monitor: session.monitor
                     )
                 } else if let report = session.recentStops[familyKey] {
                     RecentStopView(
@@ -59,6 +60,8 @@ struct RadarConsoleDetail: View {
                 RulesConsoleView(session: session)
             case .security:
                 SentinelConsoleView(session: session)
+            case .energy:
+                EnergyConsoleView(session: session)
             }
         }
         // The column's hosting view re-asks for its minimum size on every
@@ -78,6 +81,7 @@ private extension RadarFocusedSelection {
         case .incidents: "Incidents"
         case .rules: "Rules"
         case .security: "Security"
+        case .energy: "Energy"
         }
     }
 }

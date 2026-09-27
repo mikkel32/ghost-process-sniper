@@ -28,13 +28,16 @@ enum ProbeBSDRead: Equatable, Sendable {
     case missing
 }
 
-/// The per-tick CPU and memory reading (`proc_pid_rusage`, RUSAGE_INFO_V4).
+/// The per-tick CPU, memory and energy reading (`proc_pid_rusage`, RUSAGE_INFO_V6).
 struct ProbeUsage: Equatable, Sendable {
     var cpuSeconds: TimeInterval
     var physicalFootprintBytes: UInt64
     var residentBytes: UInt64
-    var wakeups: UInt64
+    /// `ri_pkg_idle_wkups`: the wake-ups Activity Monitor calls "Idle Wake Ups".
+    var idleWakeups: UInt64
     var diskBytesWritten: UInt64
+    /// `ri_energy_nj`; zero where the kernel does not account energy per task.
+    var energyNanojoules: UInt64 = 0
     /// `ri_proc_start_abstime`: stable for one process, so a change means the pid was reused.
     var processStartAbsoluteTime: UInt64
     /// Uptime clock at the moment of the read, set by the probe reader.

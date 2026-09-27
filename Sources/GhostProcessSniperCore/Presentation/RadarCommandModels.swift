@@ -8,6 +8,7 @@ public enum RadarFocusedSelection: Hashable, Sendable {
     case incidents
     case rules
     case security
+    case energy
 
     public var familyKey: String? {
         if case let .family(familyKey) = self {
@@ -25,6 +26,7 @@ public enum RadarFocusedSelection: Hashable, Sendable {
         case .incidents: "incidents"
         case .rules: "rules"
         case .security: "security"
+        case .energy: "energy"
         }
     }
 
@@ -39,6 +41,7 @@ public enum RadarFocusedSelection: Hashable, Sendable {
         case "incidents": self = .incidents
         case "rules": self = .rules
         case "security": self = .security
+        case "energy": self = .energy
         // The Engine screen moved to Settings; a saved "engine" lands on Overview.
         default: self = .overview
         }

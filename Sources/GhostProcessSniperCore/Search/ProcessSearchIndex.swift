@@ -52,12 +52,12 @@ public struct ProcessSearchIndex: Sendable {
             if process.isSystemProcess { flags.insert(.system) }
             let subject = SearchSubject(
                 root: text(for: process, live: &live),
-                measurements: SearchMeasurements(
+                measurements: SearchMeasurements(power: [process], base: SearchMeasurements(
                     cpuPercent: process.cpuPercent,
                     memoryBytes: Double(process.memoryForScoringBytes),
                     gpuPercent: process.gpuUsagePercent,
                     threads: Double(process.threadCount)
-                ),
+                )),
                 flags: flags
             )
             untracked.append(Untracked(process: process, subject: subject))
@@ -115,14 +115,14 @@ public struct ProcessSearchIndex: Sendable {
             root: root,
             helpers: helpers,
             kindLabel: row.kindText,
-            measurements: SearchMeasurements(
+            measurements: SearchMeasurements(power: family?.members ?? [], base: SearchMeasurements(
                 cpuPercent: row.cpuPercent,
                 memoryBytes: Double(row.memoryBytes),
                 gpuPercent: row.gpuPercent,
                 threads: Double(threads),
                 leakMegabytesPerMinute: row.leakVelocity,
                 children: Double(row.childCount)
-            ),
+            )),
             flags: flags
         )
     }

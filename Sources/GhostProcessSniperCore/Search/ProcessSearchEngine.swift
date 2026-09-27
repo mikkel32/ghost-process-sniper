@@ -68,6 +68,10 @@ public struct SearchMeasurements: Equatable, Sendable {
     /// Only radar-assessed families carry growth and helper counts.
     public var leakMegabytesPerMinute: Double?
     public var children: Double?
+    /// Nil until two reads of the process exist.
+    public var energyWatts: Double?
+    public var idleWakeupsPerSecond: Double?
+    public var diskWriteBytesPerSecond: Double?
 
     public init(
         cpuPercent: Double,
@@ -75,7 +79,10 @@ public struct SearchMeasurements: Equatable, Sendable {
         gpuPercent: Double,
         threads: Double,
         leakMegabytesPerMinute: Double? = nil,
-        children: Double? = nil
+        children: Double? = nil,
+        energyWatts: Double? = nil,
+        idleWakeupsPerSecond: Double? = nil,
+        diskWriteBytesPerSecond: Double? = nil
     ) {
         self.cpuPercent = cpuPercent
         self.memoryBytes = memoryBytes
@@ -83,6 +90,25 @@ public struct SearchMeasurements: Equatable, Sendable {
         self.threads = threads
         self.leakMegabytesPerMinute = leakMegabytesPerMinute
         self.children = children
+        self.energyWatts = energyWatts
+        self.idleWakeupsPerSecond = idleWakeupsPerSecond
+        self.diskWriteBytesPerSecond = diskWriteBytesPerSecond
+    }
+
+    /// Sums the rates of the members that have them; nil when none does.
+    init(power members: [ProcessMetrics], base: SearchMeasurements) {
+        self = base
+        var watts: Double?
+        var wakeups: Double?
+        var writes: Double?
+        for member in members {
+            if let value = member.power.watts { watts = (watts ?? 0) + value }
+            if let value = member.power.idleWakeupsPerSecond { wakeups = (wakeups ?? 0) + value }
+            if let value = member.power.diskWriteBytesPerSecond { writes = (writes ?? 0) + value }
+        }
+        energyWatts = watts
+        idleWakeupsPerSecond = wakeups
+        diskWriteBytesPerSecond = writes
     }
 
     func value(for metric: ProcessSearchQuery.Metric) -> Double? {
@@ -93,6 +119,9 @@ public struct SearchMeasurements: Equatable, Sendable {
         case .threads: threads
         case .leak: leakMegabytesPerMinute
         case .children: children
+        case .energy: energyWatts
+        case .wakeups: idleWakeupsPerSecond
+        case .writes: diskWriteBytesPerSecond
         }
     }
 }

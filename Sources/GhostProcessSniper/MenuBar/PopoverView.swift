@@ -16,12 +16,14 @@ struct PopoverView: View {
     let onOpenSettings: () -> Void
     let onQuit: () -> Void
     var onOpenSecurity: () -> Void = {}
+    var onOpenEnergy: () -> Void = {}
     var refreshesOnAppear = true
 
     var body: some View {
         VStack(spacing: 12) {
             PopoverVerdictBar(monitor: monitor)
             PopoverSecurityRow(monitor: monitor, onOpen: onOpenSecurity)
+            PopoverEnergyRow(monitor: monitor, onOpen: onOpenEnergy)
             PopoverStoreWarning(monitor: monitor)
             PopoverCulprits(monitor: monitor, quickStops: quickStops, onOpenFamily: onOpenFamily, onStop: onStop)
             PopoverVitals(monitor: monitor)

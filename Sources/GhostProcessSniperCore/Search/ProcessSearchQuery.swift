@@ -10,7 +10,8 @@ import Foundation
 /// - `pid:123,456` and `port:3000` match identities; a bare number matches a
 ///   PID or listening port as well as text.
 /// - `cpu>20` `mem>1.5gb` `gpu>=5` `leak>2` `threads>100` `children>3`
-///   compare measurements (memory defaults to MB).
+///   `watts>2` `wakeups>150` `writes>5mb` compare measurements (memory and
+///   disk writes per second default to MB).
 /// - `is:hot` `is:leaking` `is:killable` `is:dev` `is:system` `is:mine`
 ///   `is:tracked` … select radar states; any unique prefix works (`is:leak`).
 public struct ProcessSearchQuery: Equatable, Sendable {
@@ -39,10 +40,13 @@ public struct ProcessSearchQuery: Equatable, Sendable {
     }
 
     public enum Metric: String, CaseIterable, Sendable {
-        case cpu, memory, gpu, leak, threads, children
+        case cpu, memory, gpu, leak, threads, children, energy, wakeups, writes
 
         static func named(_ key: String) -> Metric? {
             switch key {
+            case "watts", "watt", "energy", "power": .energy
+            case "wakeups", "wakes", "wake": .wakeups
+            case "writes", "write", "disk": .writes
             case "cpu": .cpu
             case "mem", "memory", "ram": .memory
             case "gpu": .gpu
@@ -61,6 +65,9 @@ public struct ProcessSearchQuery: Equatable, Sendable {
             case .leak: "Growth"
             case .threads: "Threads"
             case .children: "Helpers"
+            case .energy: "Energy"
+            case .wakeups: "Wake-ups"
+            case .writes: "Disk writes"
             }
         }
     }
@@ -86,7 +93,8 @@ public struct ProcessSearchQuery: Equatable, Sendable {
     public struct MetricFilter: Equatable, Sendable {
         public let metric: Metric
         public let comparison: Comparison
-        /// Percent for CPU and GPU, bytes for memory, MB/min for growth.
+        /// Percent for CPU and GPU, bytes for memory, MB/min for growth,
+        /// watts for energy, per second for wake-ups, bytes per second for writes.
         public let value: Double
         public let isNegated: Bool
 
@@ -311,7 +319,7 @@ public struct ProcessSearchQuery: Equatable, Sendable {
     }
 
     private static let metricPattern = try! NSRegularExpression(
-        pattern: #"^([a-z]+):?(>=|<=|>|<|=)?([0-9]+(?:\.[0-9]+)?)\s*(%|[kmgt]i?b?|b|mb/min)?$"#
+        pattern: #"^([a-z]+):?(>=|<=|>|<|=)?([0-9]+(?:\.[0-9]+)?)\s*(%|[kmgt]i?b?(?:/s)?|b(?:/s)?|mb/min|w|/s)?$"#
     )
 
     private static func metricFilter(_ token: String, negated: Bool) -> MetricFilter? {
@@ -327,7 +335,7 @@ public struct ProcessSearchQuery: Equatable, Sendable {
         let comparison = Range(match.range(at: 2), in: token).flatMap { Comparison(rawValue: String(token[$0])) } ?? .greaterOrEqual
         let unit = Range(match.range(at: 4), in: token).map { String(token[$0]) } ?? ""
         let value: Double
-        if metric == .memory {
+        if metric == .memory || metric == .writes {
             switch unit.first {
             case "b": value = number
             case "k": value = number * 1_024
@@ -353,6 +361,9 @@ public struct ProcessSearchQuery: Equatable, Sendable {
         case .cpu, .gpu: value = "\(Self.number(filter.value))%"
         case .leak: value = "\(Self.number(filter.value)) MB/min"
         case .threads, .children: value = Self.number(filter.value)
+        case .energy: value = "\(Self.number(filter.value)) W"
+        case .wakeups: value = "\(Self.number(filter.value))/s"
+        case .writes: value = RadarFormat.bytes(UInt64(max(0, filter.value))) + "/s"
         }
         let symbol = switch filter.comparison {
         case .greater: ">"

@@ -216,9 +216,10 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         addMenuItem("Overview", key: "1", modifiers: [.command], action: #selector(showOverviewCommand), to: radarMenu)
         addMenuItem("All Processes", key: "2", modifiers: [.command], action: #selector(showProcessesCommand), to: radarMenu)
         addMenuItem("Security", key: "3", modifiers: [.command], action: #selector(showSecurityCommand), to: radarMenu)
-        addMenuItem("Duplicates", key: "4", modifiers: [.command], action: #selector(showDuplicatesCommand), to: radarMenu)
-        addMenuItem("Incidents", key: "5", modifiers: [.command], action: #selector(showIncidentsCommand), to: radarMenu)
-        addMenuItem("Rules", key: "6", modifiers: [.command], action: #selector(showRulesCommand), to: radarMenu)
+        addMenuItem("Energy", key: "4", modifiers: [.command], action: #selector(showEnergyCommand), to: radarMenu)
+        addMenuItem("Duplicates", key: "5", modifiers: [.command], action: #selector(showDuplicatesCommand), to: radarMenu)
+        addMenuItem("Incidents", key: "6", modifiers: [.command], action: #selector(showIncidentsCommand), to: radarMenu)
+        addMenuItem("Rules", key: "7", modifiers: [.command], action: #selector(showRulesCommand), to: radarMenu)
         radarMenu.addItem(.separator())
         addMenuItem("Copy Incident Report", key: "c", modifiers: [.command, .shift], action: #selector(copyReportCommand), to: radarMenu)
         addMenuItem("Copy Diagnostics", key: "d", modifiers: [.command, .shift], action: #selector(copyDiagnosticsCommand), to: radarMenu)
@@ -364,6 +365,11 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
                     self?.popover?.close()
                     self?.monitor.setPopoverVisible(false)
                     self?.showSecurityCommand()
+                },
+                onOpenEnergy: { [weak self] in
+                    self?.popover?.close()
+                    self?.monitor.setPopoverVisible(false)
+                    self?.showEnergyCommand()
                 }
             )
         )
@@ -470,6 +476,11 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     @objc func showSecurityCommand() {
         openConsole()
         consoleController.focusSection(.security)
+    }
+
+    @objc func showEnergyCommand() {
+        openConsole()
+        consoleController.focusSection(.energy)
     }
 
     @objc private func showDuplicatesCommand() {

@@ -4,6 +4,16 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 
 ## [Unreleased]
 
+### Energy
+- A new **Energy** section (⌘4) shows what uses energy in real watts, measured by macOS for every process, next to the whole Mac's draw, the battery time left, battery health and cycle count, and the last hour as a sparkline.
+- On battery, every app and job says how much longer the battery would last without it ("+40 min").
+- **Keeping your Mac awake** names everything holding back sleep and for how long, and blames the app even when macOS holds it on the app's behalf: a Safari tab that left the speakers open reads "Safari · An audio stream is open (held by coreaudiod)". Keep-awake apps such as Amphetamine are marked, and macOS's own services are folded away.
+- Findings with one next step: an idle app keeping the Mac awake for half an hour or more, an app waking the processor 150 times a second or more while doing almost nothing (the limit macOS itself enforces), a job writing to disk without a break, and on battery an app costing 20 minutes of battery or more. Builds, databases and VMs are allowed to write a lot.
+- Family pages show the family's energy, wake-ups, disk writes and whether it keeps the Mac awake. The popover shows the top energy finding, or the battery line while on battery, and the Overview shows a banner while a finding needs attention.
+- Search understands `watts>2`, `wakeups>150` and `writes>5mb`.
+- Safari tabs and other helpers macOS starts for an app outside its bundle now count toward that app, on the Energy page and in the heat panel, instead of standing alone as `com.apple.WebKit.WebContent`.
+- Sections are now ⌘1 Overview, ⌘2 All Processes, ⌘3 Security, ⌘4 Energy, ⌘5 Duplicates, ⌘6 Incidents, ⌘7 Rules, following the sidebar order.
+
 ## [2.1.0] — 2026-09-27
 
 Sentinel, a security watch that explains what it sees; a console that does about half the layout work; numbers that read the same in every language; and releases built in the open, with provenance you can verify.

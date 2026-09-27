@@ -27,6 +27,7 @@ public extension ProcessSampling {
 public actor NativeProcessSampler: ProcessSampling {
     private let source: any ProcessProbeSource
     private var cpuTracker = CPUUsageTracker<ProcessIdentity>()
+    private var powerTracker = PowerCounterTracker()
     private var telemetryCache = ProcessTelemetryCache()
     private var forensicsCache = ForensicsCache()
     private var scanCache = ProcessScanCache()
@@ -68,7 +69,7 @@ public actor NativeProcessSampler: ProcessSampling {
 
         tick.samples.reserveCapacity(tick.rawSamples.count)
         for raw in tick.rawSamples {
-            var sample = measure(raw, counters: &tick.counters)
+            var sample = measure(raw, now: now, counters: &tick.counters)
             sample.telemetry = cachedTelemetry(for: raw, sampleIndex: tick.samples.count, plan: plan, tick: &tick)
             sample.forensics = cachedForensics(for: raw, sampleIndex: tick.samples.count, plan: plan, tick: &tick)
             tick.samples.append(sample)
@@ -118,7 +119,8 @@ public actor NativeProcessSampler: ProcessSampling {
                 cpuMeasurementStatus: sample.cpuMeasurementStatus,
                 gpuMeasurementStatus: gpuSnapshot.measuredAtByPID[sample.identity.pid]
                     .map { $0 == now ? .fresh : .cached($0) } ?? .unavailable,
-                session: sample.session
+                session: sample.session,
+                power: sample.power
             )
             scanCache.update(ProcessRecord(identity: sample.identity, process: process,
                 telemetryRefreshedAt: telemetry.isPlaceholder ? .distantPast : telemetry.refreshedAt))
@@ -129,6 +131,7 @@ public actor NativeProcessSampler: ProcessSampling {
         if shouldPruneCaches(now: now, processCount: processes.count, tickComplete: tickComplete) {
             let identities = Set(processes.map(\.identity))
             cpuTracker.prune(keeping: identities)
+            powerTracker.prune(keeping: identities)
             telemetryCache.prune(keeping: identities)
             forensicsCache.prune(keeping: identities)
             scanCache.prune(keeping: identities)
@@ -154,7 +157,7 @@ public actor NativeProcessSampler: ProcessSampling {
 
     // MARK: - CPU and memory
 
-    private func measure(_ raw: RawProcessSample, counters: inout SamplingCounters) -> ActiveProcessSample {
+    private func measure(_ raw: RawProcessSample, now: Date, counters: inout SamplingCounters) -> ActiveProcessSample {
         let lite = raw.liteRecord
         let identity = lite.identity
         let cached = scanCache.record(for: identity)?.process
@@ -178,6 +181,14 @@ public actor NativeProcessSampler: ProcessSampling {
             }
         }
 
+        // Counters without a fresh read keep their last value but lose their
+        // rates: a stale watt figure must not read as current.
+        var power = cached?.power ?? .unmeasured
+        power.watts = nil
+        power.idleWakeupsPerSecond = nil
+        power.diskWriteBytesPerSecond = nil
+        if let usage { power = powerTracker.usage(for: identity, reading: usage, at: now) }
+
         let threadCount = raw.task?.threadCount ?? cached?.threadCount ?? 0
         let virtualBytes = raw.task?.virtualBytes ?? cached?.virtualMemoryBytes ?? 0
         if usage == nil, cached != nil { counters.reusedRecordCount += 1 }
@@ -199,7 +210,8 @@ public actor NativeProcessSampler: ProcessSampling {
             isPriority: raw.priority > 0,
             // The session never changes after setsid, so getsid runs once per
             // identity and later passes reuse the cached value.
-            session: lite.session(sessionID: cached?.sessionID ?? source.sessionID(raw.pid))
+            session: lite.session(sessionID: cached?.sessionID ?? source.sessionID(raw.pid)),
+            power: power
         )
     }
 

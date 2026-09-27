@@ -31,6 +31,10 @@ public final class ProcessMonitor {
     public private(set) var thermalActivity: ThermalActivitySummary = .empty
     /// Security findings, the launch feed and the privacy sensors.
     public internal(set) var sentinel: SentinelReport = .empty
+    /// Energy per app, the battery and sleep blockers; changes every scan.
+    public private(set) var energy: EnergyReport = .empty
+    /// The slice of `energy` the menu bar and Overview show; changes rarely.
+    public private(set) var energyGlance: EnergyGlance = .empty
     @ObservationIgnored let sentinelEngine: SentinelEngine?
     /// Every process in the latest sample, for search. Not observed: the
     /// console re-queries on each publish, and views never read it directly.
@@ -89,7 +93,9 @@ public final class ProcessMonitor {
         store: RadarStore? = ProcessMonitor.createDefaultStore(),
         notifier: RadarNotifying = NoopRadarNotifier(),
         thermalSampler: any ThermalSampling = ThermalSampler(),
-        sentinel: SentinelEngine.Live? = nil
+        sentinel: SentinelEngine.Live? = nil,
+        battery: (any BatterySource)? = IOKitBatterySource(),
+        sleepAssertions: (any SleepAssertionSource)? = IOKitSleepAssertionSource()
     ) {
         self.settings = settings
         settingsBeforeLoad = settings
@@ -104,7 +110,9 @@ public final class ProcessMonitor {
             store: store,
             builder: builder,
             intelligence: intelligence,
-            sentinel: engine
+            sentinel: engine,
+            battery: battery,
+            sleepAssertions: sleepAssertions
         )
         // A browser or mail app starting a shell is worth a scan now, not at
         // the next tick; the relay lets the watcher ask without owning us.
@@ -271,6 +279,9 @@ public final class ProcessMonitor {
         if outcome.sentinel != sentinel {
             sentinel = outcome.sentinel
         }
+        if outcome.energy != energy { energy = outcome.energy }
+        let glance = EnergyGlance(outcome.energy)
+        if glance != energyGlance { energyGlance = glance }
         recordSample(outcome.processes)
         publish(payload: outcome.payload)
     }

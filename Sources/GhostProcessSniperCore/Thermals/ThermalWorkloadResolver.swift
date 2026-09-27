@@ -94,12 +94,15 @@ struct ThermalWorkloadResolver {
                                                  "alacritty", "wezterm", "hyper"]
 
     private let processesByPID: [Int32: ProcessMetrics]
+    /// The app macOS holds responsible for a launchd-started helper, by identity.
+    private let responsiblePIDs: [ProcessIdentity: Int32]
     private var assignments: [ProcessIdentity: ThermalWorkloadAssignment] = [:]
     private var appAssignments: [String: ThermalWorkloadAssignment] = [:]
     /// Parent links followed so far; bounded by maximumHops per resolved process.
     private(set) var visitedHops = 0
 
-    init(processes: [ProcessMetrics]) {
+    init(processes: [ProcessMetrics], responsiblePIDs: [ProcessIdentity: Int32] = [:]) {
+        self.responsiblePIDs = responsiblePIDs
         var byPID: [Int32: ProcessMetrics] = [:]
         byPID.reserveCapacity(processes.count)
         for process in processes {
@@ -141,6 +144,13 @@ struct ThermalWorkloadResolver {
                 return appAssignment(app)
             }
             root = parent
+        }
+        // An XPC service or helper launchd started for an app, such as a
+        // Safari tab's WebContent process, belongs to that app.
+        if let responsible = responsiblePIDs[root.identity] ?? responsiblePIDs[process.identity],
+           let owner = processesByPID[responsible],
+           let app = Self.applicationPath(owner.executablePath) {
+            return appAssignment(app)
         }
         return Self.job(root: root, host: nil, kind: root.identity == process.identity ? .process : .job)
     }

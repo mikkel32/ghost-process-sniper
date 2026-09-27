@@ -49,6 +49,7 @@ Narrow a search with filters; the chips under the filter bar show how the search
 | `name:` `cmd:` `path:` `user:` `kind:` | Search one field only. |
 | `pid:123,456` `port:3000` | Exact identities. |
 | `cpu>20` `mem>1.5gb` `gpu>5` `threads>100` | Measurements; memory without a unit means MB. |
+| `watts>2` `wakeups>150` `writes>5mb` | Energy in watts, idle wake-ups per second, disk writes per second (MB without a unit). |
 | `leak>2` `children>3` | Growth in MB/min and helper count (tracked families only). |
 | `is:attention` `is:hot` `is:critical` `is:quiet` `is:leaking` `is:killable` `is:dev` `is:duplicate` | Radar states (tracked families only); `is:stoppable` means `is:killable`. |
 | `is:mine` `is:system` `is:tracked` `is:untracked` | Ownership and tracking. |
@@ -166,6 +167,16 @@ The result leads with what happened, by name — "Stopped vite and 3 helpers in 
 
 While a suspicious or dangerous process runs, a banner sits above the Overview, the menu-bar icon rises to hot or critical, and one notification is sent. [Sentinel](Sentinel.md) explains every pattern and its limits.
 
+## Energy
+
+**Energy** (⌘4) answers "what is draining my battery, and what is keeping my Mac awake?" The card at the top shows the battery (or the charger), the whole Mac's draw, how much of it apps and jobs account for, and the last hour as a sparkline. Battery health and cycle count sit underneath.
+
+- **Worth a look** appears when something deserves attention: an idle app holding the Mac awake for half an hour or more, an app waking the processor 150 times a second or more while doing almost nothing (the limit macOS itself enforces), a job writing to disk without a break, or, on battery, an app costing twenty minutes of battery or more. Each finding says what to do, with **Open Family** and **Stop…**.
+- **Using energy now** ranks apps and jobs by their average over the last five minutes, with wake-ups and disk writes per second. On battery, the green figure is how much longer the battery would last if that app stopped. Click a row to open its family; right-click for **Stop…** or **Show in Finder**. Apps that used energy and exited in the last hour are listed underneath.
+- **Keeping your Mac awake** lists everything holding back sleep and for how long. When macOS holds it on an app's behalf — coreaudiod keeping the speakers open for a Safari tab — the app gets the blame and the holder is named. Keep-awake apps such as Amphetamine are marked, and macOS's own services are folded away.
+
+A family's page shows the same figures for that family: energy, wake-ups, disk writes and whether it keeps the Mac awake. Search understands `watts>2`, `wakeups>150` and `writes>5mb` (per second). The [Energy notes](Energy.md) explain every measurement and threshold.
+
 ## Duplicates
 
 **Duplicates** lists work running more than once. A *copy* is an independently started instance — from a shell or by launchd; the workers one tool starts are a pool, not duplicates. Interpreted scripts are compared by what they run, so `node vite` and `node tsserver` are not copies of each other.
@@ -209,8 +220,8 @@ When the radar has a credible reason to interrupt you, it posts one notification
 | Search all processes | ⌘F |
 | Open the best match | ↩ in the search field |
 | Scan now | ⌘R |
-| Overview / All Processes / Security | ⌘1 / ⌘2 / ⌘3 |
-| Duplicates / Incidents / Rules | ⌘4 / ⌘5 / ⌘6 |
+| Overview / All Processes / Security / Energy | ⌘1 / ⌘2 / ⌘3 / ⌘4 |
+| Duplicates / Incidents / Rules | ⌘5 / ⌘6 / ⌘7 |
 | Back / Forward | ⌘[ / ⌘] |
 | Next / previous family | ⌘↓ / ⌘↑ (↓ / ↑ in the sidebar) |
 | Stop the selected family | ⇧⌘⌫ |

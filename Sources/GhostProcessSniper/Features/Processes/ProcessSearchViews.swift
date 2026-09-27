@@ -35,6 +35,7 @@ struct ProcessSearchSummary: View {
         ("Leaking", "is:leaking"),
         ("CPU above 20%", "cpu>20"),
         ("Memory above 1 GB", "mem>1gb"),
+        ("Energy above 1 W", "watts>1"),
         ("Can stop", "is:killable"),
         ("Mine", "is:mine")
     ]

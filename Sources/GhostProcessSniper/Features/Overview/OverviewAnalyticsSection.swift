@@ -91,7 +91,7 @@ private struct RecentIncidentsCard: View {
                 tip: RadarTip(
                     title: "Incidents",
                     message: "Every time a family crosses into hot, an incident is recorded with its peak score, metrics, and timeline — a memory of what misbehaved even after it calms down. Click through for the full log.",
-                    shortcut: "⌘5 Incidents"
+                    shortcut: "⌘6 Incidents"
                 ),
                 accent: .pink
             ) {

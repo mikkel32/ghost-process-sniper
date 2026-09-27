@@ -34,6 +34,7 @@ Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a 
 
 - **Menu-bar radar.** A tiny scope whose shape and color change with the state, and a popover that leads with one verdict, the culprits, and a **Quick Stop** for the ones worth stopping.
 - **Sentinel security watch.** Catches the shapes attacks take on a Mac: a browser, mail or chat app starting a shell, a pasted command that downloads and runs code (the "fake CAPTCHA" trick), hidden base64 payloads, homemade password dialogs, keychain and browser-cookie theft, reverse shells and backdoor listeners, miners, programs impersonating system processes (even with look-alike letters), apps disguised as documents, and unsigned programs in temporary or hidden folders. Browsers and terminals are watched with kernel process events, so a command that runs for 200 ms is still seen with its full arguments. New launch agents and daemons are caught the moment they are written, and the microphone and camera show who is using them. Every finding shows the chain that launched it, the exact evidence, and one next step ([how it works](Docs/Sentinel.md)).
+- **Energy and battery.** Real watts for every app and job, measured by macOS for each process, next to the whole Mac's draw and the battery time left. On battery it says how much longer the battery would last without each app. It names what keeps your Mac from sleeping — even when macOS holds it on an app's behalf, like a Safari tab that left the speakers open for a day — and flags apps waking the processor hundreds of times a second or writing to disk without a break ([how it works](Docs/Energy.md)).
 - **Leak and runaway detection.** CPU and memory are measured for every one of your processes on every scan. Slow leaks are caught from up to 90 minutes of per-process history, and the helper that is growing is named. Builds, busy loops, idle services that start burning CPU, and a saturated Mac are told apart, so a long compile is not a "runaway".
 - **Process families.** Apps, helpers, dev servers, and the workers they spawn are grouped, so you see "Slack" or "vite dev" — not forty anonymous PIDs. Language servers, databases and notebook kernels an editor starts get their own family.
 - **Forgotten processes.** Judged on real evidence — a job that outlived its terminal, no CPU use for half an hour, a deleted working directory, a port held while idle — never on "its parent is launchd", which is true of every app.
@@ -53,6 +54,7 @@ Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a 
 - **No network access.** There is no networking code: no telemetry, no analytics, no update pings.
 - **No admin rights.** No privileged helper, kernel extension, or Full Disk Access. Sensor reads are read-only.
 - **Your processes only.** It can only signal processes owned by your user, and only after you confirm. A protection floor below that refuses to stop Ghost itself, the terminal or app it runs inside, `loginwindow`, `WindowServer`, `launchd`, and processes macOS marks as system processes.
+- **Energy stays read-only.** Battery and power figures come from the battery's registry entry and powerd's assertion list, the same sources `ioreg` and `pmset` read; nothing is changed.
 - **Local data.** Settings and history live in one SQLite file in `~/Library/Application Support/Ghost Process Sniper/`.
 - **Sentinel stays on your Mac.** Launch feeds and captured command lines live only in memory and are never written to disk. Microphone and camera status is read from Core Audio and CoreMediaIO without opening a device or asking for permission. Findings never act on their own: stopping goes through the same preview and confirmation as everything else.
 
@@ -102,11 +104,12 @@ Click the menu-bar scope for a summary; **Open Dashboard** opens the console (ri
 | **Overview** | One verdict — what needs doing, and the button that does it — then what is urgent, what is trending the wrong way, and why. |
 | **All Processes** | Every family plus every other running process, searchable by name, helper, command, path, PID, or port — typo-tolerant, with filters like `cpu>20`, `port:3000` or `is:leaking`. |
 | **Security** | Whether anything running looks like an attack, what starts automatically, who is using the microphone or camera, and a live feed of every new process. |
+| **Energy** | What uses energy, how long the battery will last and what each app costs of it, what keeps the Mac awake, and what wakes it or writes to disk nonstop. |
 | **Duplicates** | Which work is running more than once, which copy to keep, and which extras can go. |
 | **Incidents** | What has leaked, spiked, or run away before, and how often. |
 | **Rules** | What is snoozed or ignored, and how the radar should treat specific apps or commands. |
 
-Handy shortcuts: **⌘F** search (**↩** opens the best match) · **⌘R** scan now · **⌘1–⌘6** switch sections · **⌘[** / **⌘]** back and forward · **⇧⌘⌫** stop the selection · **⌥⌘I** inspector · **⌘,** settings.
+Handy shortcuts: **⌘F** search (**↩** opens the best match) · **⌘R** scan now · **⌘1–⌘7** switch sections · **⌘[** / **⌘]** back and forward · **⇧⌘⌫** stop the selection · **⌥⌘I** inspector · **⌘,** settings.
 
 ### What a stop does
 
@@ -161,6 +164,7 @@ ProcessMonitor (MainActor)            observable facade; schedules scans by dema
         │                             forgotten-process evidence, pressure attribution, rules
         ├─ SentinelEngine (actor)     attack shapes, launch chains, offline signature checks, startup
         │                             items, microphone and camera; also woken by kernel spawn events
+        ├─ EnergyMonitor              per-process energy, wake-ups and writes, battery, sleep blockers
         ├─ RadarStore (actor)         local SQLite, versioned migrations, learned in memory and written behind
         └─ RadarPublishPayload        console snapshot and detail panels, published only when they change
 ProcessKiller                         preview, protection floor, phase walker, launchd bootout, outcome checks
@@ -168,7 +172,7 @@ ProcessKiller                         preview, protection floor, phase walker, l
 
 The code is split into two targets: **`GhostProcessSniperCore`** (sampling, intelligence, persistence, interventions — no UI) and **`GhostProcessSniper`** (SwiftUI app, menu bar, console). Architecture rules — folder ownership, the core/UI boundary, SQLite isolation, file-size budgets — are enforced by `Scripts/check_architecture.py`.
 
-Further reading: [Architecture](Docs/Architecture.md) · [Sentinel](Docs/Sentinel.md) · [Development](Docs/Development.md) · [Releasing](Docs/Releasing.md) · [Thermals](Docs/Thermals.md) · [Performance measurements](Docs/Performance.md)
+Further reading: [Architecture](Docs/Architecture.md) · [Sentinel](Docs/Sentinel.md) · [Energy](Docs/Energy.md) · [Development](Docs/Development.md) · [Releasing](Docs/Releasing.md) · [Thermals](Docs/Thermals.md) · [Performance measurements](Docs/Performance.md)
 
 ## Contributing
 

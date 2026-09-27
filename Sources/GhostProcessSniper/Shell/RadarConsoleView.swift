@@ -222,7 +222,7 @@ struct RadarConsoleView: View {
 
     private var showsGlobalSearch: Bool {
         switch session.state.focusedSelection {
-        case .overview, .processes, .family, .duplicates, .security:
+        case .overview, .processes, .family, .duplicates, .security, .energy:
             true
         case .incidents, .rules:
             false

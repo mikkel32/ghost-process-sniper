@@ -24,7 +24,7 @@ struct RadarQuickGuideView: View {
             }
 
             guideStep("1", title: "See the whole picture", detail: "The overview separates urgent issues from early warnings. Summary cards open the corresponding processes or tools.", icon: "square.grid.2x2")
-            guideStep("2", title: "Find the process behind the numbers", detail: "Search reaches every running process by name, helper, command, path, PID, or port — typos included. Narrow with filters like cpu>20, mem>1gb, is:leaking, or -helper; Return opens the best match.", icon: "list.bullet.rectangle")
+            guideStep("2", title: "Find the process behind the numbers", detail: "Search reaches every running process by name, helper, command, path, PID, or port — typos included. Narrow with filters like cpu>20, mem>1gb, watts>1, is:leaking, or -helper; Return opens the best match.", icon: "list.bullet.rectangle")
             guideStep("3", title: "Review before you act", detail: "Open a family to inspect its process tree and history. A stop preview shows the exact targets before you confirm anything.", icon: "checkmark.shield")
 
             Divider()
@@ -34,9 +34,9 @@ struct RadarQuickGuideView: View {
                     shortcut("Open best match", keys: "↩")
                     shortcut("Scan now", keys: "⌘R")
                     shortcut("Overview · All Processes", keys: "⌘1 · ⌘2")
-                    shortcut("Security", keys: "⌘3")
-                    shortcut("Duplicates · Incidents", keys: "⌘4 · ⌘5")
-                    shortcut("Rules", keys: "⌘6")
+                    shortcut("Security · Energy", keys: "⌘3 · ⌘4")
+                    shortcut("Duplicates · Incidents", keys: "⌘5 · ⌘6")
+                    shortcut("Rules", keys: "⌘7")
                     shortcut("Back · Forward", keys: "⌘[ · ⌘]")
                     shortcut("Settings", keys: "⌘,")
                 }

@@ -37,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         coordinator.start()
         let arguments = ProcessInfo.processInfo.arguments
-        // `--section security` (or overview, processes, duplicates, incidents,
+        // `--section security` (or overview, processes, energy, duplicates, incidents,
         // rules) opens the console on that page.
         if let index = arguments.firstIndex(of: "--section"), arguments.indices.contains(index + 1) {
             coordinator.openConsole(section: RadarFocusedSelection(storageValue: arguments[index + 1]))
