@@ -10,16 +10,24 @@ public struct LongTermTrend: Equatable, Sendable {
     /// R² of the minute means, weighted by each member's growth.
     public let rSquared: Double
     public let spanMinutes: Double
+    /// The part of the slope from members that kept growing through at
+    /// least two thirds of their window; one allocation grows in one third.
+    public let persistentSlopeMegabytesPerMinute: Double
 
-    public static let none = LongTermTrend(slopeMegabytesPerMinute: 0, floorSlopeMegabytesPerMinute: 0, rSquared: 0, spanMinutes: 0)
+    public static let none = LongTermTrend(slopeMegabytesPerMinute: 0, floorSlopeMegabytesPerMinute: 0, rSquared: 0,
+                                           spanMinutes: 0, persistentSlopeMegabytesPerMinute: 0)
 
     /// A slow leak: twenty minutes of steady growth of at least 5 MB/min (or
-    /// 0.5% of RAM an hour), with the floor rising too and a clean fit.
+    /// 0.5% of RAM an hour), with the floor rising too, a clean fit, and most
+    /// of the growth persistent. A single allocation near the middle of the
+    /// window otherwise fits a clean-looking line: over half the pairs
+    /// straddle it, so the Theil-Sen median is its size over the window.
     public func isSlowLeak(physicalMemoryBytes: UInt64) -> Bool {
         let ramFloor = Double(physicalMemoryBytes) / 1_048_576 * 0.005 / 60
         let minimum = max(5, ramFloor)
         return spanMinutes >= 20 && slopeMegabytesPerMinute >= minimum &&
-            floorSlopeMegabytesPerMinute >= 0.5 * slopeMegabytesPerMinute && rSquared >= 0.6
+            floorSlopeMegabytesPerMinute >= 0.5 * slopeMegabytesPerMinute && rSquared >= 0.6 &&
+            persistentSlopeMegabytesPerMinute >= 0.5 * slopeMegabytesPerMinute
     }
 }
 
@@ -248,8 +256,23 @@ public struct MemberTrendStore: Sendable {
             slopeMegabytesPerMinute: slope,
             floorSlopeMegabytesPerMinute: floor,
             rSquared: rSquared(means),
-            spanMinutes: Double(last.minute - first.minute)
+            spanMinutes: Double(last.minute - first.minute),
+            persistentSlopeMegabytesPerMinute: isPersistent(means, slope: slope) ? slope : 0
         )
+    }
+
+    /// Growth that goes on: at least two of the window's thirds climb at a
+    /// third of the overall rate. A leak, a staircase of small leaks and a
+    /// garbage-collected sawtooth with rising troughs climb in every third;
+    /// one allocation climbs in the third it landed in. Slopes too small to
+    /// matter skip the three extra fits.
+    private static func isPersistent(_ means: [RobustTrend.Point], slope: Double) -> Bool {
+        guard slope >= 0.5 else { return true }
+        guard means.count >= 9 else { return false }
+        let third = means.count / 3
+        let parts = [means[..<third], means[third..<(2 * third)], means[(2 * third)...]]
+        let climbing = parts.filter { part in (RobustTrend.theilSen(Array(part))?.slope ?? 0) >= slope / 3 }.count
+        return climbing >= 2
     }
 
     private static func rSquared(_ points: [RobustTrend.Point]) -> Double {
@@ -275,11 +298,12 @@ public struct MemberTrendStore: Sendable {
     /// member watched for an hour says nothing about how long the growth
     /// has lasted, so it must not lend its span to a young growing child.
     private mutating func longTermSum(members: [ProcessMetrics]) -> LongTermTrend {
-        var slope = 0.0, floor = 0.0, weightedSpan = 0.0, weightedFit = 0.0, weight = 0.0
+        var slope = 0.0, floor = 0.0, persistent = 0.0, weightedSpan = 0.0, weightedFit = 0.0, weight = 0.0
         for member in members {
             guard let trend = longTerm(of: member.identity), trend.spanMinutes >= Self.longTermMinutes else { continue }
             slope += trend.slopeMegabytesPerMinute
             floor += trend.floorSlopeMegabytesPerMinute
+            persistent += trend.persistentSlopeMegabytesPerMinute
             if trend.slopeMegabytesPerMinute > 0 {
                 weightedFit += trend.rSquared * trend.slopeMegabytesPerMinute
                 weightedSpan += trend.spanMinutes * trend.slopeMegabytesPerMinute
@@ -290,7 +314,8 @@ public struct MemberTrendStore: Sendable {
             slopeMegabytesPerMinute: slope,
             floorSlopeMegabytesPerMinute: floor,
             rSquared: weight > 0 ? weightedFit / weight : 0,
-            spanMinutes: weight > 0 ? weightedSpan / weight : 0
+            spanMinutes: weight > 0 ? weightedSpan / weight : 0,
+            persistentSlopeMegabytesPerMinute: persistent
         )
     }
 
