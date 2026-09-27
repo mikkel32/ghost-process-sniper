@@ -4,6 +4,9 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 
 ## [Unreleased]
 
+### Stopping
+- Asking an app to quit (⌘Q) now confirms it is still the same process right before the request goes out, on the main thread, instead of before waiting for it; a process ID reused in between can never receive the request.
+
 ### Sentinel
 - Trust is bound to what makes a program trustworthy, never to its path: a signed app is trusted by its team and identifier, so updates stay trusted; an ad hoc build by its exact build; an unsigned program by its exact file. The Trust item says which ("Trust Slack (Team BQR82RBBHL)").
 - Shells, interpreters and system tools are never trusted whole. Trusting bash for a browser extension used to hide every later bash finding, reverse shells included; now it trusts that one script or command.
