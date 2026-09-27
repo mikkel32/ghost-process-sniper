@@ -254,6 +254,11 @@ public enum GhostHeatModel {
                     heat = max(60, heat)
                     confidence = max(0.5, confidence)
                 }
+            } else if memoryMultiple >= 1.3, family.totalPhysicalFootprintBytes > 512 * 1_048_576 {
+                // Within a wide usual range, so no extra heat; but it says why
+                // this big app is not held at Watch like one at its usual size.
+                evidence.append("Bigger than usual for it: \(RadarFormat.fixed1(memoryMultiple))x the " +
+                                "\(RadarFormat.bytes(UInt64(baseline.meanMemoryBytes))) it usually uses")
             }
             if let cpuAnomaly = BaselineCPUAnomaly(baseline: baseline, cpuPercent: family.totalCPUPercent) {
                 heat += min(10, cpuAnomaly.multiple * 2)
@@ -361,12 +366,14 @@ extension ProcessFamily {
     /// Memory at or over its limit, and nothing else raised that is a
     /// problem in itself: helpers, a long session or scope relevance come
     /// with big apps; CPU, GPU, growth, duplicates or being forgotten do not.
+    /// Past incidents are context, not evidence: counted against a big app,
+    /// incidents recorded for its size alone kept it Hot, which recorded more.
     static func componentsShowOnlySize(_ components: [GhostScoreComponent]) -> Bool {
         let raised = components.filter { $0.level >= .watch }
         guard raised.contains(where: { $0.kind == .memory && $0.level >= .hot }) else { return false }
         return !raised.contains { component in
             [.cpu, .gpu, .leak].contains(component.kind) || ["duplicate", "forgotten"].contains(component.slot) ||
-                (component.level >= .hot && component.kind != .memory && component.kind != .fanout)
+                (component.level >= .hot && ![.memory, .fanout, .recurrence].contains(component.kind))
         }
     }
 }

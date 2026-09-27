@@ -11,7 +11,8 @@ final class UsualSizeTests: XCTestCase {
         Fixture.process(pid: 11_850, name: "Claude", path: app, command: app, megabytes: 2_560, cpu: cpu)
     }
 
-    private func score(_ process: ProcessMetrics, usual megabytes: Double?, pressure: SystemMemoryPressure = .unknown) -> ProcessFamily? {
+    private func score(_ process: ProcessMetrics, usual megabytes: Double?, pressure: SystemMemoryPressure = .unknown,
+                       incidents: Int = 0, spread: Double = 150) -> ProcessFamily? {
         var window = TrendWindow()
         let probe = Fixture.scored([process], window: &window)
         guard let signature = probe.first?.signature else { return nil }
@@ -23,9 +24,10 @@ final class UsualSizeTests: XCTestCase {
                 peakMemoryBytes: UInt64(megabytes * 1.2 * mib), meanCPUPercent: 3, peakCPUPercent: 40,
                 meanLeakVelocityMegabytesPerMinute: 0, incidentCount: 0,
                 firstSeenAt: Fixture.now.addingTimeInterval(-86_400), lastSeenAt: Fixture.now.addingTimeInterval(-5),
-                memoryVariance: (150 * mib) * (150 * mib), cpuVariance: 25, observedSeconds: 36_000, sessionCount: 4)
+                memoryVariance: (spread * mib) * (spread * mib), cpuVariance: 25, observedSeconds: 36_000, sessionCount: 4)
         }
-        let context = RadarContext(baselines: baselines, recentIncidentCounts: [:], rules: [], systemPressure: pressure)
+        let context = RadarContext(baselines: baselines, recentIncidentCounts: incidents > 0 ? [signature.id: incidents] : [:],
+                                   rules: [], systemPressure: pressure)
         var fresh = TrendWindow()
         return Fixture.scored([process], context: context, window: &fresh).first
     }
@@ -35,6 +37,27 @@ final class UsualSizeTests: XCTestCase {
         let usual = try XCTUnwrap(score(chat(), usual: 2_450))
         XCTAssertEqual(usual.score.level, .watch)
         XCTAssertTrue(usual.score.heat.evidence.contains { $0.hasPrefix("Large, but normal for it") }, "\(usual.score.heat.evidence)")
+    }
+
+    /// Incidents recorded while its size was all it had kept it Hot, which
+    /// recorded another incident: past incidents are context, not evidence.
+    func testPastIncidentsDoNotKeepAUsualSizeHot() throws {
+        let repeated = try XCTUnwrap(score(chat(), usual: 2_450, incidents: 4))
+        XCTAssertTrue(repeated.score.components.contains { $0.kind == .recurrence && $0.level == .hot })
+        XCTAssertEqual(repeated.score.level, .watch)
+        XCTAssertTrue(repeated.hasOnlySizeAgainstIt, "learned, and not recorded as yet another incident")
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(score(chat(cpu: 900), usual: 2_450, incidents: 4)).score.level, .hot)
+    }
+
+    /// A family that swings widely is not far out by its spread, but is
+    /// still well over its usual size: the evidence says so.
+    func testBiggerThanUsualSaysByHowMuch() throws {
+        let grown = try XCTUnwrap(score(chat(), usual: 1_500, spread: 600))
+        XCTAssertEqual(grown.score.level, .hot)
+        XCTAssertTrue(grown.score.heat.evidence.contains { $0.hasPrefix("Bigger than usual for it: 1.7x") },
+                      "\(grown.score.heat.evidence)")
+        let usual = try XCTUnwrap(score(chat(), usual: 2_450, spread: 600))
+        XCTAssertFalse(usual.score.heat.evidence.contains { $0.hasPrefix("Bigger than usual") })
     }
 
     func testTwiceItsUsualSizeBusyOrUnderPressureStaysHot() throws {
