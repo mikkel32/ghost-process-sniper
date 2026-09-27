@@ -334,16 +334,30 @@ public struct MemberTrendStore: Sendable {
         )
     }
 
-    /// Each member's growth: its long-term slope once watched ten minutes,
-    /// else its fine slope once mature. Shares are of positive growth.
+    /// Which slopes attribute a family's growth: the same horizon the
+    /// growth was proven on, so a helper warming up for two minutes never
+    /// takes the blame for a leak ninety minutes long.
+    enum GrowthHorizon: Sendable {
+        /// A slow leak: long-term slopes of members watched ten minutes or more.
+        case longTerm
+        /// Recent growth: the fine slope of every mature member.
+        case recent
+    }
+
+    /// Each member's growth on one horizon. Shares are of positive growth.
     /// Asked for only when the family is growing.
-    mutating func growth(of members: [ProcessMetrics]) -> [MemberGrowth] {
+    mutating func growth(of members: [ProcessMetrics], horizon: GrowthHorizon) -> [MemberGrowth] {
         var rows: [(identity: ProcessIdentity, name: String, slope: Double, rSquared: Double)] = []
         for member in members {
-            if let trend = longTerm(of: member.identity), trend.spanMinutes >= Self.longTermMinutes {
-                rows.append((member.identity, member.name, trend.slopeMegabytesPerMinute, trend.rSquared))
-            } else if let entry = series[member.identity], entry.isMature, let fine = Self.fineFit(entry.fine) {
-                rows.append((member.identity, member.name, fine.slope, fine.rSquared))
+            switch horizon {
+            case .longTerm:
+                if let trend = longTerm(of: member.identity), trend.spanMinutes >= Self.longTermMinutes {
+                    rows.append((member.identity, member.name, trend.slopeMegabytesPerMinute, trend.rSquared))
+                }
+            case .recent:
+                if let entry = series[member.identity], entry.isMature, let fine = Self.fineFit(entry.fine) {
+                    rows.append((member.identity, member.name, fine.slope, fine.rSquared))
+                }
             }
         }
         let positive = rows.reduce(0) { $0 + max(0, $1.slope) }

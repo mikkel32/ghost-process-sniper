@@ -44,6 +44,7 @@ public struct ProcessFamilyBuilder: Sendable {
     private let evidenceScorer = FamilyEvidenceScorer()
     private let directories: DirectoryExistenceCache
     private let processorCount: Int
+    private let physicalMemoryBytes: UInt64
     private let defaultHistory = LockedRadarHistory()
 
     public init(
@@ -56,6 +57,7 @@ public struct ProcessFamilyBuilder: Sendable {
         self.classifier = classifier
         self.currentUserID = currentUserID
         self.processorCount = max(1, processorCount)
+        self.physicalMemoryBytes = physicalMemoryBytes
         self.directories = DirectoryExistenceCache(check: directoryExists)
         self.duplicateDetector = DuplicateClusterDetector(classifier: classifier, currentUserID: currentUserID)
         self.hardwareDetector = HardwareOffenderDetector(currentUserID: currentUserID, physicalMemoryBytes: physicalMemoryBytes)
@@ -202,7 +204,9 @@ public struct ProcessFamilyBuilder: Sendable {
             )
             // Attribution only matters for a family that is growing.
             if live.count > 1, family.trend.credibleMemoryVelocity > 0 || step.longTerm.slopeMegabytesPerMinute > 0 {
-                family.attribute(growth: history.memberTrends.growth(of: live))
+                let horizon: MemberTrendStore.GrowthHorizon =
+                    step.longTerm.isSlowLeak(physicalMemoryBytes: physicalMemoryBytes) ? .longTerm : .recent
+                family.attribute(growth: history.memberTrends.growth(of: live, horizon: horizon))
             }
             return family
         }
