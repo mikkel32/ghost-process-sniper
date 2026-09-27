@@ -23,7 +23,7 @@ final class ThermalWorkloadResolverTests: XCTestCase {
         let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(92), activity: result, at: now)
         let insight = ThermalAppInsight.evaluate(activity: result, diagnosis: diagnosis, at: now)
         XCTAssertEqual(insight.title, "Start with make")
-        XCTAssertTrue(insight.evidence.contains("95.1% of total CPU capacity"))
+        XCTAssertTrue(insight.evidence.contains("\(ThermalActivityFormat.percent(95.1)) of total CPU capacity"), insight.evidence)
     }
 
     /// make runs recipes through a non-interactive `sh -c`; those shells are

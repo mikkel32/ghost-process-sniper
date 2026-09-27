@@ -5,6 +5,7 @@ import SwiftUI
 struct ThermalAppIcon: View {
     let path: String?
     var isSystemProcess = false
+    var size: CGFloat = 38
     @State private var icon: NSImage?
 
     var body: some View {
@@ -13,11 +14,11 @@ struct ThermalAppIcon: View {
                 Image(nsImage: icon).resizable().scaledToFit()
             } else {
                 Image(systemName: isSystemProcess ? "gearshape.2.fill" : "app.fill")
-                    .resizable().scaledToFit().padding(7)
+                    .resizable().scaledToFit().padding(size * 0.18)
                     .foregroundStyle(RadarTheme.brand)
             }
         }
-        .frame(width: 38, height: 38)
+        .frame(width: size, height: size)
         .accessibilityHidden(true)
         .task(id: path) {
             icon = nil

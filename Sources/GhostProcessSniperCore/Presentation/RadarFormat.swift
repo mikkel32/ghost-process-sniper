@@ -17,6 +17,12 @@ public enum RadarFormat {
         "\(Int(value.rounded()))%"
     }
 
+    /// "75.5°C", written with the reader's decimal separator ("75,5°C"), the
+    /// same everywhere a temperature appears.
+    public static func celsius(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(1))) + "°C"
+    }
+
     public static func signedPercent(_ value: Double) -> String {
         "\(value >= 0 ? "+" : "")\(Int(value.rounded()))%"
     }

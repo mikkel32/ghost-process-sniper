@@ -107,7 +107,7 @@ final class ThermalActivityHistoryTests: XCTestCase {
             sensorCount: 2, sensorKeys: ["Tp01", "Tp05"], systemState: "Nominal",
             unavailableReason: nil, cpuSensorKey: "Tp05", cpuSeriesID: "cpu:Tp01,Tp05")
         let result = check.evaluate(activity: activity(cpu: 1, at: later), snapshot: after, at: later)
-        XCTAssertTrue(result.detail.contains("CPU temperature: down 4.0°C"))
+        XCTAssertTrue(result.detail.contains("CPU temperature: down \(RadarFormat.celsius(4))"), result.detail)
     }
 
     func testSustainedCompileOutranksARecentSingleBlip() {

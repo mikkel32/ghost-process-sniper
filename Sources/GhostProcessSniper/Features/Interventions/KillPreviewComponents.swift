@@ -35,7 +35,7 @@ struct KillTargetRow: View {
 
                 Spacer()
 
-                Text("PID \(target.pid)")
+                Text("PID \(String(target.pid))")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: 70, alignment: .trailing)
@@ -49,7 +49,7 @@ struct KillTargetRow: View {
             .padding(.horizontal, 9)
             .padding(.vertical, 7)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(target.name), PID \(target.pid), \(target.state.label)\(target.isRoot ? ", root" : "")")
+            .accessibilityLabel("\(target.name), PID \(String(target.pid)), \(target.state.label)\(target.isRoot ? ", root" : "")")
             .accessibilityValue(target.reason)
             .contextMenu {
                 Button("Copy PID") {
@@ -176,7 +176,7 @@ struct KillNearbyPanel: View {
                         .font(.caption)
                         .lineLimit(1)
                     Spacer()
-                    Text("PID \(candidate.identity.pid)")
+                    Text("PID \(String(candidate.identity.pid))")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                     Text(candidate.reason)

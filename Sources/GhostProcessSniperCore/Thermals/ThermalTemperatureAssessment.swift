@@ -31,7 +31,7 @@ public struct ThermalTemperatureAssessment: Equatable, Sendable {
 
     public var readingText: String {
         guard let hottestCelsius else { return "Unavailable" }
-        return hottestCelsius.formatted(.number.precision(.fractionLength(1))) + "°C"
+        return RadarFormat.celsius(hottestCelsius)
     }
 
     public static func evaluate(snapshot: ThermalSnapshot, observations: ThermalObservationWindow = .init(),
