@@ -97,7 +97,7 @@ final class PersistenceMonitor: @unchecked Sendable {
                                                               queue: queue)
         source.setEventHandler { [weak self] in
             // Writers often create then rename; let the folder settle first.
-            self?.queue.asyncAfter(deadline: .now() + 0.4) { self?.scan(folder) }
+            self?.queue.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.scan(folder) }
         }
         source.setCancelHandler { close(descriptor) }
         source.resume()
