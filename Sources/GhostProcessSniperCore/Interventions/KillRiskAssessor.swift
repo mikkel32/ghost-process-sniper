@@ -338,7 +338,7 @@ private struct Fingerprint {
         self.path = path.lowercased()
         rawPath = path
         self.command = String(decoding: command.utf8.prefix(Self.commandPrefixBytes), as: UTF8.self).lowercased()
-        let tokens = self.command.unicodeScalars.split(whereSeparator: \.properties.isWhitespace).map(String.init)
+        let tokens = self.command.unicodeScalars.split(whereSeparator: \.isCommandWhitespace).map(String.init)
         let first = tokens.first.map(Self.lastComponent) ?? ""
         binary = first.isEmpty ? self.name : first
         args = Array(tokens.dropFirst())

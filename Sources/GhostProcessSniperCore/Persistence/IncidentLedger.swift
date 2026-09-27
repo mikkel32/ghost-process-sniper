@@ -50,6 +50,20 @@ final class IncidentLedger {
     private var committed: Episodes?
     private var staged: Episodes?
     private var pendingWrites: [(sql: String, values: [SQLiteValue])] = []
+    /// Past-episode counts per signature. Counts change only when a flush
+    /// closes or reopens an episode, or when the file is replaced; the
+    /// 90-day window moves too slowly to matter within minutes. So a refresh
+    /// asks the database only about signatures it has not counted yet,
+    /// instead of re-counting every family every second.
+    private var cachedCounts: [String: Int] = [:]
+    private var countedSignatures: Set<String> = []
+    private var countsSince: Date?
+    /// Signatures whose past-episode count the staged writes change: only
+    /// closing or reopening an episode does; peak updates and new open
+    /// episodes do not.
+    private var stagedCountChanges: Set<String> = []
+    private var stagedCountsReset = false
+    static let countCacheLifetime: TimeInterval = 15 * 60
 
     init(db: SQLiteDatabase, codec: StoreCodec) {
         self.db = db
@@ -74,8 +88,32 @@ final class IncidentLedger {
         guard !signatureIDs.isEmpty else {
             return [:]
         }
+        if let countsSince, since < countsSince || since.timeIntervalSince(countsSince) >= Self.countCacheLifetime {
+            invalidateCounts()
+        }
+        let window = countsSince ?? since
+        countsSince = window
+        let missing = Set(signatureIDs).subtracting(countedSignatures)
+        if !missing.isEmpty {
+            cachedCounts.merge(try queryCounts(for: Array(missing), since: window)) { _, fresh in fresh }
+            countedSignatures.formUnion(missing)
+        }
+        var counts: [String: Int] = [:]
+        for signatureID in signatureIDs {
+            if let count = cachedCounts[signatureID] {
+                counts[signatureID] = count
+            }
+        }
+        return counts
+    }
 
-        let uniqueIDs = Array(Set(signatureIDs))
+    private func invalidateCounts() {
+        cachedCounts.removeAll(keepingCapacity: true)
+        countedSignatures.removeAll(keepingCapacity: true)
+        countsSince = nil
+    }
+
+    private func queryCounts(for uniqueIDs: [String], since: Date) throws -> [String: Int] {
         var counts: [String: Int] = [:]
         var start = 0
         while start < uniqueIDs.count {
@@ -137,6 +175,7 @@ final class IncidentLedger {
                       date.timeIntervalSince(closed.resolvedAt) < Self.reopenWindow {
                 episodes.open[signatureID] = reopen(closed, with: family, at: date)
                 episodes.recentlyClosed[signatureID] = nil
+                stagedCountChanges.insert(signatureID)
             } else {
                 episodes.open[signatureID] = try insert(family, at: date)
             }
@@ -144,6 +183,7 @@ final class IncidentLedger {
 
         for (signatureID, open) in episodes.open where date.timeIntervalSince(open.lastActiveAt) >= Self.closeAfter {
             queueClose(open)
+            stagedCountChanges.insert(signatureID)
             episodes.open[signatureID] = nil
             episodes.recentlyClosed[signatureID] = ClosedIncident(id: open.id, resolvedAt: open.lastActiveAt, peak: open.peak)
         }
@@ -154,6 +194,14 @@ final class IncidentLedger {
     }
 
     func writeStaged() throws {
+        if stagedCountsReset {
+            invalidateCounts()
+        } else {
+            for signatureID in stagedCountChanges {
+                cachedCounts[signatureID] = nil
+                countedSignatures.remove(signatureID)
+            }
+        }
         for write in pendingWrites {
             try db.execute(write.sql, values: write.values)
         }
@@ -165,17 +213,22 @@ final class IncidentLedger {
         }
         staged = nil
         pendingWrites.removeAll(keepingCapacity: true)
+        stagedCountChanges.removeAll(keepingCapacity: true)
+        stagedCountsReset = false
     }
 
     func discardStaged() {
         staged = nil
         pendingWrites.removeAll(keepingCapacity: true)
+        stagedCountChanges.removeAll(keepingCapacity: true)
+        stagedCountsReset = false
     }
 
     /// The file was replaced, so the tracked rows are gone; the next model
     /// reloads the episodes from the new file.
     func reset() {
         committed = nil
+        invalidateCounts()
         discardStaged()
     }
 
@@ -299,6 +352,7 @@ final class IncidentLedger {
                 episodes.open[signatureID] = open
             } else {
                 queueClose(open)
+                stagedCountsReset = true
                 closedRows.append((signatureID, ClosedIncident(id: open.id, resolvedAt: open.lastActiveAt, peak: open.peak)))
             }
         }

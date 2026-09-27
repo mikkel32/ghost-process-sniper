@@ -280,7 +280,8 @@ public actor RadarRefreshWorker {
             thermalPressure: scheduler.currentPressure,
             summaryLevel: summary.level,
             hotSinceAlerted: hotSinceAlerted,
-            currentRefreshMilliseconds: stats.totalMilliseconds
+            currentRefreshMilliseconds: stats.totalMilliseconds,
+            userIdleSeconds: request.uiVisible ? scheduler.userIdleSeconds() : 0
         ))
         let performance = metrics(
             performanceMode: scheduler.currentPerformanceMode,

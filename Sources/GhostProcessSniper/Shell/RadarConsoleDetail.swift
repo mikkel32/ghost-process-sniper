@@ -59,6 +59,9 @@ struct RadarConsoleDetail: View {
                 RulesConsoleView(session: session)
             }
         }
+        // The column's hosting view re-asks for its minimum size on every
+        // update; answering without measuring the page halves the redraw cost.
+        .sizedIndependentlyOfContent(minimum: CGSize(width: 460, height: 320))
         .navigationTitle(session.state.focusedSelection.navigationTitle)
     }
 }
