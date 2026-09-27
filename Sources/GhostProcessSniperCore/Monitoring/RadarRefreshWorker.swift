@@ -294,7 +294,7 @@ public actor RadarRefreshWorker {
             uiVisible: request.uiVisible,
             power: scheduler.currentPower,
             thermalPressure: scheduler.currentPressure,
-            summaryLevel: summary.level,
+            summaryLevel: RadarScheduler.schedulingLevel(scored.families),
             hotSinceAlerted: hotSinceAlerted,
             currentRefreshMilliseconds: stats.totalMilliseconds,
             userIdleSeconds: request.uiVisible ? scheduler.userIdleSeconds() : 0

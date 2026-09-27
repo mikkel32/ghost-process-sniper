@@ -76,4 +76,9 @@ final class UsualSizeTests: XCTestCase {
         XCTAssertEqual(leaking.sampleCount, 0, "a leak is still never learned as normal")
         XCTAssertFalse(bigOnly(leaking: true, at: 0).hasOnlySizeAgainstIt)
     }
+
+    func testBeingBigDoesNotSpeedUpScanning() {
+        XCTAssertEqual(RadarScheduler.schedulingLevel([bigOnly(at: 0)]), .quiet)
+        XCTAssertEqual(RadarScheduler.schedulingLevel([bigOnly(at: 0), bigOnly(leaking: true, at: 0)]), .hot)
+    }
 }

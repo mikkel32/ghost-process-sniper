@@ -351,11 +351,23 @@ extension ProcessFamily {
     var hasOnlySizeAgainstIt: Bool {
         guard score.heat.sustainedSignalCount == 0, forecast.state <= .warming,
               trend.credibleMemoryVelocity < 1, longTermTrend.persistentSlopeMegabytesPerMinute < 1,
-              !score.components.contains(where: { [.cpu, .gpu, .leak].contains($0.kind) && $0.level >= .watch })
+              Self.componentsShowOnlySize(score.components)
         else { return false }
         guard let baseline, baseline.isMeasurementTrusted else { return true }
         let footprint = totalPhysicalFootprintBytes
         return !(baseline.memoryZScore(for: footprint) >= 3 && baseline.memoryMultiple(for: footprint) >= 1.3)
+    }
+
+    /// Memory at or over its limit, and nothing else raised that is a
+    /// problem in itself: helpers, a long session or scope relevance come
+    /// with big apps; CPU, GPU, growth, duplicates or being forgotten do not.
+    static func componentsShowOnlySize(_ components: [GhostScoreComponent]) -> Bool {
+        let raised = components.filter { $0.level >= .watch }
+        guard raised.contains(where: { $0.kind == .memory && $0.level >= .hot }) else { return false }
+        return !raised.contains { component in
+            [.cpu, .gpu, .leak].contains(component.kind) || ["duplicate", "forgotten"].contains(component.slot) ||
+                (component.level >= .hot && component.kind != .memory && component.kind != .fanout)
+        }
     }
 }
 
@@ -370,7 +382,7 @@ extension GhostHeatModel {
         guard let baseline, baseline.isMeasurementTrusted, sustained == 0, contextVotes == 0,
               forecast.state <= .warming, !(pressure.isKnown && pressure.level >= .warning),
               family.trend.credibleMemoryVelocity < 1, family.longTermTrend.persistentSlopeMegabytesPerMinute < 1,
-              !family.score.components.contains(where: { [.cpu, .gpu, .leak].contains($0.kind) && $0.level >= .watch })
+              ProcessFamily.componentsShowOnlySize(family.score.components)
         else { return nil }
         let footprint = family.totalPhysicalFootprintBytes
         guard baseline.memoryZScore(for: footprint) < 2, baseline.memoryMultiple(for: footprint) < 1.3 else { return nil }

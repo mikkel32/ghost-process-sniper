@@ -272,6 +272,17 @@ public struct RadarScheduler: Sendable {
         return anyHot && allSettled
     }
 
+    /// The level that sets the scanning pace. A family with nothing against
+    /// it but its size does not speed scans up: a 2.5 GB chat app open all
+    /// day kept the hidden radar at a hot family's one-second pace.
+    static func schedulingLevel(_ families: [ProcessFamily]) -> GhostLevel {
+        families.reduce(GhostLevel.quiet) { level, family in
+            guard !family.hasOnlySizeAgainstIt else { return level }
+            let escalates = family.forecastIsCredibleEscalation
+            return max(level, max(family.score.level, escalates ? family.forecast.state.level : .quiet))
+        }
+    }
+
     public var currentPower: PowerContext {
         power
     }
