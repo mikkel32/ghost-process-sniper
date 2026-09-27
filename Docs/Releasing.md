@@ -44,7 +44,7 @@ Open it, check the installer window, drag the app to Applications, and launch it
 gh release edit "v$VERSION" --draft=false --latest
 ```
 
-Publishing runs the [Website workflow](../.github/workflows/pages.yml), which rebuilds <https://mikkel32.github.io/ghost-process-sniper/> with the new download link, version, size and checksum.
+Publishing runs the [Website workflow](../.github/workflows/pages.yml), which rebuilds <https://mikkel32.github.io/ghost-process-sniper/> with the new download link, version, size and checksum. Pushes to `main` between the version bump and publishing build the site without deploying it, so it never advertises an unreleased version (and Pages, which ignores a second deployment of the same commit, never drops the release's).
 
 ## Building locally
 

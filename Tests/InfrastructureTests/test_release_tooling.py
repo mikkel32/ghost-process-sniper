@@ -119,6 +119,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--draft", workflow)
         self.assertIn("Scripts/verify.sh", workflow)
 
+    def test_website_waits_for_the_release_before_deploying_a_version_bump(self):
+        workflow = (PROJECT / ".github/workflows/pages.yml").read_text()
+        self.assertIn('"$GITHUB_EVENT_NAME" == push && "$LATEST" != "v$RADAR_VERSION"', workflow)
+        self.assertIn("if: needs.build.outputs.deploy == 'true'", workflow)
+        self.assertIn("types: [published]", workflow)
+
     def test_changelog_has_an_entry_for_the_current_version(self):
         version = subprocess.run(["bash", "-c", "source Scripts/lib/project.sh && printf %s \"$RADAR_VERSION\""],
                                  cwd=PROJECT, capture_output=True, text=True).stdout
