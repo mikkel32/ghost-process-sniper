@@ -331,11 +331,13 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         )
     }
 
-    /// The headline, then the hazard most worth knowing first: a supervisor
-    /// that restarts the process makes stopping it pointless.
+    /// The headline, then a supervisor that restarts the process, which makes
+    /// stopping it pointless. Other hazards restate the headline ("asked to quit
+    /// like ⌘Q"), so they stay in the stop preview.
     private static func consequence(of risk: KillRiskAssessment) -> String? {
-        let hazard = risk.hazards.first { $0.kind == .respawn } ?? risk.hazards.first
-        let parts = [risk.headline, hazard?.detail].compactMap { $0 }
+        let respawn = risk.hazards.first { $0.kind == .respawn }?.detail
+        let lead = risk.headline ?? respawn ?? risk.hazards.first?.detail
+        let parts = [lead, respawn == lead ? nil : respawn].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
