@@ -19,7 +19,7 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     private var lastRenderedPresentationKey = ""
     private var sentinelObserverID: UUID?
     private var lastSentinelRevision: UInt64 = 0
-    private var notifiedSentinelIDs: Set<String> = []
+    private var sentinelAlerts = SentinelAlertGate()
 
     init(
         monitor: ProcessMonitor? = nil,
@@ -48,8 +48,9 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         monitor.start()
     }
 
-    /// Alerts once per new suspicious or dangerous finding, and keeps the
-    /// menu-bar icon in step with the Security page.
+    /// Alerts once per new suspicious or dangerous thing (a program restarting
+    /// for the same reason waits a day), and keeps the menu-bar icon in step
+    /// with the Security page.
     private func startSentinelAlerts() {
         sentinelObserverID = monitor.addPublishedStateObserver { [weak self] state in
             self?.handleSentinelChange(state: state)
@@ -61,13 +62,13 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         guard report.revision != lastSentinelRevision else { return }
         lastSentinelRevision = report.revision
         var pulse = false
-        for finding in report.findings where finding.isRunning && finding.severity >= .suspicious
-            && notifiedSentinelIDs.insert(finding.id).inserted {
+        let alerts = sentinelAlerts.alerts(for: report, now: Date())
+        for finding in alerts.findings {
             let notifier = notifier
             Task { await notifier.notify(sentinel: finding) }
             pulse = pulse || finding.severity == .dangerous
         }
-        for item in report.launchItems where item.isNew && notifiedSentinelIDs.insert("startup:" + item.id).inserted {
+        for item in alerts.startupItems {
             let notifier = notifier
             Task { await notifier.notify(startupItem: item) }
         }
