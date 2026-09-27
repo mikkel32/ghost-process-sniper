@@ -76,7 +76,6 @@ public struct RadarPipeline: Sendable {
     private var hysteresis = RadarHysteresis()
     private var continuity = RadarContinuity()
     private var metricsVersions: [String: UInt64] = [:]
-    private var signatureVersions: [String: UInt64] = [:]
     private var scoringCache = FamilyScoringCache()
     private var hostOutlook: HostMemoryOutlook?
 
@@ -171,16 +170,11 @@ public struct RadarPipeline: Sendable {
     }
 
     private mutating func versionedFamily(_ family: ProcessFamily, diff: RadarSnapshotDiff, now: Date) -> ProcessFamily {
-        let signatureID = family.signature.id
         let familyKey = family.familyKey
         let hasMetricChange = family.members.contains { diff.changedOrAdded.contains($0.identity) }
         if hasMetricChange {
             metricsVersions[familyKey, default: 0] += 1
         }
-        if signatureVersions[signatureID] == nil {
-            signatureVersions[signatureID] = 1
-        }
-
         let freshness = family.members
             .compactMap { member -> Date? in
                 member.forensics.isPartial ? nil : member.sampledAt
@@ -188,7 +182,9 @@ public struct RadarPipeline: Sendable {
             .max()
 
         return family.enriched(
-            signatureVersion: signatureVersions[signatureID, default: 1],
+            // Every signature has only ever had version 1; the map that
+            // held it grew with each workload seen and was never read otherwise.
+            signatureVersion: 1,
             metricsVersion: metricsVersions[familyKey, default: 0],
             forensicsFreshness: freshness,
             lastScoredAt: now
