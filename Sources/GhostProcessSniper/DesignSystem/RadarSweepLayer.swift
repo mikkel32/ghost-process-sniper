@@ -51,6 +51,9 @@ final class RadarSweepView: NSView {
     private var glowBearings: [String: Double] = [:]
     private var glowColors: [String: NSColor] = [:]
     private var beamColor: NSColor?
+    /// What the layers were last built from: a scan that moved nothing
+    /// commits nothing.
+    private var applied: (centerX: Double, centerY: Double, radius: Double, height: Double, glows: [RadarSweepLayer.Glow])?
     private var observers: [NSObjectProtocol] = []
     private var inViewport = false
     private static let epoch: CFTimeInterval = 1
@@ -121,15 +124,26 @@ final class RadarSweepView: NSView {
         CATransaction.setDisableActions(true)
         clock.frame = bounds
         CATransaction.commit()
+        // Layer positions are flipped against the height: a resize re-applies them.
+        if let applied, applied.height != Double(bounds.height), let beamColor {
+            configure(centerX: applied.centerX, centerY: applied.centerY, radius: applied.radius, glows: applied.glows,
+                      beamColor: beamColor, inViewport: inViewport)
+        }
     }
 
     func configure(centerX: Double, centerY: Double, radius: Double, glows: [RadarSweepLayer.Glow],
                    beamColor: NSColor, inViewport: Bool) {
         self.inViewport = inViewport && radius > 0
+        defer { updateRunning() }
+        let height = Double(bounds.height)
+        if let applied, applied.centerX == centerX, applied.centerY == centerY, applied.radius == radius,
+           applied.height == height, applied.glows == glows, self.beamColor == beamColor {
+            return
+        }
+        applied = (centerX, centerY, radius, height, glows)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         // Layer space is bottom-up; the scene is top-down.
-        let height = bounds.height
         let circle = CGRect(x: centerX - radius, y: height - centerY - radius, width: radius * 2, height: radius * 2)
         if beam.frame != circle {
             beam.frame = circle
@@ -163,7 +177,6 @@ final class RadarSweepView: NSView {
             glowColors[id] = nil
         }
         CATransaction.commit()
-        updateRunning()
     }
 
     private func makeGlow(id: String) -> CAGradientLayer {

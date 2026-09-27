@@ -70,6 +70,7 @@ private struct LiveRadarContacts: View {
                                         session: session, isHighlighted: hoveredID == input.id) {
                         hoveredID = $0 ? input.id : (hoveredID == input.id ? nil : hoveredID)
                     }
+                    .equatable()
                 }
             }
             if rows.count > ranked.count {
@@ -85,12 +86,18 @@ private struct LiveRadarContacts: View {
     }
 }
 
-private struct LiveRadarContactRow: View {
+private struct LiveRadarContactRow: View, Equatable {
     let row: CompactSidebarRowModel
     let trend: LiveRadarTrend
     let session: RadarConsoleSession
     let isHighlighted: Bool
     let onHover: (Bool) -> Void
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.row.title == rhs.row.title && lhs.row.statusText == rhs.row.statusText && lhs.row.level == rhs.row.level &&
+            LiveRadarStyle.memory(lhs.row.memoryBytes) == LiveRadarStyle.memory(rhs.row.memoryBytes) &&
+            lhs.row.radarSector == rhs.row.radarSector && lhs.trend == rhs.trend && lhs.isHighlighted == rhs.isHighlighted
+    }
 
     var body: some View {
         let color = LiveRadarStyle.color(row.level)
@@ -113,7 +120,9 @@ private struct LiveRadarContactRow: View {
                             .foregroundStyle(row.level == .quiet ? AnyShapeStyle(.secondary) : AnyShapeStyle(color))
                     }
                     HStack(spacing: 5) {
-                        Text(row.metricText)
+                        // What the scope shows, not the live CPU the sidebar
+                        // already has: this text changes only when the blip does.
+                        Text("\(LiveRadarStyle.memory(row.memoryBytes)) \u{00B7} \(row.radarSector.label)")
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -134,7 +143,7 @@ private struct LiveRadarContactRow: View {
         .buttonStyle(.plain)
         .onHover(perform: onHover)
         .familyRowActions(row: row, session: session)
-        .accessibilityLabel("\(row.title), \(row.statusText), \(row.metricText)\(trendText.map { ", \($0)" } ?? "")")
+        .accessibilityLabel("\(row.title), \(row.statusText), \(LiveRadarStyle.memory(row.memoryBytes))\(trendText.map { ", \($0)" } ?? "")")
     }
 
     private var trendText: String? {
@@ -146,12 +155,19 @@ private struct LiveRadarContactRow: View {
     }
 }
 
-struct LiveRadarBlip: View {
+/// Depends only on what it draws: a scan that changes a family's numbers
+/// but not its place, size, level or name does not redraw its blip.
+struct LiveRadarBlip: View, Equatable {
     let contact: LiveRadarContact
     let row: CompactSidebarRowModel
     let session: RadarConsoleSession
     let isHighlighted: Bool
     let onHover: (Bool) -> Void
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.contact == rhs.contact && lhs.isHighlighted == rhs.isHighlighted && lhs.row.title == rhs.row.title &&
+            lhs.row.statusText == rhs.row.statusText
+    }
 
     var body: some View {
         let color = LiveRadarStyle.color(contact.level)
@@ -184,7 +200,7 @@ struct LiveRadarBlip: View {
         .buttonStyle(.plain)
         .onHover(perform: onHover)
         .familyRowActions(row: row, session: session)
-        .accessibilityLabel("\(row.title), \(row.statusText), \(row.metricText)")
+        .accessibilityLabel("\(row.title), \(row.statusText), \(contact.sector.label)")
     }
 
     /// A small arrowhead on the side it is heading: toward the center when

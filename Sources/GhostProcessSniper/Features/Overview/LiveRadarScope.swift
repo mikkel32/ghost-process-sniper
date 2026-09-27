@@ -6,6 +6,10 @@ import SwiftUI
 /// Hot, Watch and Quiet), quarters are what a family is, a blip's size is
 /// its memory, a streak is where it was five minutes ago, and the names of
 /// what matters sit beside their blips. The layout is `LiveRadarScene`'s.
+///
+/// Blips move once per scan, without animation: with forty blips one moves
+/// almost every scan, and an implicit animation re-rendered the whole
+/// window at display rate for a third of every second.
 struct LiveRadarScope: View {
     let rows: [CompactSidebarRowModel]
     let history: LiveRadarHistory
@@ -13,6 +17,7 @@ struct LiveRadarScope: View {
     @Binding var hoveredID: String?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isInViewport = false
 
     var body: some View {
@@ -21,7 +26,7 @@ struct LiveRadarScope: View {
                                              width: proxy.size.width, height: proxy.size.height)
             let rowsByID = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             ZStack(alignment: .topLeading) {
-                LiveRadarFace(width: scene.width, height: scene.height, radius: scene.radius)
+                LiveRadarFace(width: scene.width, height: scene.height, radius: scene.radius, colorScheme: colorScheme)
                     .equatable()
                 if !reduceMotion {
                     RadarSweepLayer(centerX: scene.centerX, centerY: scene.centerY, radius: scene.radius,
@@ -34,6 +39,7 @@ struct LiveRadarScope: View {
                         LiveRadarBlip(contact: contact, row: row, session: session, isHighlighted: hoveredID == contact.id) {
                             hoveredID = $0 ? contact.id : (hoveredID == contact.id ? nil : hoveredID)
                         }
+                        .equatable()
                         .position(x: contact.x, y: contact.y)
                     }
                 }
@@ -46,7 +52,6 @@ struct LiveRadarScope: View {
                     LiveRadarCallout(row: row, contact: contact)
                         .position(Self.calloutPosition(for: contact, in: scene))
                         .allowsHitTesting(false)
-                        .transition(.opacity)
                 }
                 if scene.contacts.isEmpty, scene.radius > 0 {
                     Text(session.compactSnapshot.hasSampled ? "Nothing to track" : "Scanning\u{2026}")
@@ -55,7 +60,6 @@ struct LiveRadarScope: View {
                         .position(x: scene.centerX, y: scene.centerY + 26)
                 }
             }
-            .animation(RadarMotion.reading(reduceMotion), value: scene.contacts)
         }
         .onScrollVisibilityChange(threshold: 0.05) { isInViewport = $0 }
         .onDisappear { isInViewport = false }
@@ -65,7 +69,7 @@ struct LiveRadarScope: View {
 
     static func glow(_ contact: LiveRadarContact) -> RadarSweepLayer.Glow {
         RadarSweepLayer.Glow(id: contact.id, x: contact.x, y: contact.y, bearing: contact.bearing,
-                             diameter: contact.diameter, color: NSColor(LiveRadarStyle.color(contact.level)))
+                             diameter: contact.diameter, color: LiveRadarStyle.glowColors[contact.level] ?? .systemTeal)
     }
 
     /// Beside the blip on the side facing the center, kept inside the scope.
@@ -79,6 +83,18 @@ struct LiveRadarScope: View {
 }
 
 enum LiveRadarStyle {
+    /// Two significant figures: "410 MB", "2.7 GB". Steadier than the
+    /// sampled figure, so a contact redraws only when its size visibly moves.
+    static func memory(_ bytes: UInt64) -> String {
+        let megabytes = Double(bytes) / 1_048_576
+        if megabytes >= 1_024 || megabytes < 100 { return RadarFormat.bytes(bytes) }
+        return "\(Int((megabytes / 10).rounded()) * 10) MB"
+    }
+
+    /// Converted once: a new NSColor per blip per scan would make every
+    /// scan look like a change to the sweep layer.
+    static let glowColors = Dictionary(uniqueKeysWithValues: GhostLevel.allCases.map { ($0, NSColor(color($0))) })
+
     /// Quiet blips wear the brand color: grey dots would read as disabled.
     static func color(_ level: GhostLevel) -> Color {
         level == .quiet ? RadarTheme.brand : RadarStyle.color(for: level)
@@ -87,11 +103,12 @@ enum LiveRadarStyle {
 }
 
 /// Rings, their verdicts, the quarters and the rim. It changes only with
-/// the scope's size.
+/// the scope's size and the appearance its text colors resolve in.
 private struct LiveRadarFace: View, Equatable {
     let width: Double
     let height: Double
     let radius: Double
+    let colorScheme: ColorScheme
 
     var body: some View {
         Canvas { context, _ in
