@@ -346,7 +346,8 @@ public struct ProcessFamilyBuilder: Sendable {
             zombieChildCount: zombieChildren,
             cpuBehavior: CPUBehaviorAnalyzer.analyze(activity: activity, classification: familyClassification,
                                                      memberCount: live.count, baseline: nil,
-                                                     processorCount: processorCount, cpuThreshold: cpuLimit),
+                                                     processorCount: processorCount, cpuThreshold: cpuLimit,
+                                                     isUnattended: forgotten.launchContext.isUnattended),
             cpuLimit: cpuLimit,
             settings: settings,
             now: now

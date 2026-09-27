@@ -159,7 +159,8 @@ public struct FamilyRiskForecaster: Sendable {
             memberCount: family.members.count,
             baseline: family.baseline,
             processorCount: processorCount,
-            cpuThreshold: limit
+            cpuThreshold: limit,
+            isUnattended: family.forgottenAssessment.launchContext.isUnattended
         )
         let isBreached = family.totalCPUPercent >= limit
         if behavior.kind == .expectedBurst {
