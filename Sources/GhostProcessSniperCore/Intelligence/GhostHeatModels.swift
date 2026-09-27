@@ -368,11 +368,14 @@ extension ProcessFamily {
     /// with big apps; CPU, GPU, growth, duplicates or being forgotten do not.
     /// Past incidents are context, not evidence: counted against a big app,
     /// incidents recorded for its size alone kept it Hot, which recorded more.
+    /// Host-wide outliers ("largest CPU on this Mac") only lend visibility,
+    /// so they count from Hot: an app in use at half a core flipped to Hot.
     static func componentsShowOnlySize(_ components: [GhostScoreComponent]) -> Bool {
         let raised = components.filter { $0.level >= .watch }
         guard raised.contains(where: { $0.kind == .memory && $0.level >= .hot }) else { return false }
         return !raised.contains { component in
-            [.cpu, .gpu, .leak].contains(component.kind) || ["duplicate", "forgotten"].contains(component.slot) ||
+            let ownActivity = [.cpu, .gpu, .leak].contains(component.kind) && !component.slot.hasPrefix("hardware.")
+            return ownActivity || ["duplicate", "forgotten"].contains(component.slot) ||
                 (component.level >= .hot && ![.memory, .fanout, .recurrence].contains(component.kind))
         }
     }

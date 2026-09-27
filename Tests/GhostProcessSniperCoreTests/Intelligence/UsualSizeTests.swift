@@ -60,6 +60,20 @@ final class UsualSizeTests: XCTestCase {
         XCTAssertFalse(usual.score.heat.evidence.contains { $0.hasPrefix("Bigger than usual") })
     }
 
+    /// "Largest CPU on this Mac" only lends visibility: an app in use at
+    /// half a core flipped between Watch and Hot with it. Its own CPU
+    /// component, or the host signal at Hot, still counts.
+    func testAHostWideCPUHintDoesNotMakeAUsualSizeHot() {
+        func component(_ slot: String, _ kind: GhostScoreComponentKind, _ level: GhostLevel) -> GhostScoreComponent {
+            GhostScoreComponent(slot: slot, kind: kind, title: slot, detail: "", impact: 10, level: level)
+        }
+        let big = [component("memory", .memory, .critical), component("hardware.memoryPressure.0", .memory, .critical)]
+        XCTAssertTrue(ProcessFamily.componentsShowOnlySize(big + [component("hardware.cpuPressure.0", .cpu, .watch)]))
+        XCTAssertFalse(ProcessFamily.componentsShowOnlySize(big + [component("hardware.cpuPressure.0", .cpu, .hot)]))
+        XCTAssertFalse(ProcessFamily.componentsShowOnlySize(big + [component("cpu", .cpu, .watch)]))
+        XCTAssertFalse(ProcessFamily.componentsShowOnlySize(big + [component("hardware.gpuPressure.0", .gpu, .hot)]))
+    }
+
     func testTwiceItsUsualSizeBusyOrUnderPressureStaysHot() throws {
         XCTAssertEqual(try XCTUnwrap(score(chat(), usual: 1_200)).score.level, .hot)
         let busy = try XCTUnwrap(score(chat(cpu: 900), usual: 2_450))
