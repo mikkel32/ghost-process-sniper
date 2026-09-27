@@ -1,0 +1,59 @@
+name: Website
+
+# Publishes Site/ to GitHub Pages with the latest release's download link, version, size and
+# checksum filled in. Runs when the site or its images change and when a release is published.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Site/**"
+      - "Docs/Assets/**"
+      - "Scripts/build_site.py"
+      - ".github/workflows/pages.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view --repo "$GITHUB_REPOSITORY" --json tagName,publishedAt,assets,url > release.json \
+            || echo '{}' > release.json
+
+      - name: Build the site
+        run: python3 Scripts/build_site.py --out _site --release release.json
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

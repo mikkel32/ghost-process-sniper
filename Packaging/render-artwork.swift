@@ -1,10 +1,12 @@
 #!/usr/bin/env swift
-// Renders the app icon, the DMG window background, and the README icon from code so
-// release artwork is reproducible. Run from the repository root:
+// Renders the app icon, the DMG window background, the README icon and the website's icons and
+// link-preview card from code so release artwork is reproducible. Run from the repository root:
 //
-//     swift Packaging/render-artwork.swift
+//     swift Packaging/render-artwork.swift          # everything
+//     swift Packaging/render-artwork.swift site     # only the website artwork
 //
-// Outputs: Packaging/AppIcon.icns, Packaging/dmg-background.tiff, Docs/Assets/icon.png
+// Outputs: Packaging/AppIcon.icns, Packaging/dmg-background.tiff, Docs/Assets/icon.png,
+//          Site/favicon.png, Site/apple-touch-icon.png, Site/social-card.png
 
 import AppKit
 import CoreGraphics
@@ -370,10 +372,85 @@ func renderBackground(scale: CGFloat) -> CGImage {
     return context.makeImage()!
 }
 
+// MARK: - Website link-preview card
+
+// 1200 x 630 is the Open Graph size that GitHub, Slack, iMessage and X all crop well.
+let cardSize = CGSize(width: 1200, height: 630)
+
+func renderSocialCard() -> CGImage {
+    let W = cardSize.width, H = cardSize.height
+    let context = bitmap(width: Int(W), height: Int(H))
+
+    context.drawLinearGradient(linearGradient([deepTop, deepBottom]),
+                               start: CGPoint(x: 0, y: H), end: CGPoint(x: 0, y: 0), options: [])
+    context.drawRadialGradient(linearGradient([withAlpha(brandSecondary, 0.28), withAlpha(brandSecondary, 0)]),
+                               startCenter: CGPoint(x: 120, y: 60), startRadius: 0,
+                               endCenter: CGPoint(x: 120, y: 60), endRadius: 620, options: [])
+
+    // A large, faint scope bleeding off the right edge.
+    context.saveGState()
+    context.setAlpha(0.20)
+    drawScope(context, Scope(center: CGPoint(x: 1090, y: 330), radius: 380, scale: 1.1),
+              sweepLead: 64, sweepTrail: 90, ringAlpha: 0.9, drawTicks: false)
+    context.restoreGState()
+
+    let icon = renderIcon(size: 400)
+    context.draw(icon, in: CGRect(x: 56, y: (H - 400) / 2, width: 400, height: 400))
+
+    let graphics = NSGraphicsContext(cgContext: context, flipped: false)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = graphics
+    let left: CGFloat = 480
+    text("Ghost Process Sniper", size: 60, weight: .bold, color: .white, kern: -0.5)
+        .draw(at: CGPoint(x: left, y: 372))
+    let tagline = NSMutableAttributedString(attributedString:
+        text("The menu-bar radar for runaway, leaking and forgotten processes on your Mac.",
+             size: 29, weight: .regular, color: NSColor(white: 1, alpha: 0.74)))
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.lineSpacing = 6
+    tagline.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: tagline.length))
+    tagline.draw(with: CGRect(x: left, y: 256, width: 660, height: 100),
+                 options: [.usesLineFragmentOrigin, .usesFontLeading])
+    NSGraphicsContext.restoreGraphicsState()
+
+    // Chips.
+    var x = left
+    for label in ["Free and open source", "Works offline", "macOS 26+"] {
+        let string = text(label, size: 21, weight: .medium, color: NSColor(white: 1, alpha: 0.92))
+        let size = string.size()
+        let chip = CGRect(x: x, y: 170, width: size.width + 36, height: 44)
+        context.addPath(CGPath(roundedRect: chip, cornerWidth: 22, cornerHeight: 22, transform: nil))
+        context.setFillColor(withAlpha(brand, 0.16))
+        context.fillPath()
+        context.addPath(CGPath(roundedRect: chip.insetBy(dx: 0.75, dy: 0.75), cornerWidth: 21, cornerHeight: 21, transform: nil))
+        context.setStrokeColor(withAlpha(brand, 0.55))
+        context.setLineWidth(1.5)
+        context.strokePath()
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphics
+        string.draw(at: CGPoint(x: chip.minX + 18, y: chip.midY - size.height / 2))
+        NSGraphicsContext.restoreGraphicsState()
+        x = chip.maxX + 14
+    }
+
+    return context.makeImage()!
+}
+
 // MARK: - Output
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 let packaging = root.appendingPathComponent("Packaging")
+let site = root.appendingPathComponent("Site")
+let onlySite = CommandLine.arguments.dropFirst().first == "site"
+
+try writePNG(renderIcon(size: 64), to: site.appendingPathComponent("favicon.png"))
+try writePNG(renderIcon(size: 180), to: site.appendingPathComponent("apple-touch-icon.png"))
+try writePNG(renderSocialCard(), to: site.appendingPathComponent("social-card.png"))
+if onlySite {
+    print("Rendered Site/favicon.png, Site/apple-touch-icon.png, Site/social-card.png")
+    exit(0)
+}
+
 let work = FileManager.default.temporaryDirectory.appendingPathComponent("gps-artwork-\(UUID().uuidString)")
 let iconset = work.appendingPathComponent("AppIcon.iconset")
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
@@ -405,4 +482,4 @@ try writePNG(renderBackground(scale: 2), to: background2x)
 try run("/usr/bin/tiffutil", ["-cathidpicheck", background1x.path, background2x.path,
                               "-out", packaging.appendingPathComponent("dmg-background.tiff").path])
 
-print("Rendered Packaging/AppIcon.icns, Packaging/dmg-background.tiff, Docs/Assets/icon.png")
+print("Rendered Packaging/AppIcon.icns, Packaging/dmg-background.tiff, Docs/Assets/icon.png and Site artwork")

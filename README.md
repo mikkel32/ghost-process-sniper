@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/mikkel32/ghost-process-sniper/releases/latest"><img alt="Download the latest .dmg" src="https://img.shields.io/badge/Download-.dmg-29B8E0?style=for-the-badge&logo=apple&logoColor=white"></a>
+  <a href="https://mikkel32.github.io/ghost-process-sniper/"><img alt="Website" src="https://img.shields.io/badge/Website-ghost--process--sniper-1f2937?style=for-the-badge"></a>
 </p>
 
 <p align="center">
@@ -22,7 +23,7 @@
 </p>
 
 <p align="center">
-  <img src="Docs/Assets/screenshot-overview.png" alt="Ghost Process Sniper Overview: one recommended action with a Quit button, a risk queue, a warming-up queue, and summary cards for families, leaks, duplicates, and memory">
+  <img src="Docs/Assets/screenshot-overview.png" alt="Ghost Process Sniper Overview: one recommended action with a Quit button, then a risk queue and a warming-up queue of apps and processes with their memory and CPU">
 </p>
 
 Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a minute. Three copies of the same watcher from terminals you closed yesterday. A fan that spins up and no idea why.
@@ -43,6 +44,10 @@ Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a 
 - **Careful, thorough stopping.** Every stop knows what it interrupts, so apps can save and databases can flush, and nothing that can lose data is forced unless you allow it. It offers to stop the launchd service or supervisor that would otherwise restart the process, catches children born mid-stop, and then says by name what exited and whether each port is really free ([details](#what-a-stop-does)).
 - **Light on your Mac.** Background scans run at utility priority and slow down when nothing is wrong, on battery, in Low Power Mode, and when the Mac is hot; temperatures are read only while a window shows them. An open console relaxes its refresh rate when nobody has touched the Mac for a while, and its layout work was cut roughly in half ([measurements](Docs/Performance.md)). Sentinel's watchers are event-driven, so they cost nothing while nothing happens. **Settings › Diagnostics** shows what the radar itself costs.
 
+<p align="center">
+  <img src="Docs/Assets/screenshot-security.png" alt="The Security page: a shield reporting one suspicious process, microphone and camera status, and a finding that shows its launch chain, the decoded-payload evidence and the full command">
+</p>
+
 ## Private and unprivileged by design
 
 - **No network access.** There is no networking code: no telemetry, no analytics, no update pings.
@@ -53,7 +58,7 @@ Dev servers that never shut down. Electron helpers that quietly grow by 50 MB a 
 
 ## Install
 
-1. Download **`GhostProcessSniper-<version>.dmg`** from the [latest release](https://github.com/mikkel32/ghost-process-sniper/releases/latest).
+1. Download **`GhostProcessSniper-<version>.dmg`** from the [latest release](https://github.com/mikkel32/ghost-process-sniper/releases/latest) or the [website](https://mikkel32.github.io/ghost-process-sniper/).
 2. Open it and drag **Ghost Process Sniper** into **Applications**.
 3. Open it from Applications. It appears in the menu bar (there is no Dock icon); choose **Open Dashboard** for the full console.
 
@@ -77,7 +82,16 @@ Prefer the terminal? After copying the app to Applications:
 xattr -dr com.apple.quarantine "/Applications/Ghost Process Sniper.app"
 ```
 
-Each release lists the DMG's SHA-256 so you can verify the download with `shasum -a 256 GhostProcessSniper-*.dmg`. Or skip the binary and [build it yourself](#build-from-source) — it takes about two minutes.
+### Verify the download
+
+Every release is built from its tagged source by the [Release workflow](.github/workflows/release.yml) on GitHub's Macs, and each disk image carries a signed build-provenance attestation. The release page lists the SHA-256; with the [GitHub CLI](https://cli.github.com) you can also prove the file came from that build:
+
+```sh
+shasum -a 256 GhostProcessSniper-*.dmg
+gh attestation verify GhostProcessSniper-*.dmg --repo mikkel32/ghost-process-sniper
+```
+
+Or skip the binary and [build it yourself](#build-from-source) — it takes about two minutes.
 
 ## Using it
 
@@ -132,6 +146,8 @@ That builds an optimized, ad-hoc-signed bundle at `dist/Ghost Process Sniper.app
 | `Scripts/verify.sh` | Architecture checks, build-script tests, unit tests, core checks, and a release build |
 | `Scripts/dev.sh build` / `restart` / `debug` / `logs` | Build, restart after a build, run under LLDB, stream logs |
 | `Scripts/release.sh` | Universal `.dmg` installer and checksum in `dist/release/` |
+| `Scripts/release_notes.sh` | The release notes GitHub will show for the current version |
+| `python3 Scripts/build_site.py --out _site` | The website in `_site/` (serve it with `python3 -m http.server -d _site`) |
 
 ## How it works
 
@@ -143,6 +159,8 @@ ProcessMonitor (MainActor)            observable facade; schedules scans by dema
         │                             argv, ports and forensics within a deadline
         ├─ RadarPipeline              families, duplicates, baselines, member trends, CPU behavior,
         │                             forgotten-process evidence, pressure attribution, rules
+        ├─ SentinelEngine (actor)     attack shapes, launch chains, offline signature checks, startup
+        │                             items, microphone and camera; also woken by kernel spawn events
         ├─ RadarStore (actor)         local SQLite, versioned migrations, learned in memory and written behind
         └─ RadarPublishPayload        console snapshot and detail panels, published only when they change
 ProcessKiller                         preview, protection floor, phase walker, launchd bootout, outcome checks
@@ -150,7 +168,7 @@ ProcessKiller                         preview, protection floor, phase walker, l
 
 The code is split into two targets: **`GhostProcessSniperCore`** (sampling, intelligence, persistence, interventions — no UI) and **`GhostProcessSniper`** (SwiftUI app, menu bar, console). Architecture rules — folder ownership, the core/UI boundary, SQLite isolation, file-size budgets — are enforced by `Scripts/check_architecture.py`.
 
-Further reading: [Architecture](Docs/Architecture.md) · [Development](Docs/Development.md) · [Releasing](Docs/Releasing.md) · [Thermals](Docs/Thermals.md) · [Performance measurements](Docs/Performance.md)
+Further reading: [Architecture](Docs/Architecture.md) · [Sentinel](Docs/Sentinel.md) · [Development](Docs/Development.md) · [Releasing](Docs/Releasing.md) · [Thermals](Docs/Thermals.md) · [Performance measurements](Docs/Performance.md)
 
 ## Contributing
 
