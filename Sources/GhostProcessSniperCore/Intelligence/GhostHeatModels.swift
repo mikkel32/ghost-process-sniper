@@ -324,7 +324,12 @@ public enum GhostHeatModel {
         } else {
             refinedLevel = .quiet
         }
-        let level = max(base.level, refinedLevel)
+        var level = max(base.level, refinedLevel)
+        if level > .watch, let usual = usualSize(family: family, baseline: baseline, pressure: pressure, forecast: forecast,
+                                                 sustained: sustained, contextVotes: contextVotes) {
+            level = .watch
+            evidence.append("Large, but normal for it: about \(RadarFormat.bytes(UInt64(usual))) is its usual size")
+        }
 
         return GhostHeat(
             value: heat,
@@ -334,6 +339,25 @@ public enum GhostHeatModel {
             sustainedSignalCount: sustained,
             corroborationCount: contextVotes
         )
+    }
+}
+
+extension GhostHeatModel {
+    /// A family that is big and nothing else is worth watching, not a
+    /// problem, once its learned normal says this size is usual for it: a
+    /// chat app at 2.5 GB on a 16 GB Mac, a container VM at 8 GB. The
+    /// family's usual size, when that is so; nil when anything else is going
+    /// on (CPU, GPU, growth, a slow leak, pressure on the Mac, other votes).
+    static func usualSize(family: ProcessFamily, baseline: FamilyBaseline?, pressure: SystemMemoryPressure,
+                          forecast: RiskForecast, sustained: Int, contextVotes: Int) -> Double? {
+        guard let baseline, baseline.isMeasurementTrusted, sustained == 0, contextVotes == 0,
+              forecast.state <= .warming, !(pressure.isKnown && pressure.level >= .warning),
+              family.trend.credibleMemoryVelocity < 1, family.longTermTrend.persistentSlopeMegabytesPerMinute < 1,
+              !family.score.components.contains(where: { [.cpu, .gpu, .leak].contains($0.kind) && $0.level >= .watch })
+        else { return nil }
+        let footprint = family.totalPhysicalFootprintBytes
+        guard baseline.memoryZScore(for: footprint) < 2, baseline.memoryMultiple(for: footprint) < 1.3 else { return nil }
+        return baseline.meanMemoryBytes
     }
 }
 
