@@ -16,7 +16,8 @@ public struct ExecutableProvenance: Hashable, Sendable {
 /// Each file is read once per (path, inode, modification time), so an update
 /// is re-read and an unchanged binary never is. Validation is the basic kind:
 /// the signature and its certificate chain, without hashing every page of a
-/// large binary; the kernel already enforces page hashes for signed code.
+/// large binary; the kernel already enforces page hashes for signed code. It
+/// never uses the network (no revocation or online notarization checks).
 actor CodeSignatureInspector {
     private struct FileKey: Hashable {
         let path: String
@@ -113,7 +114,8 @@ actor CodeSignatureInspector {
               let code = staticCode else {
             return CodeSigningSummary(authority: .unsigned, teamIdentifier: nil, signingIdentifier: nil)
         }
-        let basic = SecCSFlags(rawValue: kSecCSBasicValidateOnly)
+        // Never the network: no revocation or online notarization lookups.
+        let basic = SecCSFlags(rawValue: kSecCSBasicValidateOnly).union(.noNetworkAccess)
         let status = SecStaticCodeCheckValidity(code, basic, nil)
         var information: CFDictionary?
         _ = SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information)

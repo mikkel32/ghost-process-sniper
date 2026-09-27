@@ -42,7 +42,9 @@ final class SpawnWatcher: @unchecked Sendable {
     private var knownChildren: [Int32: Set<Int32>] = [:]
     private var roots: [Int32: RootRole] = [:]
     private var buffered: [SpawnCapture] = []
-    private var lastRecorded: [Int32: String] = [:]
+    /// What each watched process last ran, hashed: an exec that repeats
+    /// the same program and arguments is not a new launch.
+    private var lastRecorded: [Int32: Int] = [:]
 
     init(onRunnerFromContentApp: @escaping @Sendable () -> Void = {}) {
         self.onRunnerFromContentApp = onRunnerFromContentApp
@@ -75,6 +77,11 @@ final class SpawnWatcher: @unchecked Sendable {
 
     var watchedCount: Int {
         queue.sync { sources.count }
+    }
+
+    /// Processes whose last launch is remembered; for tests.
+    var rememberedCount: Int {
+        queue.sync { lastRecorded.count }
     }
 
     // MARK: - Queue-confined
@@ -125,6 +132,8 @@ final class SpawnWatcher: @unchecked Sendable {
             if !appHelper, info.depth + 1 <= Self.maxDepth {
                 watch(child, depth: info.depth + 1, role: info.role, path: capture.executablePath)
             }
+            // Only a watched process can exec again; nothing else is remembered.
+            if sources[child] == nil { lastRecorded[child] = nil }
         }
     }
 
@@ -144,8 +153,16 @@ final class SpawnWatcher: @unchecked Sendable {
 
     private func record(_ capture: SpawnCapture) {
         let pid = capture.identity.pid
-        guard lastRecorded[pid] != capture.executablePath + capture.commandLine else { return }
-        lastRecorded[pid] = capture.executablePath + capture.commandLine
+        var hasher = Hasher()
+        hasher.combine(capture.executablePath)
+        hasher.combine(capture.commandLine)
+        let fingerprint = hasher.finalize()
+        guard lastRecorded[pid] != fingerprint else { return }
+        lastRecorded[pid] = fingerprint
+        // A missed exit leaves an entry behind; never keep more than the watched set.
+        if lastRecorded.count > Self.maxWatched * 2 {
+            lastRecorded = lastRecorded.filter { sources[$0.key] != nil || $0.key == pid }
+        }
         if buffered.count >= Self.maxBuffered { buffered.removeFirst(buffered.count - Self.maxBuffered + 1) }
         buffered.append(capture)
         if capture.rootRole == .contentApp, SentinelCatalog.isCommandRunner(capture.name, path: capture.executablePath) {
