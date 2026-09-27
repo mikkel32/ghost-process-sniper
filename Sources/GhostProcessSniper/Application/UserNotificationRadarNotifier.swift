@@ -59,6 +59,28 @@ actor UserNotificationRadarNotifier: RadarNotifying {
         }
     }
 
+    /// An energy finding that needs attention; clicking it opens Energy.
+    func notify(energy finding: EnergyFinding) async {
+        guard notificationCenterAvailable else { return }
+        switch await currentStatus() {
+        case .authorized, .provisional, .ephemeral: break
+        default: return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "Energy: worth a look"
+        content.subtitle = finding.headline
+        content.body = finding.advice
+        content.categoryIdentifier = NotificationRouter.energyCategory
+        content.userInfo = ["energyFinding": finding.id]
+        content.threadIdentifier = "ghost.energy"
+        let request = UNNotificationRequest(identifier: "ghost.energy.\(finding.id)", content: content, trigger: nil)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+        } catch {
+            RadarLogger.notifications.error("Energy notification failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     /// A startup item appeared while Ghost was running.
     func notify(startupItem item: LaunchItem) async {
         guard notificationCenterAvailable else { return }

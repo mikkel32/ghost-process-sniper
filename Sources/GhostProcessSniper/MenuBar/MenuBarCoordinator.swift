@@ -20,6 +20,8 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     private var sentinelObserverID: UUID?
     private var lastSentinelRevision: UInt64 = 0
     private var sentinelAlerts = SentinelAlertGate()
+    private var energyAlerts = EnergyAlertGate()
+    private var lastEnergyGlance = EnergyGlance.empty
 
     init(
         monitor: ProcessMonitor? = nil,
@@ -54,6 +56,20 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     private func startSentinelAlerts() {
         sentinelObserverID = monitor.addPublishedStateObserver { [weak self] state in
             self?.handleSentinelChange(state: state)
+            self?.handleEnergyChange()
+        }
+    }
+
+    /// One notification per energy finding that needs attention, such as an
+    /// idle app keeping the Mac awake for hours; the glance changes rarely,
+    /// so most publishes return at the first comparison.
+    private func handleEnergyChange() {
+        let glance = monitor.energyGlance
+        guard glance != lastEnergyGlance else { return }
+        lastEnergyGlance = glance
+        for finding in energyAlerts.alerts(for: monitor.energy.findings, now: Date()) {
+            let notifier = notifier
+            Task { await notifier.notify(energy: finding) }
         }
     }
 

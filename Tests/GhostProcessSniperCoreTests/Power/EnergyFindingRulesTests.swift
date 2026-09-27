@@ -117,3 +117,22 @@ final class EnergyFindingRulesTests: XCTestCase {
         XCTAssertEqual(findings.map(\.kind), [.keepsMacAwake, .wakeups])
     }
 }
+
+final class EnergyAlertGateTests: XCTestCase {
+    private func finding(_ id: String, _ severity: EnergyFindingSeverity) -> EnergyFinding {
+        EnergyFinding(id: id, kind: .keepsMacAwake, severity: severity, consumerID: id, displayName: id, familyKey: nil,
+                      headline: id, detail: "", advice: "", since: .distantPast)
+    }
+
+    func testOnlyAttentionAlertsAndOnlyOnceWhileItLasts() {
+        var gate = EnergyAlertGate()
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(gate.alerts(for: [finding("a", .attention), finding("b", .notable)], now: now).map(\.id), ["a"])
+        XCTAssertTrue(gate.alerts(for: [finding("a", .attention)], now: now.addingTimeInterval(60)).isEmpty)
+        // Gone, then back within the cooldown: still quiet; back the next night: alerts again.
+        _ = gate.alerts(for: [], now: now.addingTimeInterval(120))
+        XCTAssertTrue(gate.alerts(for: [finding("a", .attention)], now: now.addingTimeInterval(3_600)).isEmpty)
+        _ = gate.alerts(for: [], now: now.addingTimeInterval(3_700))
+        XCTAssertEqual(gate.alerts(for: [finding("a", .attention)], now: now.addingTimeInterval(13 * 3_600)).map(\.id), ["a"])
+    }
+}

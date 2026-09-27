@@ -52,6 +52,7 @@ While on battery, the draw is averaged over about a minute, and the time left is
 
 - **Energy** (⌘4): the battery and draw with an hour's sparkline, findings, **Using energy now** (average watts, wake-ups, writes and battery time gained), **Keeping your Mac awake** (unexpected holders first; keep-awake apps marked; macOS's own services folded away) and apps that used energy in the last hour and exited.
 - **Overview**: a banner while a finding needs attention.
+- **Notifications**: one per finding that needs attention (`EnergyAlertGate`); the same finding stays quiet for 12 hours, so an app that keeps the Mac awake every night alerts once a night.
 - **Popover**: the top finding, or the battery line while on battery.
 - **Family pages**: energy, wake-ups, disk writes and whether the family keeps the Mac awake, averaged over about a minute.
 - **Search**: `watts>2`, `wakeups>150`, `writes>5mb` (per second).
