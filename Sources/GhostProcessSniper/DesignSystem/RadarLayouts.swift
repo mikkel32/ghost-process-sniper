@@ -45,41 +45,76 @@ struct WrappingHStack: Layout {
 
 /// A two-item layout that stays horizontal when useful and collapses cleanly
 /// when a sidebar or inspector narrows the content column.
+///
+/// Child sizes are cached per proposal for one layout pass: a stack asks for
+/// this layout's size more than once, and placing used to measure the first
+/// child again. SwiftUI clears the cache whenever the children change.
 struct AdaptivePairLayout: Layout {
     var breakpoint: CGFloat = 720
     var spacing: CGFloat = 14
     var secondaryWidth: CGFloat? = nil
 
+    struct Cache {
+        fileprivate var sizes: [MeasureKey: CGSize] = [:]
+    }
+
+    fileprivate struct MeasureKey: Hashable {
+        let index: Int
+        let width: CGFloat?
+        let height: CGFloat?
+    }
+
+    func makeCache(subviews: Subviews) -> Cache {
+        Cache()
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache.sizes.removeAll(keepingCapacity: true)
+    }
+
+    private func measure(_ index: Int, _ proposal: ProposedViewSize, _ subviews: Subviews, _ cache: inout Cache) -> CGSize {
+        let key = MeasureKey(index: index, width: proposal.width, height: proposal.height)
+        if let size = cache.sizes[key] {
+            return size
+        }
+        let size = subviews[index].sizeThatFits(proposal)
+        cache.sizes[key] = size
+        return size
+    }
+
+    private func columnWidths(for width: CGFloat) -> (first: CGFloat, second: CGFloat) {
+        let secondWidth = min(secondaryWidth ?? (width - spacing) / 2, width * 0.44)
+        return (max(0, width - spacing - secondWidth), secondWidth)
+    }
+
     func sizeThatFits(
         proposal: ProposedViewSize,
         subviews: Subviews,
-        cache: inout ()
+        cache: inout Cache
     ) -> CGSize {
         guard !subviews.isEmpty else { return .zero }
         let width = proposal.width ?? breakpoint
         guard subviews.count >= 2 else {
-            return subviews[0].sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+            return measure(0, ProposedViewSize(width: width, height: proposal.height), subviews, &cache)
         }
 
         if width >= breakpoint {
-            let secondWidth = min(secondaryWidth ?? (width - spacing) / 2, width * 0.44)
-            let firstWidth = max(0, width - spacing - secondWidth)
-            let first = subviews[0].sizeThatFits(ProposedViewSize(width: firstWidth, height: proposal.height))
-            let second = subviews[1].sizeThatFits(ProposedViewSize(width: secondWidth, height: proposal.height))
+            let columns = columnWidths(for: width)
+            let first = measure(0, ProposedViewSize(width: columns.first, height: proposal.height), subviews, &cache)
+            let second = measure(1, ProposedViewSize(width: columns.second, height: proposal.height), subviews, &cache)
             return CGSize(width: width, height: max(first.height, second.height))
         }
 
-        let sizes = subviews.prefix(2).map {
-            $0.sizeThatFits(ProposedViewSize(width: width, height: nil))
-        }
-        return CGSize(width: width, height: sizes.reduce(0) { $0 + $1.height } + spacing)
+        let first = measure(0, ProposedViewSize(width: width, height: nil), subviews, &cache)
+        let second = measure(1, ProposedViewSize(width: width, height: nil), subviews, &cache)
+        return CGSize(width: width, height: first.height + second.height + spacing)
     }
 
     func placeSubviews(
         in bounds: CGRect,
         proposal: ProposedViewSize,
         subviews: Subviews,
-        cache: inout ()
+        cache: inout Cache
     ) {
         guard !subviews.isEmpty else { return }
         guard subviews.count >= 2 else {
@@ -88,20 +123,19 @@ struct AdaptivePairLayout: Layout {
         }
 
         if bounds.width >= breakpoint {
-            let secondWidth = min(secondaryWidth ?? (bounds.width - spacing) / 2, bounds.width * 0.44)
-            let firstWidth = max(0, bounds.width - spacing - secondWidth)
+            let columns = columnWidths(for: bounds.width)
             subviews[0].place(
                 at: bounds.origin,
-                proposal: ProposedViewSize(width: firstWidth, height: bounds.height)
+                proposal: ProposedViewSize(width: columns.first, height: bounds.height)
             )
             subviews[1].place(
-                at: CGPoint(x: bounds.minX + firstWidth + spacing, y: bounds.minY),
-                proposal: ProposedViewSize(width: secondWidth, height: bounds.height)
+                at: CGPoint(x: bounds.minX + columns.first + spacing, y: bounds.minY),
+                proposal: ProposedViewSize(width: columns.second, height: bounds.height)
             )
             return
         }
 
-        let first = subviews[0].sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+        let first = measure(0, ProposedViewSize(width: bounds.width, height: nil), subviews, &cache)
         subviews[0].place(
             at: bounds.origin,
             proposal: ProposedViewSize(width: bounds.width, height: first.height)

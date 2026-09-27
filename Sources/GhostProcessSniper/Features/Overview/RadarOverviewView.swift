@@ -13,6 +13,7 @@ struct RadarOverviewView: View {
             // A plain VStack: the chart and radar are built with the page,
             // not lazily in the middle of a scroll.
             VStack(alignment: .leading, spacing: 20) {
+                SentinelOverviewBanner(session: session)
                 ForEach(OverviewLayoutPlan.sections(thermal: session.overviewThermalBand), id: \.self) { section in
                     OverviewSection(id: section, session: session)
                 }

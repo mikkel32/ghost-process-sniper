@@ -66,7 +66,7 @@ struct IncidentsConsoleView: View {
                 InfoTip(tip: RadarTip(
                     title: "Incidents",
                     message: "The radar's memory: every time a family crosses into hot, an incident is recorded with its peak score, metrics, evidence, and timeline. Active incidents are still misbehaving; resolved ones calmed down on their own or after intervention.",
-                    shortcut: "⌘4"
+                    shortcut: "⌘5"
                 ))
                 Button {
                     session.copyReport()

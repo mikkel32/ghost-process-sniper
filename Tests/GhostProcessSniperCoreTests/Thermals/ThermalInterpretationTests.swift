@@ -234,7 +234,7 @@ final class ThermalInterpretationTests: XCTestCase {
                                                   at: latest.sampledAt)
         XCTAssertEqual(diagnosis.reviewStatus, "Very hot")
         XCTAssertFalse(diagnosis.headline.contains("Reduce"))
-        XCTAssertEqual(diagnosis.headline, "90.0°C · Brief spike — watching the next readings")
+        XCTAssertEqual(diagnosis.headline, "\(RadarFormat.celsius(90)) · Brief spike — watching the next readings")
     }
 
     func testConsecutiveVeryHotReadingsAskToReduceHeavyWork() {
@@ -242,7 +242,7 @@ final class ThermalInterpretationTests: XCTestCase {
         let result = ThermalDiagnosis.evaluate(snapshot: latest, activity: .empty, observations: window,
                                                at: latest.sampledAt)
         XCTAssertEqual(result.temperature.trajectory.veryHotSeconds, 10)
-        XCTAssertEqual(result.headline, "91.0°C · Reduce optional heavy work")
+        XCTAssertEqual(result.headline, "\(RadarFormat.celsius(91)) · Reduce optional heavy work")
     }
 
     func testObservationWindowIsBoundedAndRejectsOutOfOrderSamples() {

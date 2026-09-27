@@ -29,7 +29,7 @@ enum ShellRole {
     /// `-c` or a script operand, and neither a login shell nor `-i`.
     static func runsCommand(_ shell: ProcessMetrics) -> Bool {
         guard !shell.name.hasPrefix("-") else { return false }
-        let words = shell.commandLine.split(whereSeparator: \.isWhitespace)
+        let words = shell.commandLine.split(whereSeparator: \.isCommandWhitespace)
         guard let first = words.first, !first.hasPrefix("-") else { return false }
         for word in words.dropFirst() {
             if word == "--" { return true }

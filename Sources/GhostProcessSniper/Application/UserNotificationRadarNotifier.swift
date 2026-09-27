@@ -28,6 +28,56 @@ actor UserNotificationRadarNotifier: RadarNotifying {
         }
     }
 
+    /// One alert per Sentinel finding; clicking it opens the Security page.
+    func notify(sentinel finding: SentinelFinding) async {
+        guard notificationCenterAvailable else { return }
+        switch await currentStatus() {
+        case .authorized, .provisional, .ephemeral:
+            break
+        case .notDetermined:
+            if !didPromptThisLaunch {
+                didPromptThisLaunch = true
+                Task { _ = await self.requestAuthorization() }
+            }
+            return
+        default:
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = finding.severity == .dangerous ? "Security: act now" : "Security: worth a look"
+        content.subtitle = finding.headline
+        content.body = ([finding.lineageText] + finding.signals.prefix(2).map(\.detail)).joined(separator: "\n")
+        content.sound = finding.severity == .dangerous ? .defaultCritical : .default
+        content.categoryIdentifier = NotificationRouter.sentinelCategory
+        content.userInfo = ["sentinelFinding": finding.id]
+        content.threadIdentifier = "ghost.sentinel"
+        let request = UNNotificationRequest(identifier: "ghost.sentinel.\(finding.id)", content: content, trigger: nil)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+        } catch {
+            RadarLogger.notifications.error("Sentinel notification failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// A startup item appeared while Ghost was running.
+    func notify(startupItem item: LaunchItem) async {
+        guard notificationCenterAvailable else { return }
+        switch await currentStatus() {
+        case .authorized, .provisional, .ephemeral: break
+        default: return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = item.severity >= .suspicious ? "Security: suspicious startup item" : "New startup item"
+        content.subtitle = "\(item.label) · \(item.scope.label.lowercased())"
+        content.body = item.programPath.isEmpty ? item.plistPath : item.programPath
+        content.sound = item.severity >= .suspicious ? .defaultCritical : .default
+        content.categoryIdentifier = NotificationRouter.sentinelCategory
+        content.userInfo = ["sentinelFinding": item.id]
+        content.threadIdentifier = "ghost.sentinel"
+        let request = UNNotificationRequest(identifier: "ghost.startup.\(item.id)", content: content, trigger: nil)
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
     func requestAuthorization() async -> Bool {
         guard notificationCenterAvailable else {
             RadarLogger.notifications.info("Skipping notification authorization: process is not a bundled app")

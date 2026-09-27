@@ -74,6 +74,8 @@ public struct RefreshOutcome: Equatable, Sendable {
     public let thermalActivity: ThermalActivitySummary
     /// Every sampled process, tracked or not, for search.
     public let processes: [ProcessMetrics]
+    /// Security findings and the launch feed.
+    public let sentinel: SentinelReport
 
     public init(
         families: [ProcessFamily],
@@ -90,7 +92,8 @@ public struct RefreshOutcome: Equatable, Sendable {
         phaseTrace: RefreshPhaseTrace,
         generatedAt: Date,
         thermalActivity: ThermalActivitySummary = .empty,
-        processes: [ProcessMetrics] = []
+        processes: [ProcessMetrics] = [],
+        sentinel: SentinelReport = .empty
     ) {
         self.families = families
         self.summary = summary
@@ -107,6 +110,7 @@ public struct RefreshOutcome: Equatable, Sendable {
         self.generatedAt = generatedAt
         self.thermalActivity = thermalActivity
         self.processes = processes
+        self.sentinel = sentinel
     }
 }
 
@@ -122,15 +126,18 @@ public actor RadarRefreshWorker {
     private var incidentsReadAtFlush: Date?
     private var spikeRing = SpikeRingBuffer(limit: 8)
     private var thermalHistory = ThermalActivityHistory()
+    private let sentinel: SentinelEngine?
 
     public init(
         sampler: ProcessSampling = NativeProcessSampler(),
         store: RadarStore? = nil,
         builder: ProcessFamilyBuilder = ProcessFamilyBuilder(),
-        intelligence: RadarIntelligence = RadarIntelligence()
+        intelligence: RadarIntelligence = RadarIntelligence(),
+        sentinel: SentinelEngine? = nil
     ) {
         self.sampler = sampler
         self.store = store
+        self.sentinel = sentinel
         self.pipeline = RadarPipeline(builder: builder, intelligence: intelligence)
     }
 
@@ -280,7 +287,8 @@ public actor RadarRefreshWorker {
             thermalPressure: scheduler.currentPressure,
             summaryLevel: summary.level,
             hotSinceAlerted: hotSinceAlerted,
-            currentRefreshMilliseconds: stats.totalMilliseconds
+            currentRefreshMilliseconds: stats.totalMilliseconds,
+            userIdleSeconds: request.uiVisible ? scheduler.userIdleSeconds() : 0
         ))
         let performance = metrics(
             performanceMode: scheduler.currentPerformanceMode,
@@ -323,6 +331,8 @@ public actor RadarRefreshWorker {
         let currentActivity = ThermalActivityAnalyzer.project(
             processes: batch.processes, families: scored.families, now: request.now)
         let thermalActivity = thermalHistory.record(currentActivity, at: request.now)
+        let sentinelReport = await sentinel?.ingest(
+            processes: batch.processes, uiVisible: request.uiVisible, now: request.now) ?? .empty
 
         return RefreshOutcome(
             families: payload.state.families,
@@ -339,7 +349,8 @@ public actor RadarRefreshWorker {
             phaseTrace: phaseTrace,
             generatedAt: request.now,
             thermalActivity: thermalActivity,
-            processes: batch.processes
+            processes: batch.processes,
+            sentinel: sentinelReport
         )
     }
 

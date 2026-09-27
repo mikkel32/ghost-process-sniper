@@ -36,7 +36,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         coordinator.start()
-        if ProcessInfo.processInfo.arguments.contains("--console") {
+        let arguments = ProcessInfo.processInfo.arguments
+        // `--section security` (or overview, processes, duplicates, incidents,
+        // rules) opens the console on that page.
+        if let index = arguments.firstIndex(of: "--section"), arguments.indices.contains(index + 1) {
+            coordinator.openConsole(section: RadarFocusedSelection(storageValue: arguments[index + 1]))
+        } else if arguments.contains("--console") {
             coordinator.openConsole()
         }
     }

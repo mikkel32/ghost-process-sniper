@@ -24,7 +24,7 @@ Scripts/dev.sh telemetry          # Read subsystem logs without rebuilding
 | `MenuBar` | Status item and icon, status menu, the single main-menu definition, popover |
 | `Shell` | Console window and session: navigation and Back/Forward, selection, stops, toasts, toolbar, sidebar, Quick Stop, Settings window |
 | `DesignSystem` | Theme, shared surfaces and controls, layouts, tips, motion, shared row actions, the wait label |
-| `Features/<feature>` | Feature-specific views and their local UI state: Overview, Processes, Duplicates, Incidents, Rules, Interventions (the stop sheet), Thermals, Settings |
+| `Features/<feature>` | Feature-specific views and their local UI state: Overview, Processes, Duplicates, Incidents, Rules, Sentinel (the Security page), Interventions (the stop sheet), Thermals, Settings |
 
 | Core folder | Ownership |
 | --- | --- |
@@ -40,6 +40,7 @@ Scripts/dev.sh telemetry          # Read subsystem logs without rebuilding
 | `Diagnostics` | Logging, self-usage accounting and responsiveness instrumentation |
 | `Interventions` | Stop plans, risk, protection, preview, execution, launchd, outcome verification and learning |
 | `Cleanup` | Staged file-cleanup core with no UI yet (see [Cleanup](Cleanup-2026-09-15.md)) |
+| `Sentinel` | Security watch: attack-pattern rules, the spawn, startup-item and privacy-sensor watchers, signature checks and the launch feed (see [Sentinel](Sentinel.md)) |
 
 These are the two production SwiftPM targets. Folder organization does not by itself enforce every dependency inside the core target.
 

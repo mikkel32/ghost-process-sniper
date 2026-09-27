@@ -23,7 +23,7 @@ final class PrecisionTelemetryTests: XCTestCase {
     func testTemperatureAvailabilityUsesSampleAge() {
         let snapshot = ThermalSnapshot(sampledAt: now, cpuCelsius: 75.5, gpuCelsius: nil, sensorCount: 1,
                                        sensorKeys: ["Tp09"], systemState: "Nominal", unavailableReason: nil)
-        XCTAssertEqual(snapshot.temperatureText(snapshot.cpuCelsius, at: now), "75.5°C")
+        XCTAssertEqual(snapshot.temperatureText(snapshot.cpuCelsius, at: now), RadarFormat.celsius(75.5))
         XCTAssertEqual(snapshot.temperatureText(snapshot.cpuCelsius, at: now.addingTimeInterval(16)), "Unavailable")
         XCTAssertEqual(snapshot.temperatureText(snapshot.cpuCelsius, at: now.addingTimeInterval(-1)), "Unavailable")
         XCTAssertEqual(snapshot.temperatureText(snapshot.gpuCelsius, at: now), "Unavailable")

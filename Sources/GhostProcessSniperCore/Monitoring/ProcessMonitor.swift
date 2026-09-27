@@ -29,6 +29,9 @@ public final class ProcessMonitor {
     public private(set) var thermals: ThermalSnapshot = .unknown
     public private(set) var thermalObservations = ThermalObservationWindow()
     public private(set) var thermalActivity: ThermalActivitySummary = .empty
+    /// Security findings, the launch feed and the privacy sensors.
+    public internal(set) var sentinel: SentinelReport = .empty
+    @ObservationIgnored let sentinelEngine: SentinelEngine?
     /// Every process in the latest sample, for search. Not observed: the
     /// console re-queries on each publish, and views never read it directly.
     @ObservationIgnored public private(set) var sampledProcesses: [ProcessMetrics] = []
@@ -85,19 +88,29 @@ public final class ProcessMonitor {
         settings: ThresholdSettings = .smart,
         store: RadarStore? = ProcessMonitor.createDefaultStore(),
         notifier: RadarNotifying = NoopRadarNotifier(),
-        thermalSampler: any ThermalSampling = ThermalSampler()
+        thermalSampler: any ThermalSampling = ThermalSampler(),
+        sentinel: SentinelEngine.Live? = nil
     ) {
         self.settings = settings
         settingsBeforeLoad = settings
         self.store = store
         self.thermalSampler = thermalSampler
         self.notifier = notifier
+        let relay = SentinelWakeRelay()
+        let engine = sentinel.map { SentinelEngine(live: $0, onUrgentSpawn: { relay.fire() }) }
+        sentinelEngine = engine
         self.worker = RadarRefreshWorker(
             sampler: sampler,
             store: store,
             builder: builder,
-            intelligence: intelligence
+            intelligence: intelligence,
+            sentinel: engine
         )
+        // A browser or mail app starting a shell is worth a scan now, not at
+        // the next tick; the relay lets the watcher ask without owning us.
+        relay.setHandler { [weak self] in
+            Task { @MainActor in self?.wakeForSentinel() }
+        }
     }
 
     deinit {
@@ -254,6 +267,9 @@ public final class ProcessMonitor {
         }
         if outcome.thermalActivity != thermalActivity {
             thermalActivity = outcome.thermalActivity
+        }
+        if outcome.sentinel != sentinel {
+            sentinel = outcome.sentinel
         }
         recordSample(outcome.processes)
         publish(payload: outcome.payload)

@@ -39,6 +39,28 @@ final class RadarSchedulerTests: XCTestCase {
         }
     }
 
+    func testUnattendedVisibleConsoleRelaxesAndInputRestoresTheWatchedRate() {
+        func visible(_ level: GhostLevel, idle: TimeInterval) -> TimeInterval {
+            var scheduler = RadarScheduler(pressureProvider: { .nominal })
+            let context = RadarSchedulingContext(uiVisible: true, summaryLevel: level,
+                currentRefreshMilliseconds: 5, userIdleSeconds: idle)
+            return scheduler.nextInterval(settings: .smart, context: context)
+        }
+        XCTAssertEqual(visible(.quiet, idle: 5), 1, "someone using the Mac gets the watched rate")
+        XCTAssertEqual(visible(.quiet, idle: 45), 2)
+        XCTAssertEqual(visible(.quiet, idle: 600), 4)
+        XCTAssertEqual(visible(.hot, idle: 45), 1.5)
+        XCTAssertEqual(visible(.hot, idle: 600), 3)
+        XCTAssertEqual(visible(.quiet, idle: 0), 1, "fresh input restores the watched rate")
+    }
+
+    func testIdleTimeNeverStretchesTheHiddenCadence() {
+        var scheduler = RadarScheduler(pressureProvider: { .nominal })
+        let idle = RadarSchedulingContext(uiVisible: false, summaryLevel: .quiet,
+            currentRefreshMilliseconds: 5, userIdleSeconds: 900)
+        XCTAssertEqual(scheduler.nextInterval(settings: .smart, context: idle), 3.5)
+    }
+
     func testHiddenOnMainsNeverRunsRealtime() {
         XCTAssertEqual(cadence(.quiet).interval, 3.5)
         XCTAssertEqual(cadence(.watch).interval, 2)

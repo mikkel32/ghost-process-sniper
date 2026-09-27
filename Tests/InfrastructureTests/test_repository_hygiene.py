@@ -6,12 +6,12 @@ import unittest
 PROJECT = Path(__file__).resolve().parents[2]
 
 # Pointers to UI that no longer exists: the Engine screen (now Settings ›
-# Diagnostics), Precision targets, the old force switch and the ⌘6 shortcut.
+# Diagnostics), Precision targets and the old force switch. (⌘6 was retired in
+# 2.0 and is Rules again since Security took ⌘3.)
 STALE_UI_REFERENCES = [
     "Engine →",
     "| **Engine**",
     "Precision targets",
-    "⌘6",
     "Report anything that refuses to stop**",
 ]
 

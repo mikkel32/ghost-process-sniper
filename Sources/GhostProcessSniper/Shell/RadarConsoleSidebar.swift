@@ -16,6 +16,7 @@ struct RadarConsoleSidebar: View {
             VStack(spacing: 5) {
                 destination("Overview", subtitle: "Your Mac at a glance", image: "square.grid.2x2", selection: .overview)
                 destination("All Processes", subtitle: "Search and explore every family", image: "list.bullet.rectangle", selection: .processes)
+                SidebarSecurityDestination(session: session, namespace: destinationNamespace)
             }
             .padding(10)
 
@@ -274,7 +275,7 @@ private struct SidebarSectionHeader: View {
     }
 }
 
-private struct SidebarDestinationRow: View {
+struct SidebarDestinationRow: View {
     let title: String
     let subtitle: String
     let systemImage: String

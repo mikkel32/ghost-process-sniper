@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Everything the cadence and budget choice depend on, so both are pure.
@@ -12,6 +13,8 @@ public struct RadarSchedulingContext: Equatable, Sendable {
     public var hotSinceAlerted: Bool
     /// What this tick cost, for backing off when over budget.
     public var currentRefreshMilliseconds: Double
+    /// Seconds since the last keyboard, mouse or trackpad input anywhere.
+    public var userIdleSeconds: TimeInterval
 
     public init(
         uiVisible: Bool,
@@ -19,7 +22,8 @@ public struct RadarSchedulingContext: Equatable, Sendable {
         thermalPressure: SystemPressureLevel = .nominal,
         summaryLevel: GhostLevel = .quiet,
         hotSinceAlerted: Bool = false,
-        currentRefreshMilliseconds: Double = 0
+        currentRefreshMilliseconds: Double = 0,
+        userIdleSeconds: TimeInterval = 0
     ) {
         self.uiVisible = uiVisible
         self.power = power
@@ -27,6 +31,7 @@ public struct RadarSchedulingContext: Equatable, Sendable {
         self.summaryLevel = summaryLevel
         self.hotSinceAlerted = hotSinceAlerted
         self.currentRefreshMilliseconds = currentRefreshMilliseconds
+        self.userIdleSeconds = userIdleSeconds
     }
 }
 
@@ -41,6 +46,7 @@ public struct RadarScheduler: Sendable {
     private var portCensusStamps: [ProcessIdentity: Date] = [:]
     private var planCount: UInt64 = 0
     private let pressureProvider: @Sendable () -> SystemPressureLevel
+    private let idleProvider: @Sendable () -> TimeInterval
 
     /// A family hot for this long, and already alerted on, is a known long
     /// job rather than news, so the hidden cadence relaxes.
@@ -48,15 +54,40 @@ public struct RadarScheduler: Sendable {
 
     public init() {
         pressureProvider = { Self.currentSystemPressure() }
+        idleProvider = { Self.systemIdleSeconds() }
         powerReader = PowerContextReader()
     }
 
     init(
         pressureProvider: @escaping @Sendable () -> SystemPressureLevel,
-        powerSource: @escaping @Sendable () -> PowerContext = { .mains }
+        powerSource: @escaping @Sendable () -> PowerContext = { .mains },
+        idleSource: @escaping @Sendable () -> TimeInterval = { 0 }
     ) {
         self.pressureProvider = pressureProvider
+        idleProvider = idleSource
         powerReader = PowerContextReader(source: powerSource)
+    }
+
+    /// Seconds since the last input event in the login session. Reading it
+    /// needs no permission and never sees which keys or where.
+    public func userIdleSeconds() -> TimeInterval {
+        idleProvider()
+    }
+
+    static func systemIdleSeconds() -> TimeInterval {
+        guard let anyInput = CGEventType(rawValue: ~0) else { return 0 }
+        let seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
+        return seconds.isFinite ? max(0, seconds) : 0
+    }
+
+    /// A console left on screen while nobody touches the Mac is a wall
+    /// display, not an investigation: it refreshes at half, then a quarter,
+    /// of the watched rate. The next tick after any input is back at the
+    /// watched rate, so the lag is at most one relaxed interval (4 s).
+    static func unattendedMultiplier(idleSeconds: TimeInterval) -> Double {
+        if idleSeconds >= 120 { return 4 }
+        if idleSeconds >= 30 { return 2 }
+        return 1
     }
 
     public mutating func updateSystemPressure() -> SystemPressureLevel {
@@ -153,7 +184,8 @@ public struct RadarScheduler: Sendable {
         return Set(picked)
     }
 
-    /// Seconds until the next tick. Someone watching gets about one second;
+    /// Seconds until the next tick. Someone watching gets about one second
+    /// (stretching when nobody has touched the Mac for a while);
     /// hidden, the radar slows with calm, battery, Low Power Mode, heat and
     /// its own cost. Timer tolerance, not jitter, spreads hidden wake-ups.
     public mutating func nextInterval(settings: ThresholdSettings, context: RadarSchedulingContext) -> TimeInterval {
@@ -178,8 +210,8 @@ public struct RadarScheduler: Sendable {
     ) -> TimeInterval {
         let level = context.summaryLevel
         if context.uiVisible {
-            if level >= .hot { return 0.75 }
-            return mode == .realtime ? 1 : max(1, settings.refreshInterval)
+            let watched: TimeInterval = level >= .hot ? 0.75 : (mode == .realtime ? 1 : max(1, settings.refreshInterval))
+            return watched * unattendedMultiplier(idleSeconds: context.userIdleSeconds)
         }
         if context.power.lowPowerMode {
             return level >= .hot ? 3 : level == .watch ? 4 : 6

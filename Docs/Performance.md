@@ -47,6 +47,25 @@ The incident query took 24.6 ms with the old index and 2.1 ms with the covering 
 
 The whole refresh pipeline moved from 34.3 to 28.9 ms (250 families) and from 124.8 to 117.9 ms (1,000 families) in one before/after batch (`pipeline-before.json`, `pipeline-after.json`). That fixture uses distinct executables, so it is not the duplicate-heavy workload above.
 
+## Energy: the running app
+
+The benchmarks above time the pipeline; they cannot see SwiftUI layout, rendering, or what the app costs while it sits in the menu bar. On 2026-09-27 the running app was measured directly on an M1 Pro with other apps open: CPU time from `ps` over fixed windows (user plus system, as a percentage of one core), `sample` for where the time went, and Instruments' SwiftUI template for view updates. Each figure is one observation on a busy Mac; compare them as directions, not guarantees.
+
+| State | 2.0.0 | After |
+| --- | ---: | ---: |
+| Console frontmost, 30–60 s windows | 42% | 23–28% (includes Sentinel) |
+| Menu bar only, 60 s after a 150 s warm-up | 0.75–0.93% | 1.05–1.15% (includes Sentinel's watchers) |
+
+What the profiles showed and what changed:
+
+- **Size queries.** SwiftUI hosts each `NavigationSplitView` column in its own hosting view, and AppKit asked the detail column for its minimum size on every update. The Overview answered by measuring its whole scroll content at zero width: about half of the main thread's busy time while the console was visible. The column now sits in `SizeIndependentLayout`, which answers from the proposal alone and lays the page out once at its real size. The measuring samples fell from about 1,800 to 33 in the same window.
+- **Unattended consoles.** A console on screen refreshed every second even when nobody had touched the Mac for an hour. After 30 seconds without input it refreshes every 2 seconds, after 2 minutes every 4. Any input returns it to the watched rate on the next tick.
+- **Per-tick queries and string work.** Incident recurrence counts were queried on every scan; they are now cached and re-counted only for signatures whose episode closed or reopened. `URL(fileURLWithPath:)` stats the file to learn whether it is a folder, and two per-family paths called it on every refresh; they now use string slicing. Command-line splitting takes an ASCII fast path before the Unicode whitespace lookup.
+- **Layouts.** `AdaptivePairLayout` measured each child again for placement; it now caches measurements for one layout pass.
+- **Sentinel's cost.** Its watchers are event-driven: kernel process events for spawns, file-system events for launch agents, and Core Audio and CoreMediaIO listeners for the microphone and camera. In a 45-second hidden profile, Sentinel's own work was about 0.08% of a core; signature checks run once per program at utility priority with a pause between files.
+
+To repeat a measurement, compare CPU time from `ps -o utime=,stime= -p <pid>` at the start and end of a window, alternate builds, and keep the same apps open.
+
 ## Instrumented timings in the app
 
 **Settings › Diagnostics** reports the app's own refresh cost and CPU; Copy Diagnostics adds the scanner, store and smoothness figures, including the phases of recent slow refreshes. Main-actor publish timing includes the assignments and observer callbacks; the next refresh reports the preceding completed publish, so the measurement cannot trigger itself. It does not include deferred SwiftUI layout or rendering; use Instruments for those.

@@ -141,6 +141,8 @@ public struct CulpritAnalysis: Equatable, Sendable {
         guard !path.isEmpty else {
             return nil
         }
-        return URL(fileURLWithPath: path).deletingLastPathComponent().path
+        // String work only: URL(fileURLWithPath:) stats the file to learn
+        // whether it is a folder, once per family on every refresh.
+        return ProcessStaticFacts.parentDirectory(of: path).ifNotEmpty ?? URL(fileURLWithPath: path).deletingLastPathComponent().path
     }
 }

@@ -155,6 +155,17 @@ The result leads with what happened, by name — "Stopped vite and 3 helpers in 
 - **Other users' processes** stay running and are listed as skipped. If macOS refuses a signal to one of yours, the stop tries it once, says so, and moves on.
 - **Past stops** inform the evidence and the waits but never lock a family out of stopping. Survivors you chose to keep with **Never force-stop** do not count as failures.
 
+## Security
+
+**Security** (⌘3) answers "is anything on this Mac acting like an attack?" The shield at the top shows the worst live finding. The subtitle names the apps Sentinel is watching live and how many processes started in the last minute.
+
+- **Microphone and Camera** show whether each is in use. macOS names the apps recording audio; for cameras it only says one is on.
+- **Findings** are running (or recently exited) processes with evidence: the chain that launched them (`Google Chrome › zsh › curl`), each matched pattern with the exact text, the command line, the signature, and the page it was downloaded from. **Stop…** opens the usual stop preview. **Reveal** shows the program in Finder. **Copy Details** copies a plain-text report. **More › Trust** never flags that program again, and **Dismiss** hides only this finding. A dangerous finding pulses once when it appears.
+- **Starts automatically** lists launch agents and daemons, flagged and new ones first. A new one is caught the moment it is written and announced with a notification. Expand a row for its command, signature and **Reveal Plist**. Moving the plist to the Trash and logging out stops it.
+- **Launch feed** shows every new process, newest first, with what started it. **Flagged** shows findings only, **Commands** hides app launches, and **Everything** shows all. A bolt marks processes caught live by the spawn watcher, including ones that ran for under a second. Click a row for the full command.
+
+While a suspicious or dangerous process runs, a banner sits above the Overview, the menu-bar icon rises to hot or critical, and one notification is sent. [Sentinel](Sentinel.md) explains every pattern and its limits.
+
 ## Duplicates
 
 **Duplicates** lists work running more than once. A *copy* is an independently started instance — from a shell or by launchd; the workers one tool starts are a pool, not duplicates. Interpreted scripts are compared by what they run, so `node vite` and `node tsserver` are not copies of each other.
@@ -198,8 +209,8 @@ When the radar has a credible reason to interrupt you, it posts one notification
 | Search all processes | ⌘F |
 | Open the best match | ↩ in the search field |
 | Scan now | ⌘R |
-| Overview / All Processes | ⌘1 / ⌘2 |
-| Duplicates / Incidents / Rules | ⌘3 / ⌘4 / ⌘5 |
+| Overview / All Processes / Security | ⌘1 / ⌘2 / ⌘3 |
+| Duplicates / Incidents / Rules | ⌘4 / ⌘5 / ⌘6 |
 | Back / Forward | ⌘[ / ⌘] |
 | Next / previous family | ⌘↓ / ⌘↑ (↓ / ↑ in the sidebar) |
 | Stop the selected family | ⇧⌘⌫ |

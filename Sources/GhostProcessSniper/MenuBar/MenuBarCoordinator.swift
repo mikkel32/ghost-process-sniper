@@ -17,13 +17,16 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     private var quickStopObserverID: UUID?
     private var lastRenderedLevel: GhostLevel?
     private var lastRenderedPresentationKey = ""
+    private var sentinelObserverID: UUID?
+    private var lastSentinelRevision: UInt64 = 0
+    private var sentinelAlerts = SentinelAlertGate()
 
     init(
         monitor: ProcessMonitor? = nil,
         killer: ProcessKiller = ProcessKiller()
     ) {
         let notifier = UserNotificationRadarNotifier()
-        let monitor = monitor ?? ProcessMonitor(notifier: notifier)
+        let monitor = monitor ?? ProcessMonitor(notifier: notifier, sentinel: .full)
         self.monitor = monitor
         self.killer = killer
         self.notifier = notifier
@@ -40,7 +43,59 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         quickStopObserverID = monitor.addPublishedStateObserver { [weak self] _ in
             self?.quickStops.update()
         }
+        monitor.setSentinelTrustedPaths(SentinelPreferences.trustedPaths)
+        startSentinelAlerts()
         monitor.start()
+    }
+
+    /// Alerts once per new suspicious or dangerous thing (a program restarting
+    /// for the same reason waits a day), and keeps the menu-bar icon in step
+    /// with the Security page.
+    private func startSentinelAlerts() {
+        sentinelObserverID = monitor.addPublishedStateObserver { [weak self] state in
+            self?.handleSentinelChange(state: state)
+        }
+    }
+
+    private func handleSentinelChange(state: ProcessMonitorPublishedState) {
+        let report = monitor.sentinel
+        guard report.revision != lastSentinelRevision else { return }
+        lastSentinelRevision = report.revision
+        var pulse = false
+        let alerts = sentinelAlerts.alerts(for: report, now: Date())
+        for finding in alerts.findings {
+            let notifier = notifier
+            Task { await notifier.notify(sentinel: finding) }
+            pulse = pulse || finding.severity == .dangerous
+        }
+        for item in alerts.startupItems {
+            let notifier = notifier
+            Task { await notifier.notify(startupItem: item) }
+        }
+        updateStatusIcon(state: state, force: true)
+        if pulse { pulseStatusIcon() }
+    }
+
+    /// Three quick pulses for a new dangerous finding, then still.
+    private func pulseStatusIcon() {
+        guard let button = statusItem?.button, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        Task { @MainActor in
+            for _ in 0..<3 {
+                await NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.2
+                    button.animator().alphaValue = 0.25
+                }
+                await NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.2
+                    button.animator().alphaValue = 1
+                }
+            }
+        }
+    }
+
+    func openConsole(section: RadarFocusedSelection) {
+        openConsole()
+        consoleController.focusSection(section)
     }
 
     func openConsole() {
@@ -160,9 +215,10 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         // Sidebar order.
         addMenuItem("Overview", key: "1", modifiers: [.command], action: #selector(showOverviewCommand), to: radarMenu)
         addMenuItem("All Processes", key: "2", modifiers: [.command], action: #selector(showProcessesCommand), to: radarMenu)
-        addMenuItem("Duplicates", key: "3", modifiers: [.command], action: #selector(showDuplicatesCommand), to: radarMenu)
-        addMenuItem("Incidents", key: "4", modifiers: [.command], action: #selector(showIncidentsCommand), to: radarMenu)
-        addMenuItem("Rules", key: "5", modifiers: [.command], action: #selector(showRulesCommand), to: radarMenu)
+        addMenuItem("Security", key: "3", modifiers: [.command], action: #selector(showSecurityCommand), to: radarMenu)
+        addMenuItem("Duplicates", key: "4", modifiers: [.command], action: #selector(showDuplicatesCommand), to: radarMenu)
+        addMenuItem("Incidents", key: "5", modifiers: [.command], action: #selector(showIncidentsCommand), to: radarMenu)
+        addMenuItem("Rules", key: "6", modifiers: [.command], action: #selector(showRulesCommand), to: radarMenu)
         radarMenu.addItem(.separator())
         addMenuItem("Copy Incident Report", key: "c", modifiers: [.command, .shift], action: #selector(copyReportCommand), to: radarMenu)
         addMenuItem("Copy Diagnostics", key: "d", modifiers: [.command, .shift], action: #selector(copyDiagnosticsCommand), to: radarMenu)
@@ -226,23 +282,33 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
             return
         }
         let presentation = MenuBarStatusPresentation(state: state)
-        guard force || presentation.renderKey != lastRenderedPresentationKey else {
+        // A live security finding outranks resource pressure in the icon.
+        let security = monitor.sentinel.findings.first { $0.isRunning && $0.severity >= .suspicious }
+        let securityLevel: GhostLevel? = switch security?.severity {
+        case .dangerous?: .critical
+        case .suspicious?: .hot
+        default: nil
+        }
+        let level = max(presentation.level, securityLevel ?? presentation.level)
+        let renderKey = presentation.renderKey + "|" + (security.map { "\($0.id)-\($0.severity.rawValue)" } ?? "")
+        guard force || renderKey != lastRenderedPresentationKey else {
             return
         }
-        lastRenderedPresentationKey = presentation.renderKey
+        lastRenderedPresentationKey = renderKey
+        let tooltip = security.map { "Security: \($0.headline)\n\(presentation.tooltip)" } ?? presentation.tooltip
 
         let started = Date()
         var didChange = false
-        if lastRenderedLevel != presentation.level {
-            button.image = StatusIconRenderer.image(level: presentation.level)
-            lastRenderedLevel = presentation.level
+        if lastRenderedLevel != level {
+            button.image = StatusIconRenderer.image(level: level)
+            lastRenderedLevel = level
             didChange = true
         }
-        if button.toolTip != presentation.tooltip {
-            button.toolTip = presentation.tooltip
+        if button.toolTip != tooltip {
+            button.toolTip = tooltip
             didChange = true
         }
-        button.setAccessibilityLabel(presentation.accessibilityLabel)
+        button.setAccessibilityLabel(security.map { "Security finding: \($0.headline)" } ?? presentation.accessibilityLabel)
         if didChange {
             monitor.recordStatusUpdateCost(Date().timeIntervalSince(started) * 1_000)
         }
@@ -293,7 +359,12 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
                     self?.monitor.setPopoverVisible(false)
                     self?.openSettings()
                 },
-                onQuit: { NSApp.terminate(nil) }
+                onQuit: { NSApp.terminate(nil) },
+                onOpenSecurity: { [weak self] in
+                    self?.popover?.close()
+                    self?.monitor.setPopoverVisible(false)
+                    self?.showSecurityCommand()
+                }
             )
         )
         // The popover hugs its content; the triage list changes height.
@@ -394,6 +465,11 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     @objc private func showProcessesCommand() {
         openConsole()
         consoleController.focusSection(.processes)
+    }
+
+    @objc func showSecurityCommand() {
+        openConsole()
+        consoleController.focusSection(.security)
     }
 
     @objc private func showDuplicatesCommand() {

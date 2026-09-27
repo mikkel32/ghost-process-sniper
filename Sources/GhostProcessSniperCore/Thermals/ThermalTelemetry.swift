@@ -56,7 +56,7 @@ public struct ThermalSnapshot: Equatable, Sendable {
 
     public func temperatureText(_ value: Double?, at now: Date = Date()) -> String {
         guard (0...15).contains(now.timeIntervalSince(sampledAt)), let value, value.isFinite else { return "Unavailable" }
-        return String(format: "%.1f°C", value)
+        return RadarFormat.celsius(value)
     }
 }
 

@@ -111,6 +111,9 @@ final class ProcessMonitorWakeTests: XCTestCase {
         await monitor.refresh()
         let plans = await sampler.plans
         XCTAssertEqual(plans.map(\.uiVisible), [true, false])
-        XCTAssertEqual(plans.map(\.performanceMode), [.realtime, .balanced])
+        // Hidden runs balanced on mains and battery saver on battery or in Low
+        // Power Mode; either way it is no longer the watched, realtime mode.
+        XCTAssertEqual(plans.first?.performanceMode, .realtime)
+        XCTAssertNotEqual(plans.last?.performanceMode, .realtime)
     }
 }

@@ -121,7 +121,7 @@ final class ThermalActivityTests: XCTestCase {
         let snapshot = ThermalSnapshot(sampledAt: now, cpuCelsius: 70, gpuCelsius: nil, sensorCount: 1,
                                        sensorKeys: [], systemState: "Nominal", unavailableReason: nil)
         XCTAssertEqual(snapshot.expiresAt, now.addingTimeInterval(15))
-        XCTAssertEqual(snapshot.temperatureText(70, at: snapshot.expiresAt), "70.0°C")
+        XCTAssertEqual(snapshot.temperatureText(70, at: snapshot.expiresAt), RadarFormat.celsius(70))
         XCTAssertEqual(snapshot.temperatureText(70, at: snapshot.expiresAt.addingTimeInterval(0.01)), "Unavailable")
     }
 
