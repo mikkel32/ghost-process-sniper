@@ -152,14 +152,15 @@ final class PersistenceMonitor: @unchecked Sendable {
     }
 
     /// What the item runs and from where, in the same terms as a process.
-    static func judge(_ item: LaunchItem) -> [SentinelSignal] {
+    /// `signing` is its program's signature once the inspector has read it.
+    static func judge(_ item: LaunchItem, signing: CodeSigningSummary? = nil) -> [SentinelSignal] {
         var signals: [SentinelSignal] = []
         let program = item.programPath
         let subject = SentinelSubject(
             identity: ProcessIdentity(pid: 0, startTimeSeconds: 0, startTimeMicroseconds: 0), parentPID: 1, userID: 0,
             name: URL(fileURLWithPath: program).lastPathComponent, executablePath: program,
             commandLine: item.commandLine, isSystemProcess: SentinelCatalog.isSystemLocation(program))
-        signals += SentinelRules.locationSignals(subject) { FileManager.default.fileExists(atPath: $0) }
+        signals += SentinelRules.locationSignals(subject, signing: signing) { FileManager.default.fileExists(atPath: $0) }
             .map { signal in
                 signal.kind == .deletedExecutable
                     ? SentinelSignal(.deletedExecutable, .notable, "Points at a program that does not exist; an uninstall probably left it behind.",

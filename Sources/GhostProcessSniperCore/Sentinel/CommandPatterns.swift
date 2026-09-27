@@ -23,7 +23,7 @@ enum CommandPatterns {
         found += credentialAccess(lower, original: command, program: program)
         if let signal = quarantineRemoval(lower, original: command) { found.append(signal) }
         found += persistence(lower, original: command)
-        if let signal = reverseShell(lower, original: command) { found.append(signal) }
+        if let signal = reverseShell(lower, original: command, program: program) { found.append(signal) }
         if let signal = tunnel(lower, original: command, program: program) { found.append(signal) }
         if let signal = miner(lower, original: command, program: program) { found.append(signal) }
         found += capture(lower, original: command, program: program)
@@ -123,7 +123,19 @@ enum CommandPatterns {
     static let safeStorage = regex(#"\bsecurity\s+find-generic-password\b[^\n]{0,200}(chrome|chromium|brave|edge|opera|vivaldi|arc|yandex|electron)\s+safe\s+storage"#)
     static let keychainRead = regex(#"\bsecurity\s+(find-generic-password|find-internet-password)\b[^\n]{0,200}\s-[a-z]*w"#)
     static let keychainDump = regex(#"\bsecurity\s+(dump-keychain|export)\b"#)
-    static let secretStores = regex(#"(login data|web data|cookies\.binarycookies|/cookies\b|key4\.db|logins\.json|cookies\.sqlite|local state|login\.keychain|notestore\.sqlite|local extension settings/|wallets?/|exodus|electrum|/tdata\b|keychains/)"#)
+    /// Where browsers, the keychain, Notes, Telegram and wallets keep secrets,
+    /// as whole paths: a file called cookies.ts or a download named exodus
+    /// is not a password store.
+    static let secretStores = regex(#"""
+        library/application support/(google/chrome[^/]*|chromium|bravesoftware/[^/]+|microsoft edge[^/]*|arc/user data|\#
+        vivaldi|com\.operasoftware\.opera[^/]*|yandex/[^/]+)/([^/\n]+/){0,3}\#
+        (cookies|login data|web data|local state|local extension settings)\b|\#
+        library/application support/firefox/profiles/[^/\n]+/(cookies\.sqlite|logins\.json|key[34]\.db|signons\.sqlite)|\#
+        cookies\.binarycookies|(~|/users/[^/\n]+)/library/keychains/|login\.keychain|notestore\.sqlite|\#
+        telegram desktop/tdata\b|(\.electrum|application support/electrum)/wallets\b|\#
+        application support/exodus/exodus\.wallet|(application support/bitcoin|\.bitcoin)/(wallets\b|wallet\.dat)|\#
+        application support/atomic/local storage\b
+        """#)
 
     static func credentialAccess(_ lower: String, original: String, program: String) -> [SentinelSignal] {
         var found: [SentinelSignal] = []
@@ -140,7 +152,8 @@ enum CommandPatterns {
                 "Exports keychain contents.", evidence: match))
         }
         let copiers: Set<String> = ["sqlite3", "cp", "ditto", "zip", "tar", "cat", "python", "python3", "curl", "rsync", "scp"]
-        if copiers.contains(program), let match = firstMatch(secretStores, lower, original) {
+        // A URL names someone else's server, never a file on this Mac.
+        if copiers.contains(program), let match = firstMatch(secretStores, blankingURLs(lower), original) {
             found.append(SentinelSignal(.credentialAccess, .dangerous,
                 "A command-line tool is reading or copying a password, cookie or wallet store.", evidence: match))
         }
@@ -161,7 +174,7 @@ enum CommandPatterns {
     }
 
     static let launchctlLoad = regex(#"\blaunchctl\s+(load|bootstrap|submit|enable)\b[^\n;&|]{0,200}"#)
-    static let agentWrite = regex(#"\b(cp|mv|tee|ditto|plutil|defaults\s+write|cat\s*>|echo[^\n]{0,200}>)\s*[^\n;&|]{0,200}library/launch(agents|daemons)/"#)
+    static let agentWrite = regex(#"\b((cp|mv|tee|ditto|plutil)\b|defaults\s+write\b|cat\s*>|echo\b[^\n]{0,200}>)\s*[^\n;&|]{0,200}library/launch(agents|daemons)/"#)
     static let loginHook = regex(#"defaults\s+write\s+com\.apple\.loginwindow\s+(loginhook|logouthook)|make\s+(new\s+)?login\s+item|\bcrontab\s+(-e\b|[^-\s])"#)
 
     static func persistence(_ lower: String, original: String) -> [SentinelSignal] {
@@ -182,10 +195,29 @@ enum CommandPatterns {
 
     // MARK: - Remote control, tunnels, miners, capture
 
-    static let reverse = regex(#"/dev/(tcp|udp)/|\b(nc|ncat|netcat)\b[^\n]{0,120}\s-[a-z]*[ec]\s|\bsocat\b[^\n]{0,160}\bexec:|\b(ba|z)?sh\s+-i\s*[>&<]{1,3}|socket\b[^\n]{0,300}(subprocess|pty\.spawn|os\.dup2)|\bfsockopen\s*\(|\bruby\s+-rsocket\b|mkfifo\s+\S+[^\n]{0,120}\|\s*(nc|ncat|netcat)\b"#)
+    /// `/dev/tcp` wired to a shell's input or output (`>& /dev/tcp/…`,
+    /// `/dev/tcp/… 0>&1`, `exec 5<>/dev/tcp/…`); a bare `</dev/tcp/host/port`
+    /// only checks that a port is open. Plus socat and fifo relays, and
+    /// scripts that hand a socket to a shell.
+    static let reverse = regex(#"""
+        ([<>]&|<>)\s*/dev/(tcp|udp)/|/dev/(tcp|udp)/[^\s;&|]*\s+(\d?[<>]&\s*\d|0>&1)|\#
+        \bsocat\b[^\n]{0,160}\bexec:|\bsocket\b[^\n]{0,300}(pty\.spawn|os\.dup2)|\bfsockopen\s*\(|\bruby\s+-rsocket\b|\#
+        \b(ba|z|k)?sh\s+-i\s*(2>&1\s*)?\|\s*(\S*/)?(nc|ncat|netcat|telnet|openssl\s+s_client)\b|\#
+        mkfifo\s+\S+[^\n]{0,160}\|\s*(\S*/)?(nc|ncat|netcat|telnet|openssl\s+s_client)\b
+        """#)
+    /// netcat told to run a shell for whoever connects: `nc -e /bin/sh`,
+    /// `ncat -c bash`, `ncat --sh-exec …`.
+    static let netcatShellFlag = #"(\s-[a-z]*[ec]\s+|\s--(sh-)?exec[=\s]+)["']?(\S*/)?(ba|z|da|k|c|tc|fi)?sh\b"#
+    static let netcatExec = regex(netcatShellFlag)
+    /// The same inside a command string (`sh -c "nc -e /bin/sh …"`), where
+    /// nc must stand where a command starts, not as `wget -nc`.
+    static let nestedNetcatExec = regex(#"(^|[;&|(`'"]|\s-c\s+)\s*(\S*/)?(nc|ncat|netcat)(?=\s)[^;&|\n]{0,120}?"# + netcatShellFlag)
 
-    static func reverseShell(_ lower: String, original: String) -> SentinelSignal? {
-        guard let match = firstMatch(reverse, lower, original) else { return nil }
+    static func reverseShell(_ lower: String, original: String, program: String) -> SentinelSignal? {
+        let netcat: Set<String> = ["nc", "ncat", "netcat"]
+        let match = (netcat.contains(program) ? firstMatch(netcatExec, lower, original) : nil)
+            ?? firstMatch(nestedNetcatExec, lower, original) ?? firstMatch(reverse, lower, original)
+        guard let match else { return nil }
         return SentinelSignal(.reverseShell, .dangerous,
             "Connects a shell to another computer, giving it remote control of this Mac.", evidence: String(match.prefix(160)))
     }
@@ -200,14 +232,28 @@ enum CommandPatterns {
 
     static let minerNames: Set<String> = ["xmrig", "xmr-stak", "minerd", "cpuminer", "nbminer", "t-rex", "lolminer",
                                           "ethminer", "phoenixminer", "nanominer", "srbminer-multi", "cgminer", "bfgminer"]
-    static let minerArgs = regex(#"stratum\+(tcp|ssl|tls)://|--donate-level\b|\s-o\s+[^\s]*pool\.|\bnicehash\b|\bmoneroocean\b|\bsupportxmr\b"#)
+    static let minerArgs = regex(#"stratum\+(tcp|ssl|tls)://|--donate-level\b|\bnicehash\b|\bmoneroocean\b|\bsupportxmr\b"#)
+    /// `-o host:port` or `--url host:port`, as miners take their pool.
+    static let serverAddress = regex(#"\s(-o|--url)[\s=]+["']?([a-z]+://)?[a-z0-9.-]{1,253}:\d{2,5}\b"#)
 
     static func miner(_ lower: String, original: String, program: String) -> SentinelSignal? {
         if minerNames.contains(program) {
             return SentinelSignal(.cryptoMiner, .suspicious, "Runs a known cryptocurrency miner.", evidence: program)
         }
-        guard let match = firstMatch(minerArgs, lower, original) else { return nil }
+        guard let match = firstMatch(minerArgs, lower, original)
+                ?? firstMatch(serverAddress, lower, original).flatMap({ isPoolAddress($0) ? $0 : nil }) else { return nil }
         return SentinelSignal(.cryptoMiner, .suspicious, "Connects to a cryptocurrency mining pool.", evidence: match)
+    }
+
+    /// A pool is a host with a label naming one (`pool.supportxmr.com:3333`,
+    /// `xmr.nanopool.org:14433`); an output file such as `-o obj/threadpool.o`
+    /// has no port and is not one.
+    static func isPoolAddress(_ argument: String) -> Bool {
+        guard let address = argument.split(whereSeparator: { " =\"'".contains($0) }).last,
+              let hostAndPort = address.split(separator: "/").last,
+              let host = hostAndPort.split(separator: ":").first else { return false }
+        let labels = host.lowercased().split(separator: ".")
+        return labels.count >= 2 && labels.contains { $0.contains("pool") }
     }
 
     static let screenGrab = regex(#"\bscreencapture\b[^\n;&|]{0,120}\s-[a-z]*x"#)
@@ -251,6 +297,18 @@ enum CommandPatterns {
             return String(original[originalSpan]).trimmingCharacters(in: .whitespaces)
         }
         return String(lower[lowerSpan]).trimmingCharacters(in: .whitespaces)
+    }
+
+    static let urls = regex(#"[a-z][a-z0-9+.-]*://[^\s"'|;)`]+"#)
+
+    /// Replaces each URL with spaces of the same UTF-16 length, so matches
+    /// on the result still map onto the original text.
+    static func blankingURLs(_ lower: String) -> String {
+        let text = NSMutableString(string: lower)
+        for match in urls.matches(in: lower, range: NSRange(location: 0, length: text.length)).reversed() {
+            text.replaceCharacters(in: match.range, with: String(repeating: " ", count: match.range.length))
+        }
+        return text as String
     }
 
     /// Hides a secret passed on the command line before it reaches the UI.

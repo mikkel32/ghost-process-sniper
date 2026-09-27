@@ -31,20 +31,26 @@ public actor SentinelEngine {
 
     private struct Record {
         let subject: SentinelSubject
+        /// Kept so the rules can run again once the signature is known.
+        let ancestors: [SentinelSubject]
         let lineage: [SentinelLineageNode]
         var evaluation: SentinelEvaluation
         let firstSeen: Date
         var provenanceApplied = false
+        var signing: CodeSigningSummary?
+        var downloadedFrom: [String] = []
+        /// Evidence from outside the rules: the signature, the download mark, the microphone.
+        var extraSignals: [SentinelSignal] = []
     }
 
     static let feedCapacity = 300
-    /// Ghost never judges itself: a development build in a temporary folder
-    /// would otherwise flag its own location.
-    static let ownPID = ProcessInfo.processInfo.processIdentifier
     static let findingRetention: TimeInterval = 30 * 60
     static let exitedRecordRetention: TimeInterval = 120
 
     private let live: Live
+    /// Ghost never judges itself or what it starts: run from its disk image
+    /// or a development build folder, it would otherwise flag its own location.
+    private let ownPID: Int32
     private let watcher: SpawnWatcher?
     private let inspector: CodeSignatureInspector?
     private let persistence: PersistenceMonitor?
@@ -66,8 +72,10 @@ public actor SentinelEngine {
     private var report = SentinelReport.empty
     private var lastConnectionRead: Date?
 
-    public init(live: Live = .full, onUrgentSpawn: @escaping @Sendable () -> Void = {}) {
+    public init(live: Live = .full, ownPID: Int32 = ProcessInfo.processInfo.processIdentifier,
+                onUrgentSpawn: @escaping @Sendable () -> Void = {}) {
         self.live = live
+        self.ownPID = ownPID
         watcher = live.watchesSpawns ? SpawnWatcher(onRunnerFromContentApp: onUrgentSpawn) : nil
         inspector = live.inspectsSignatures ? CodeSignatureInspector() : nil
         persistence = live.watchesStartupItems ? PersistenceMonitor(onNewItem: onUrgentSpawn) : nil
@@ -108,9 +116,10 @@ public actor SentinelEngine {
             byPID[process.pid] = SentinelSubject(process)
         }
         let alive = Set(processes.map(\.identity))
+        let own = Self.family(of: ownPID, in: processes)
 
         // Spawns caught between scans come first, in the order they started.
-        for capture in watcher?.drain() ?? [] where capture.identity.pid != Self.ownPID {
+        for capture in watcher?.drain() ?? [] where !own.contains(capture.identity.pid) && !own.contains(capture.parentPID) {
             let subject = SentinelSubject(
                 identity: capture.identity, parentPID: capture.parentPID, userID: capture.userID,
                 name: capture.name, executablePath: capture.executablePath, commandLine: capture.commandLine,
@@ -122,7 +131,7 @@ public actor SentinelEngine {
             changed = true
         }
 
-        for process in processes where process.pid != Self.ownPID {
+        for process in processes where !own.contains(process.pid) {
             let subject = byPID[process.pid] ?? SentinelSubject(process)
             guard subject.identity == process.identity else { continue }
             if let record = records[process.identity] {
@@ -141,14 +150,14 @@ public actor SentinelEngine {
         }
 
         changed = refreshLiveness(alive: alive, now: now) || changed
-        changed = await applyProvenance(now: now) || changed
+        changed = await applyProvenance(alive: alive, now: now) || changed
         if let sensorMonitor {
             // Listener-driven: a real read happens only after a device change.
             let read = sensorMonitor.current(names: { pid in byPID[pid].map(\.name) }, now: now)
             if read != sensors {
                 sensors = read
                 changed = true
-                changed = flagRecorders(byPID: byPID, now: now) || changed
+                changed = flagRecorders(byPID: byPID, skipping: own, now: now) || changed
             }
         }
         changed = updateWatchedApps(processes) || changed
@@ -174,12 +183,18 @@ public actor SentinelEngine {
         let lineage = (ancestors.reversed() + [subject]).map {
             SentinelLineageNode(pid: $0.identity.pid, name: $0.name, executablePath: $0.executablePath)
         }
-        let evaluation = SentinelRules.evaluate(subject, ancestors: ancestors)
-        let firstSeen = records[subject.identity]?.firstSeen ?? at
+        let previous = records[subject.identity]
+        // Judged again (late arguments, new ports): what is known about the
+        // same file still holds; an exec into another program starts over.
+        let known = previous.flatMap { $0.subject.executablePath == subject.executablePath ? $0 : nil }
+        let evaluation = SentinelRules.evaluate(subject, ancestors: ancestors, signing: known?.signing)
         // System binaries are Apple's; only third-party programs get a signature check.
         let needsProvenance = !subject.isSystemLocation && subject.executablePath.hasPrefix("/")
-        records[subject.identity] = Record(subject: subject, lineage: lineage, evaluation: evaluation, firstSeen: firstSeen,
-                                           provenanceApplied: !needsProvenance)
+            && known?.provenanceApplied != true
+        records[subject.identity] = Record(
+            subject: subject, ancestors: ancestors, lineage: lineage, evaluation: evaluation,
+            firstSeen: previous?.firstSeen ?? at, provenanceApplied: !needsProvenance, signing: known?.signing,
+            downloadedFrom: known?.downloadedFrom ?? [], extraSignals: known?.extraSignals ?? [])
         if needsProvenance { pendingProvenance.insert(subject.identity) }
 
         if feed, Self.belongsInFeed(subject, parent: ancestors.first, severity: evaluation.severity),
@@ -196,21 +211,19 @@ public actor SentinelEngine {
         upsertFinding(for: subject.identity, running: running, now: now)
     }
 
-    private func upsertFinding(for identity: ProcessIdentity, running: Bool, now: Date,
-                               extra: [SentinelSignal] = [], signing: CodeSigningSummary? = nil, downloads: [String]? = nil) {
+    /// Rebuilds a finding from the record: the rules' verdict plus the
+    /// evidence gathered since (signature, download mark, microphone).
+    private func upsertFinding(for identity: ProcessIdentity, running: Bool, now: Date) {
         guard let record = records[identity], !trustedPaths.contains(record.subject.executablePath) else { return }
         let previous = findings[identity]
-        var signals = previous?.signals.filter { signal in extra.contains { $0.kind == signal.kind } == false } ?? []
-        for signal in record.evaluation.signals where !signals.contains(where: { $0.kind == signal.kind }) {
-            signals.append(signal)
-        }
-        signals += extra
+        var signals = record.evaluation.signals
+        signals += record.extraSignals.filter { !signals.contains($0) }
         signals.sort { $0.severity > $1.severity }
         guard (signals.map(\.severity).max() ?? .info) >= .notable else {
             findings[identity] = nil
             return
         }
-        findings[identity] = SentinelFinding(
+        var finding = SentinelFinding(
             identity: identity, name: record.subject.name, executablePath: record.subject.executablePath,
             commandLine: String(record.subject.commandLine.prefix(4_096)), lineage: record.lineage, signals: signals,
             headline: SentinelRules.headline(for: record.subject, signals: signals,
@@ -218,7 +231,9 @@ public actor SentinelEngine {
                                               fromTerminal: record.evaluation.fromTerminal),
             recommendation: SentinelRules.recommendation(for: signals, fromTerminal: record.evaluation.fromTerminal),
             firstSeen: previous?.firstSeen ?? record.firstSeen, lastSeen: now, isRunning: running,
-            signing: signing ?? previous?.signing, downloadedFrom: downloads ?? previous?.downloadedFrom ?? [])
+            signing: record.signing, downloadedFrom: record.downloadedFrom)
+        finding.connections = previous?.connections ?? []
+        findings[identity] = finding
     }
 
     private func refreshLiveness(alive: Set<ProcessIdentity>, now: Date) -> Bool {
@@ -246,7 +261,7 @@ public actor SentinelEngine {
 
     // MARK: - Signatures and downloads
 
-    private func applyProvenance(now: Date) async -> Bool {
+    private func applyProvenance(alive: Set<ProcessIdentity>, now: Date) async -> Bool {
         guard let inspector else { return false }
         pendingProvenance = pendingProvenance.filter { records[$0]?.provenanceApplied == false }
         guard !pendingProvenance.isEmpty else { return false }
@@ -263,17 +278,24 @@ public actor SentinelEngine {
         await inspector.request(wanted)
         let known = await inspector.snapshot(for: wanted)
         var changed = false
+        let provenanceKinds: Set<SentinelSignalKind> = [.unsigned, .adHocSigned, .invalidSignature, .downloadedExecutable]
         for identity in pendingProvenance {
-            guard let record = records[identity], let provenance = known[record.subject.executablePath] else { continue }
-            records[identity]?.provenanceApplied = true
+            guard var record = records[identity], let provenance = known[record.subject.executablePath] else { continue }
+            let before = record.evaluation.severity
+            record.provenanceApplied = true
+            record.signing = provenance.signing
+            record.downloadedFrom = provenance.downloadedFrom
+            // Rules that weigh the signer (a shared folder, a listener) run again now that it is known.
+            record.evaluation = SentinelRules.evaluate(record.subject, ancestors: record.ancestors, signing: provenance.signing)
             let oddly = record.evaluation.signals.contains {
                 [.temporaryLocation, .hiddenLocation, .deletedExecutable, .downloadedExecutable].contains($0.kind) && $0.severity >= .notable
             }
             let extra = provenance.signals(for: record.subject, locatedOddly: oddly)
-            let meaningful = extra.contains { $0.severity >= .notable }
+            record.extraSignals = record.extraSignals.filter { !provenanceKinds.contains($0.kind) } + extra
+            records[identity] = record
+            let meaningful = extra.contains { $0.severity >= .notable } || record.evaluation.severity != before
             guard meaningful || findings[identity] != nil else { continue }
-            upsertFinding(for: identity, running: findings[identity]?.isRunning ?? true, now: now, extra: extra,
-                          signing: provenance.signing, downloads: provenance.downloadedFrom)
+            upsertFinding(for: identity, running: alive.contains(identity), now: now)
             changed = true
         }
         return changed
@@ -320,13 +342,15 @@ public actor SentinelEngine {
         for index in launchItems.indices {
             guard launchItems[index].signing == nil, let provenance = known[launchItems[index].programPath] else { continue }
             let item = launchItems[index]
-            let oddly = item.signals.contains { [.temporaryLocation, .hiddenLocation].contains($0.kind) && $0.severity >= .notable }
+            // Judged again with the signer known, as a process is.
+            let judged = PersistenceMonitor.judge(item, signing: provenance.signing)
+            let oddly = judged.contains { [.temporaryLocation, .hiddenLocation].contains($0.kind) && $0.severity >= .notable }
             let subject = SentinelSubject(
                 identity: ProcessIdentity(pid: 0, startTimeSeconds: 0, startTimeMicroseconds: 0), parentPID: 1, userID: 0,
                 name: item.label, executablePath: item.programPath, commandLine: item.commandLine, isSystemProcess: false)
             let extra = provenance.signals(for: subject, locatedOddly: oddly || item.isNew)
                 .filter { $0.kind != .downloadedExecutable || item.isNew }
-            launchItems[index].signals += extra.filter { signal in !item.signals.contains { $0.kind == signal.kind } }
+            launchItems[index].signals = judged + extra.filter { signal in !judged.contains { $0.kind == signal.kind } }
             launchItems[index].signing = provenance.signing
             changed = true
         }
@@ -337,18 +361,16 @@ public actor SentinelEngine {
 
     /// A shell, script or unknown program recording audio is a finding; a
     /// meeting app doing it is only shown in the sensor panel.
-    private func flagRecorders(byPID: [Int32: SentinelSubject], now: Date) -> Bool {
+    private func flagRecorders(byPID: [Int32: SentinelSubject], skipping own: Set<Int32>, now: Date) -> Bool {
         var changed = false
-        for user in sensors.microphoneUsers {
+        for user in sensors.microphoneUsers where !own.contains(user.pid) {
             guard let subject = byPID[user.pid], let record = records[subject.identity] else { continue }
             let questionable = subject.isCommandRunner || record.evaluation.severity >= .notable
                 || findings[subject.identity] != nil
-            guard questionable, findings[subject.identity]?.signals.contains(where: { $0.kind == .microphoneInUse }) != true
-            else { continue }
-            upsertFinding(for: subject.identity, running: true, now: now, extra: [
-                SentinelSignal(.microphoneInUse, .suspicious,
-                    "\(subject.program) is recording from the microphone.", evidence: subject.executablePath),
-            ])
+            guard questionable, !record.extraSignals.contains(where: { $0.kind == .microphoneInUse }) else { continue }
+            records[subject.identity]?.extraSignals.append(SentinelSignal(.microphoneInUse, .suspicious,
+                "\(subject.program) is recording from the microphone.", evidence: subject.executablePath))
+            upsertFinding(for: subject.identity, running: true, now: now)
             changed = true
         }
         return changed
@@ -378,6 +400,24 @@ public actor SentinelEngine {
     }
 
     // MARK: - Helpers
+
+    /// A process and everything below it. Ghost rarely has children, so the
+    /// usual answer costs one pass.
+    static func family(of root: Int32, in processes: [ProcessMetrics]) -> Set<Int32> {
+        guard processes.contains(where: { $0.parentPID == root && $0.pid != root }) else { return [root] }
+        var children: [Int32: [Int32]] = [:]
+        for process in processes where process.pid != process.parentPID {
+            children[process.parentPID, default: []].append(process.pid)
+        }
+        var family: Set<Int32> = [root]
+        var pending = [root]
+        while let pid = pending.popLast() {
+            for child in children[pid] ?? [] where family.insert(child).inserted {
+                pending.append(child)
+            }
+        }
+        return family
+    }
 
     /// Parent first, up to launchd (excluded).
     static func ancestors(of subject: SentinelSubject, in byPID: [Int32: SentinelSubject]) -> [SentinelSubject] {

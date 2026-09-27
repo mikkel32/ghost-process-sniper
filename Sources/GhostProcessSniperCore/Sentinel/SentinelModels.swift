@@ -170,6 +170,11 @@ public struct CodeSigningSummary: Hashable, Codable, Sendable {
         self.signingIdentifier = signingIdentifier
     }
 
+    /// Apple, the Mac App Store or a Developer ID stands behind the code.
+    public var isVouched: Bool {
+        [.apple, .appStore, .developerID].contains(authority)
+    }
+
     public var label: String {
         switch authority {
         case .apple: "Apple"

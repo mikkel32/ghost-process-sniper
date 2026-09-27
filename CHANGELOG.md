@@ -8,11 +8,12 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 - A new **Security** section (⌘3) looks at every process for the shapes attacks take on macOS and explains each finding with the chain that launched it (`Google Chrome › zsh › curl`), the exact text that matched, and one next step.
 - Catches browsers, mail, chat and document apps starting shells or scripts; pasted commands that download and run code (with advice about fake CAPTCHA and "fix" instructions); base64 and other encoded payloads; homemade password dialogs and `dscl -authonly`; keychain, browser-cookie and wallet theft; quarantine stripping and Gatekeeper disabling; launch-agent persistence; reverse shells and shells or relays waiting for connections; tunnels; crypto miners; silent screen and camera capture.
 - Flags programs running from temporary, shared or hidden folders, the Trash, mounted disk images or Downloads, deleted executables, system names from the wrong folder or spelled with look-alike letters, and apps disguised as documents (`Invoice.pdf.app`).
-- Checks each third-party program's code signature once (Apple, App Store, Developer ID, ad hoc, unsigned, invalid) and shows the page it was downloaded from.
+- Checks each third-party program's code signature once, offline (Apple, App Store, Developer ID, ad hoc, unsigned, invalid), and shows the page it was downloaded from.
 - Watches browsers and terminals with kernel process events, so commands that run for under a second are caught with their arguments, at no cost while nothing starts.
 - Lists launch agents and daemons and catches new ones the moment they are written, with a notification.
 - Shows which apps are recording from the microphone and whether a camera is on, from system listeners that open no device and need no permission.
-- A live launch feed of every new process, a banner above the Overview, a raised menu-bar icon and one notification per suspicious or dangerous finding. Findings never act on their own: **Stop…** uses the usual preview, and programs can be trusted or findings dismissed.
+- A live launch feed of every new process, a banner above the Overview, a raised menu-bar icon and one notification per new suspicious or dangerous program and reason; a program that restarts for the same reason stays silent for a day. Findings never act on their own: **Stop…** uses the usual preview, and programs can be trusted or findings dismissed.
+- Stays quiet on everyday work that resembles an attack: simulator daemons, browser-extension helpers, compiler output, port checks, cookie-jar files, downloads named after wallets, signed programs in `/Users/Shared` and dev servers built into `/tmp`. The attack shapes they resemble are still caught.
 
 ### Power
 - The console's detail column no longer measures the whole page for its minimum size on every update; that was about half of the console's main-thread time while it was on screen.

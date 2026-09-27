@@ -66,7 +66,8 @@ public enum SentinelCatalog {
         "mds": ["/system/library/"], "mds_stores": ["/system/library/"], "mdworker": ["/system/library/"],
         "mdworker_shared": ["/system/library/"], "trustd": ["/usr/libexec/"], "syspolicyd": ["/usr/libexec/"],
         "cfprefsd": ["/usr/sbin/"], "securityd": ["/usr/sbin/"], "softwareupdated": ["/system/library/"],
-        "xprotect": ["/library/apple/", "/system/library/"], "xprotectservice": ["/library/apple/", "/system/library/"],
+        "xprotect": ["/library/apple/", "/system/library/", "/usr/bin/"],
+        "xprotectservice": ["/library/apple/", "/system/library/"],
         "coreaudiod": ["/usr/sbin/"], "bluetoothd": ["/usr/sbin/"], "airportd": ["/usr/libexec/"],
         "sharingd": ["/usr/libexec/"], "nsurlsessiond": ["/usr/libexec/"], "apsd": ["/system/library/"],
         "syslogd": ["/usr/sbin/"], "configd": ["/usr/libexec/"], "notifyd": ["/usr/sbin/"],
@@ -143,5 +144,20 @@ public enum SentinelCatalog {
         let lower = path.lowercased()
         return ["/system/", "/usr/bin/", "/usr/sbin/", "/usr/libexec/", "/bin/", "/sbin/", "/library/apple/",
                 "/system/volumes/preboot/cryptexes/"].contains(where: lower.hasPrefix)
+            || isDeveloperPlatformLocation(lower)
+    }
+
+    /// Simulator runtimes and Xcode's platform folders ship their own copies
+    /// of Apple daemons (`cfprefsd`, `trustd`, `tccd` …): a booted simulator
+    /// runs them from its RuntimeRoot. A copy of such a tree in a temporary,
+    /// shared or trashed folder is not Apple's and does not count.
+    static func isDeveloperPlatformLocation(_ lowerPath: String) -> Bool {
+        guard !temporaryPrefixes.contains(where: lowerPath.hasPrefix), !lowerPath.hasPrefix("/users/shared/"),
+              !lowerPath.contains("/.trash/") else { return false }
+        if lowerPath.hasPrefix("/library/developer/coresimulator/") { return true }
+        if lowerPath.contains(".simruntime/"), lowerPath.contains("/runtimeroot/") { return true }
+        // Xcode.app, Xcode-beta.app, Xcode_26.1.app …
+        guard let platforms = lowerPath.range(of: ".app/contents/developer/platforms/") else { return false }
+        return lowerPath[..<platforms.lowerBound].split(separator: "/").last?.hasPrefix("xcode") == true
     }
 }

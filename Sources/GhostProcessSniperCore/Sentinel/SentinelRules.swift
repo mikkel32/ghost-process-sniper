@@ -70,12 +70,15 @@ enum SentinelRules {
     static let lineageReach = 3
 
     /// `ancestors` runs from the process's parent upward (nearest first).
-    static func evaluate(_ subject: SentinelSubject, ancestors: [SentinelSubject],
+    /// `signing` is the executable's signature once the inspector has read
+    /// it; until then the rules that depend on it give the quieter verdict.
+    static func evaluate(_ subject: SentinelSubject, ancestors: [SentinelSubject], signing: CodeSigningSummary? = nil,
                          fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> SentinelEvaluation {
         var signals: [SentinelSignal] = []
 
         // Who launched it.
         var contentAncestor: (name: String, role: SentinelCatalog.ContentApp)?
+        var forExtension = isNativeMessagingHost(subject.commandLine)
         for ancestor in ancestors.prefix(lineageReach) {
             if let role = SentinelCatalog.contentApp(path: ancestor.executablePath, name: ancestor.name) {
                 contentAncestor = (SentinelCatalog.appName(forPath: ancestor.executablePath) ?? ancestor.name, role)
@@ -83,13 +86,11 @@ enum SentinelRules {
             }
             // A runner may sit between (Chrome › sh › curl); anything else ends the climb.
             guard ancestor.isCommandRunner else { break }
+            forExtension = forExtension || isNativeMessagingHost(ancestor.commandLine)
         }
         let fromTerminal = ancestors.prefix(5).contains { SentinelCatalog.isTerminalApp(path: $0.executablePath, name: $0.name) }
         if subject.isCommandRunner, let content = contentAncestor {
-            let severity: SentinelSeverity = content.role == .chat ? .notable : .suspicious
-            signals.append(SentinelSignal(.appSpawnedShell, severity,
-                "\(content.name) is a \(content.role.label). It started \(subject.program), which runs commands; \(content.role == .browser ? "browsers" : "apps like this") have no normal reason to.",
-                evidence: "\(content.name) › \(subject.program)"))
+            signals.append(appSpawnedShell(subject, by: content, forExtension: forExtension))
         }
 
         // What it runs.
@@ -98,15 +99,18 @@ enum SentinelRules {
         }
 
         // Where it lives.
-        signals += locationSignals(subject, fileExists: fileExists)
+        signals += locationSignals(subject, signing: signing, fileExists: fileExists)
         if let masquerade = masquerade(subject) ?? lookalikeName(subject) {
             signals.append(masquerade)
         }
         if let disguise = disguisedAsDocument(subject) {
             signals.append(disguise)
         }
-        if let listener = listener(subject, oddlyLocated: signals.contains {
-            [.temporaryLocation, .hiddenLocation].contains($0.kind) && $0.severity >= .suspicious }) {
+        let context = ListenerContext(
+            oddlyLocated: signals.contains { [.temporaryLocation, .hiddenLocation].contains($0.kind) && $0.severity >= .suspicious },
+            signing: signing, interactive: startedFromInteractiveShell(ancestors),
+            corroborated: signals.contains { corroboratingKinds.contains($0.kind) && $0.severity >= .notable })
+        if let listener = listener(subject, context: context) {
             signals.append(listener)
         }
 
@@ -123,7 +127,8 @@ enum SentinelRules {
 
     // MARK: - Location
 
-    static func locationSignals(_ subject: SentinelSubject, fileExists: (String) -> Bool) -> [SentinelSignal] {
+    static func locationSignals(_ subject: SentinelSubject, signing: CodeSigningSummary? = nil,
+                                fileExists: (String) -> Bool) -> [SentinelSignal] {
         let path = subject.executablePath
         guard path.hasPrefix("/"), !subject.isSystemLocation else { return [] }
         var found: [SentinelSignal] = []
@@ -138,7 +143,11 @@ enum SentinelRules {
                 evidence: path))
         }
         if lower.hasPrefix("/users/shared/") {
-            found.append(SentinelSignal(.hiddenLocation, .suspicious,
+            // Some vendors install here (Epic puts Unreal Engine here), so
+            // only a program no known developer signed is suspicious; until
+            // the signature is read, the quieter verdict stands.
+            let unvouched = signing.map { !$0.isVouched } ?? false
+            found.append(SentinelSignal(.hiddenLocation, unvouched ? .suspicious : .notable,
                 "Runs from /Users/Shared, a folder every account can write to.", evidence: path))
         } else if isHiddenUserPath(lower) {
             found.append(SentinelSignal(.hiddenLocation, .notable,
@@ -180,6 +189,8 @@ enum SentinelRules {
         let name = subject.name.lowercased()
         guard let expected = SentinelCatalog.protectedNames[name] else { return nil }
         let path = subject.executablePath.lowercased()
+        // A booted simulator runs its own cfprefsd, trustd and tccd.
+        guard !SentinelCatalog.isDeveloperPlatformLocation(path) else { return nil }
         if expected == [""] {
             guard !path.isEmpty else { return nil }
         } else {
@@ -221,22 +232,6 @@ enum SentinelRules {
             evidence: SentinelCatalog.appName(forPath: subject.executablePath))
     }
 
-    /// A shell or relay waiting for connections is how a backdoor looks.
-    static func listener(_ subject: SentinelSubject, oddlyLocated: Bool) -> SentinelSignal? {
-        guard !subject.listeningPorts.isEmpty else { return nil }
-        let ports = subject.listeningPorts.prefix(4).map(String.init).joined(separator: ", ")
-        let relays: Set<String> = ["nc", "ncat", "netcat", "socat"]
-        if ShellRole.isShell(subject.program) || relays.contains(subject.program) {
-            return SentinelSignal(.reverseShell, relays.contains(subject.program) ? .suspicious : .dangerous,
-                "\(subject.program) is waiting for network connections on port \(ports).", evidence: ports)
-        }
-        if oddlyLocated {
-            return SentinelSignal(.tunnel, .dangerous,
-                "A program in an unusual folder is accepting network connections on port \(ports).", evidence: ports)
-        }
-        return nil
-    }
-
     // MARK: - Combining evidence
 
     /// Signals that together describe an attack chain outrank each alone.
@@ -267,8 +262,11 @@ enum SentinelRules {
             }
         }
         // A temporary or hidden binary that also hides its command or phones out.
+        // A tunnel command counts, and so does a listener already judged a
+        // backdoor; a listener still worth only a look (Suspicious) does not.
         let located = (kinds[.temporaryLocation] ?? .info) >= .suspicious || (kinds[.hiddenLocation] ?? .info) >= .suspicious
-        if located, carriesPayload || kinds[.tunnel] != nil || kinds[.cryptoMiner] != nil {
+        let tunnel = signals.contains { $0.kind == .tunnel && $0.severity != .suspicious }
+        if located, carriesPayload || tunnel || kinds[.cryptoMiner] != nil {
             result = result.map { signal in
                 (signal.kind == .temporaryLocation || signal.kind == .hiddenLocation)
                     ? SentinelSignal(signal.kind, .dangerous, signal.detail, evidence: signal.evidence)
