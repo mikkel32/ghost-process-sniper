@@ -4,6 +4,10 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-09-27
+
+Sentinel, a security watch that explains what it sees; a console that does about half the layout work; numbers that read the same in every language; and releases built in the open, with provenance you can verify.
+
 ### Sentinel security watch
 - A new **Security** section (⌘3) looks at every process for the shapes attacks take on macOS and explains each finding with the chain that launched it (`Google Chrome › zsh › curl`), the exact text that matched, and one next step.
 - Catches browsers, mail, chat and document apps starting shells or scripts; pasted commands that download and run code (with advice about fake CAPTCHA and "fix" instructions); base64 and other encoded payloads; homemade password dialogs and `dscl -authonly`; keychain, browser-cookie and wallet theft; quarantine stripping and Gatekeeper disabling; launch-agent persistence; reverse shells and shells or relays waiting for connections; tunnels; crypto miners; silent screen and camera capture.
@@ -25,6 +29,16 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 ### Interface
 - Sections are ⌘1 Overview, ⌘2 All Processes, ⌘3 Security, ⌘4 Duplicates, ⌘5 Incidents, ⌘6 Rules, following the sidebar order.
 - `--section security` (or any section name) opens the console on that page at launch.
+
+### Fixed
+- Temperatures and PIDs are formatted the same way in every locale: a Danish Mac no longer shows `91,0°C` next to `91.0°C`, or `PID 12.273` in the stop preview.
+- The Overview's recommendation says what a stop does once; it read "Asks ChatGPT to quit like ⌘Q, then stops anything it leaves behind. ChatGPT is asked to quit like ⌘Q…".
+- Ghost no longer lists itself under Warming Up or in the Risk Queue while its console is open. It still appears in All Processes, and Settings › Diagnostics shows what it costs.
+
+### Distribution
+- Releases are built from the tagged source by GitHub Actions. Each disk image carries a signed build-provenance attestation, so `gh attestation verify GhostProcessSniper-2.1.0.dmg --repo mikkel32/ghost-process-sniper` proves the file came from that build.
+- A website, [mikkel32.github.io/ghost-process-sniper](https://mikkel32.github.io/ghost-process-sniper/), with the download, install steps and checksum. It loads nothing from other sites.
+- Release notes are generated from this changelog and include the checksum and first-launch steps.
 
 ## [2.0.0] — 2026-09-26
 
