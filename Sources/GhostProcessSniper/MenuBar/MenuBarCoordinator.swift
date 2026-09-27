@@ -45,7 +45,6 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         quickStopObserverID = monitor.addPublishedStateObserver { [weak self] _ in
             self?.quickStops.update()
         }
-        monitor.setSentinelTrustedPaths(SentinelPreferences.trustedPaths)
         startSentinelAlerts()
         monitor.start()
     }

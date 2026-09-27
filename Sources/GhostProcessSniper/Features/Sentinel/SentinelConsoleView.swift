@@ -2,16 +2,6 @@ import AppKit
 import GhostProcessSniperCore
 import SwiftUI
 
-/// Programs the user vouched for, kept across launches.
-enum SentinelPreferences {
-    private static let trustedKey = "Sentinel.trustedPaths"
-
-    static var trustedPaths: Set<String> {
-        get { Set(UserDefaults.standard.stringArray(forKey: trustedKey) ?? []) }
-        set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: trustedKey) }
-    }
-}
-
 /// The Security page: live findings, the privacy sensors and every new
 /// process, newest first. It observes only the Sentinel report, which is
 /// republished only when its content changes.
@@ -29,6 +19,7 @@ struct SentinelConsoleView: View {
                 SentinelSensorStrip(sensors: report.sensors)
                 findings
                 SentinelStartupItems(items: report.launchItems)
+                SentinelTrustedList(entries: report.trusted) { session.monitor.revokeSentinelTrust($0.id) }
                 SentinelLaunchFeed(launches: report.launches, perMinute: report.launchesLastMinute) { event in
                     focusedLaunch = event
                 }
@@ -94,12 +85,10 @@ struct SentinelConsoleView: View {
                 session.toast = RadarToast(message: "Finding copied", systemImage: "doc.on.doc")
             },
             trust: { finding in
-                var trusted = SentinelPreferences.trustedPaths
-                trusted.insert(finding.executablePath)
-                SentinelPreferences.trustedPaths = trusted
-                session.monitor.setSentinelTrustedPaths(trusted)
-                session.toast = RadarToast(message: "Trusted \(URL(fileURLWithPath: finding.executablePath).lastPathComponent)",
-                                           systemImage: "checkmark.shield")
+                Task {
+                    guard let entry = await session.monitor.trustSentinelFinding(finding.id) else { return }
+                    session.toast = RadarToast(message: "Trusted: \(entry.scope)", systemImage: "checkmark.shield")
+                }
             },
             dismiss: { finding in
                 session.monitor.dismissSentinelFinding(finding.id)

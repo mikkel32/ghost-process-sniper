@@ -94,6 +94,7 @@ public final class ProcessMonitor {
         notifier: RadarNotifying = NoopRadarNotifier(),
         thermalSampler: any ThermalSampling = ThermalSampler(),
         sentinel: SentinelEngine.Live? = nil,
+        sentinelTrust: SentinelTrustStore? = .standard,
         battery: (any BatterySource)? = IOKitBatterySource(),
         sleepAssertions: (any SleepAssertionSource)? = IOKitSleepAssertionSource()
     ) {
@@ -103,7 +104,7 @@ public final class ProcessMonitor {
         self.thermalSampler = thermalSampler
         self.notifier = notifier
         let relay = SentinelWakeRelay()
-        let engine = sentinel.map { SentinelEngine(live: $0, onUrgentSpawn: { relay.fire() }) }
+        let engine = sentinel.map { SentinelEngine(live: $0, trustStore: sentinelTrust, onUrgentSpawn: { relay.fire() }) }
         sentinelEngine = engine
         self.worker = RadarRefreshWorker(
             sampler: sampler,

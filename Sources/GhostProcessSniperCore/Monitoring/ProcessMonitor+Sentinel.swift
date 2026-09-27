@@ -38,11 +38,19 @@ extension ProcessMonitor {
         }
     }
 
-    /// Programs the user vouched for; Sentinel never flags them again.
-    public func setSentinelTrustedPaths(_ paths: Set<String>) {
+    /// Trusts what the finding's Trust item names: a signer, a build, or one
+    /// script or command of a shell. The name trusted, for the confirmation.
+    public func trustSentinelFinding(_ id: String) async -> SentinelTrustEntry? {
+        guard let sentinelEngine else { return nil }
+        let entry = await sentinelEngine.trust(findingID: id)
+        sentinel = await sentinelEngine.currentReport
+        return entry
+    }
+
+    public func revokeSentinelTrust(_ id: String) {
         guard let sentinelEngine else { return }
         Task { @MainActor in
-            await sentinelEngine.setTrustedPaths(paths)
+            await sentinelEngine.revokeTrust(id: id)
             sentinel = await sentinelEngine.currentReport
         }
     }

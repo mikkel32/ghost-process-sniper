@@ -9,23 +9,21 @@ public struct ExecutableProvenance: Hashable, Sendable {
     public let downloadedFrom: [String]
     /// The file still carries the quarantine mark from its download.
     public let quarantined: Bool
+    /// The file that was read; nil when it could not be stat'ed.
+    public var file: FileStamp? = nil
 }
 
 /// Checks code signatures and download marks off the refresh path.
 ///
-/// Each file is read once per (path, inode, modification time), so an update
-/// is re-read and an unchanged binary never is. Validation is the basic kind:
+/// Each file is read once per (path, device, inode, size, change time), so an
+/// update or a binary swapped in place is read again and an unchanged binary
+/// never is, and a result is handed out only while the file is still the one
+/// that was read. Validation is the basic kind:
 /// the signature and its certificate chain, without hashing every page of a
 /// large binary; the kernel already enforces page hashes for signed code. It
 /// never uses the network (no revocation or online notarization checks).
 actor CodeSignatureInspector {
-    private struct FileKey: Hashable {
-        let path: String
-        let inode: UInt64
-        let modified: Int
-    }
-
-    private var results: [String: (key: FileKey, provenance: ExecutableProvenance)] = [:]
+    private var results: [String: (key: FileStamp, provenance: ExecutableProvenance)] = [:]
     private var queue: [String] = []
     private var queued: Set<String> = []
     private var worker: Task<Void, Never>?
@@ -36,7 +34,7 @@ actor CodeSignatureInspector {
     /// changed (an app update, or a binary swapped in place).
     func request(_ paths: [String]) {
         for path in paths where !queued.contains(path) {
-            if let known = results[path], known.key == Self.fileKey(path) { continue }
+            if let known = results[path], known.key == FileStamp.read(path) { continue }
             queue.append(path)
             queued.insert(path)
         }
@@ -44,15 +42,23 @@ actor CodeSignatureInspector {
     }
 
     func provenance(for path: String) -> ExecutableProvenance? {
-        results[path]?.provenance
+        current(path)
     }
 
+    /// Results for files that are still the ones read. A file replaced since
+    /// its check waits for the new check instead of inheriting the old
+    /// signature, which let a swapped binary pass as the one it replaced.
     func snapshot(for paths: some Sequence<String>) -> [String: ExecutableProvenance] {
         var found: [String: ExecutableProvenance] = [:]
         for path in paths {
-            if let result = results[path] { found[path] = result.provenance }
+            if let provenance = current(path) { found[path] = provenance }
         }
         return found
+    }
+
+    private func current(_ path: String) -> ExecutableProvenance? {
+        guard let result = results[path], result.key == FileStamp.read(path) else { return nil }
+        return result.provenance
     }
 
     private func startIfNeeded() {
@@ -66,8 +72,9 @@ actor CodeSignatureInspector {
         while let path = queue.first {
             queue.removeFirst()
             queued.remove(path)
-            if let key = Self.fileKey(path) {
-                let provenance = Self.inspect(path)
+            if let key = FileStamp.read(path) {
+                var provenance = Self.inspect(path)
+                provenance.file = key
                 if results.count >= capacity, let evicted = results.keys.first { results[evicted] = nil }
                 results[path] = (key, provenance)
             }
@@ -75,12 +82,6 @@ actor CodeSignatureInspector {
             try? await Task.sleep(for: .milliseconds(15))
         }
         worker = nil
-    }
-
-    private static func fileKey(_ path: String) -> FileKey? {
-        var info = stat()
-        guard stat(path, &info) == 0 else { return nil }
-        return FileKey(path: path, inode: UInt64(info.st_ino), modified: Int(info.st_mtimespec.tv_sec))
     }
 
     // MARK: - Reading
@@ -122,25 +123,26 @@ actor CodeSignatureInspector {
         let info = information as? [String: Any] ?? [:]
         let team = info[kSecCodeInfoTeamIdentifier as String] as? String
         let identifier = info[kSecCodeInfoIdentifier as String] as? String
+        let cdHash = (info[kSecCodeInfoUnique as String] as? Data).map { $0.map { String(format: "%02x", $0) }.joined() }
 
         if status == errSecCSUnsigned {
             return CodeSigningSummary(authority: .unsigned, teamIdentifier: nil, signingIdentifier: identifier)
         }
         guard status == errSecSuccess else {
-            return CodeSigningSummary(authority: .invalid, teamIdentifier: team, signingIdentifier: identifier)
+            return CodeSigningSummary(authority: .invalid, teamIdentifier: team, signingIdentifier: identifier, cdHash: cdHash)
         }
         if let flags = info[kSecCodeInfoFlags as String] as? UInt32, flags & 0x2 != 0 {  // kSecCodeSignatureAdhoc
-            return CodeSigningSummary(authority: .adHoc, teamIdentifier: nil, signingIdentifier: identifier)
+            return CodeSigningSummary(authority: .adHoc, teamIdentifier: nil, signingIdentifier: identifier, cdHash: cdHash)
         }
         for (authority, text) in requirements {
             var requirement: SecRequirement?
             guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess,
                   let requirement else { continue }
             if SecStaticCodeCheckValidity(code, basic, requirement) == errSecSuccess {
-                return CodeSigningSummary(authority: authority, teamIdentifier: team, signingIdentifier: identifier)
+                return CodeSigningSummary(authority: authority, teamIdentifier: team, signingIdentifier: identifier, cdHash: cdHash)
             }
         }
-        return CodeSigningSummary(authority: .otherCertificate, teamIdentifier: team, signingIdentifier: identifier)
+        return CodeSigningSummary(authority: .otherCertificate, teamIdentifier: team, signingIdentifier: identifier, cdHash: cdHash)
     }
 
     static func hasQuarantine(_ path: String) -> Bool {

@@ -204,14 +204,21 @@ struct SentinelFindingCard: View {
             }
             Spacer(minLength: 8)
             Menu {
-                Button("Trust \(URL(fileURLWithPath: finding.executablePath).lastPathComponent)") { actions.trust(finding) }
+                if let offer = finding.trustOffer {
+                    Button(offer.title) { actions.trust(finding) }
+                } else {
+                    // An invalid signature, or one not read yet, cannot be trusted safely.
+                    Button("Trust (checking its signature\u{2026})") {}
+                        .disabled(true)
+                }
                 Button("Dismiss This Finding") { actions.dismiss(finding) }
             } label: {
                 Label("More", systemImage: "ellipsis.circle")
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Trust never flags this program again; Dismiss hides only this finding")
+            .help(finding.trustOffer.map { "Trust: \($0.scope). Dismiss hides only this finding." }
+                  ?? "Dismiss hides only this finding")
         }
         .controlSize(.small)
     }

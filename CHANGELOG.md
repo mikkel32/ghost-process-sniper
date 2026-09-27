@@ -4,6 +4,14 @@ All notable changes to Ghost Process Sniper are documented here. The project fol
 
 ## [Unreleased]
 
+### Sentinel
+- Trust is bound to what makes a program trustworthy, never to its path: a signed app is trusted by its team and identifier, so updates stay trusted; an ad hoc build by its exact build; an unsigned program by its exact file. The Trust item says which ("Trust Slack (Team BQR82RBBHL)").
+- Shells, interpreters and system tools are never trusted whole. Trusting bash for a browser extension used to hide every later bash finding, reverse shells included; now it trusts that one script or command.
+- A trusted program that changes — another signer, a rebuild, an edited script — is flagged again as Suspicious, saying what was trusted and what is there now.
+- A binary swapped in place can no longer inherit the signature of the file it replaced, even when back-dated with `touch -r`.
+- The Security page lists what you trusted, with Revoke. Paths trusted in earlier versions are carried over once; shells and tools among them are dropped.
+- Dismissed findings stop counting once they expire, and a program that runs a second command inside the same process gets its own launch-feed entry.
+
 ### Smarter detection
 - One large allocation, such as a language server loading a project, is no longer called a slow leak 20–60 minutes later. A slow leak now has to keep growing through most of its window.
 - Waking the Mac no longer makes every quiet process "idle for 8 h": idleness counts only time the Mac was awake, so a dev server you used just before closing the lid is not "probably forgotten" in the morning. A slow leak keeps its rate across a sleep too, instead of being diluted by the night and missed.

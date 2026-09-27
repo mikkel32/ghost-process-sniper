@@ -53,7 +53,7 @@ final class SentinelEngineTests: XCTestCase {
         XCTAssertTrue(later.findings.isEmpty)
     }
 
-    func testDismissAndTrustHideFindings() async {
+    func testDismissHidesAFindingForAsLongAsItLasts() async {
         let engine = SentinelEngine(live: .rulesOnly)
         _ = await engine.ingest(processes: baseline, uiVisible: true, now: now)
         let tunnel = process(402, "ngrok", "/opt/homebrew/bin/ngrok", command: "ngrok http 3000")
@@ -66,10 +66,10 @@ final class SentinelEngineTests: XCTestCase {
         XCTAssertTrue(dismissed.findings.isEmpty)
         XCTAssertEqual(dismissed.dismissedCount, 1)
 
-        let other = process(403, "ngrok", "/opt/homebrew/bin/ngrok", command: "ngrok tcp 22")
-        await engine.setTrustedPaths(["/opt/homebrew/bin/ngrok"])
-        let trusted = await engine.ingest(processes: baseline + [tunnel, other], uiVisible: true, now: now.addingTimeInterval(2))
-        XCTAssertTrue(trusted.findings.isEmpty, "a trusted program is never flagged")
+        _ = await engine.ingest(processes: baseline, uiVisible: true, now: now.addingTimeInterval(2))
+        let expired = await engine.ingest(processes: baseline, uiVisible: true,
+                                          now: now.addingTimeInterval(SentinelEngine.findingRetention + 5))
+        XCTAssertEqual(expired.dismissedCount, 0, "the dismissal went with its finding")
     }
 
     func testLateArgumentsAreJudgedAgain() async {

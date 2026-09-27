@@ -29,11 +29,27 @@ Well-known installer one-liners (Homebrew, rustup, bun, uv, nvm, Ollama and othe
 
 ## Signatures and download marks
 
-`CodeSignatureInspector` checks every third-party executable once per (path, inode, modification time), one file at a time at utility priority, off the refresh path. It uses basic validation (the signature and certificate chain, without hashing every page of a large binary) and classifies the signer as Apple, Mac App Store, Developer ID, another certificate, ad hoc, unsigned or invalid. It also reads the quarantine mark and `kMDItemWhereFroms`, so a finding can say which page a program was downloaded from.
+`CodeSignatureInspector` checks every third-party executable once per (path, device, inode, size, change time), one file at a time at utility priority, off the refresh path, and hands a result out only while the file on disk is still the one it read: a binary swapped in place, even back-dated with `touch -r`, waits for its own check instead of inheriting the old signature. It records the code directory hash (cdhash) too. It uses basic validation (the signature and certificate chain, without hashing every page of a large binary) and classifies the signer as Apple, Mac App Store, Developer ID, another certificate, ad hoc, unsigned or invalid. It also reads the quarantine mark and `kMDItemWhereFroms`, so a finding can say which page a program was downloaded from.
 
 Ad hoc signatures are normal for Homebrew and anything you compile, so they only count for a program that was downloaded, hidden or temporary. Unsigned is notable; an invalid signature is suspicious. Validation never uses the network (`kSecCSNoNetworkAccess`: no revocation or online notarization lookups).
 
 Rules that depend on the signer (`/Users/Shared`, a listener in an odd folder) run again once the signature is read. Until then the quieter verdict stands, so a signed program never flashes an alarm while it waits.
+
+## Trust
+
+**Trust** never means "this path". What it covers depends on the program:
+
+| Program | Trust covers | A change that is flagged |
+| --- | --- | --- |
+| Signed by a Developer ID or the App Store | Any version with the same team and identifier (`Trust Slack (Team BQR82RBBHL)`) | Another team, another identifier, ad hoc or unsigned |
+| Signed by Apple, outside the system folders | Any version with the same identifier | Anything else |
+| Ad hoc or another certificate | This exact build, by its cdhash | Any rebuild |
+| Unsigned | This exact file (device, inode, size, change time) | Any write or metadata change |
+| A shell, interpreter, download tool or anything in the system folders | One script it runs, while the script is unchanged, or one exact command (kept as a SHA-256, never as text) | An edited script; any other command |
+
+Shells and tools are never trusted whole: trusting `bash` for a browser extension's native host would otherwise hide every later reverse shell or pasted download that runs through bash. An invalid signature is never trusted, and a program whose signature has not been read yet cannot be trusted until it has.
+
+A trusted program whose file no longer matches becomes a Suspicious finding that says what was trusted and what is there now ("You trusted Slack as signed by team BQR82RBBHL; the file there now is unsigned"). While a trusted program's signature is being read its finding waits, so it never flashes an alarm. The **Trusted** list on the Security page shows each entry's scope, with **Revoke**. Entries are saved as JSON under `Sentinel.trust.v2`; paths trusted by 2.1 and earlier are carried over once, shells and tools dropped, and each bound to the first signature read.
 
 ## Watching without polling
 
@@ -52,4 +68,4 @@ None of these open a device, ask for a permission, or poll while nothing happens
 
 ## Using it
 
-The **Security** page (⌘3) leads with a shield that shows the worst live finding. Below it are the microphone and camera, findings, what starts automatically, and the launch feed. The feed filters to flagged launches, commands, or everything. **Stop…** opens the usual stop preview. **Trust** never flags that program again, and **Dismiss** hides one finding. A live suspicious or dangerous finding also appears above the Overview, raises the menu-bar icon, and sends one notification (`SentinelAlertGate`). The same program flagged for the same reason at the same severity stays silent for 24 hours however often it restarts, so a worker pool or a relaunching helper alerts once; a finding that turns dangerous alerts again.
+The **Security** page (⌘3) leads with a shield that shows the worst live finding. Below it are the microphone and camera, findings, what starts automatically, and the launch feed. The feed filters to flagged launches, commands, or everything. **Stop…** opens the usual stop preview. **Trust** names exactly what it trusts (see [Trust](#trust)), and **Dismiss** hides one finding for as long as it lasts. A live suspicious or dangerous finding also appears above the Overview, raises the menu-bar icon, and sends one notification (`SentinelAlertGate`). The same program flagged for the same reason at the same severity stays silent for 24 hours however often it restarts, so a worker pool or a relaunching helper alerts once; a finding that turns dangerous alerts again.
