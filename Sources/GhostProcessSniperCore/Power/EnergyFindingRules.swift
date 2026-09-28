@@ -146,7 +146,8 @@ struct EnergyFindingRules: Sendable {
     }
 
     private mutating func drain(_ consumer: EnergyConsumer, battery: BatteryOutlook?, now: Date) -> EnergyFinding? {
-        guard let battery, battery.isDischarging, let draw = battery.drawWatts, draw > 0,
+        // The app's figure is a five-minute average, so the draw it is set against is too.
+        guard let battery, battery.isDischarging, let draw = battery.averageDrawWatts ?? battery.drawWatts, draw > 0,
               let gained = consumer.batteryMinutesGained else { return nil }
         let id = "\(EnergyFindingKind.batteryDrain.rawValue)|\(consumer.id)"
         let watts = consumer.averageWatts

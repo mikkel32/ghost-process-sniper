@@ -56,6 +56,16 @@ final class ScriptedBattery: BatterySource, @unchecked Sendable {
         }
     }
 
+    /// Moves the power controller's running totals on, as the registry does
+    /// between its updates: `samples` more one-second samples averaging `watts`.
+    func advanceLoad(samples: Double, watts: Double) {
+        set { reading in
+            let old = reading.systemLoadAccumulator ?? PowerAccumulator(sum: 10_000_000_000, samples: 450_000)
+            reading.systemLoadAccumulator = PowerAccumulator(sum: old.sum + samples * watts * 1_000,
+                                                             samples: old.samples + samples)
+        }
+    }
+
     /// 60 Wh left at 12.5 V, discharging at `watts`.
     static func discharging(watts: Double) -> ScriptedBattery {
         ScriptedBattery(BatteryReading(

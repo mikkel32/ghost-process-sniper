@@ -126,7 +126,9 @@ public struct BatteryOutlook: Equatable, Sendable {
     public let isDischarging: Bool
     /// The IsCharging flag as macOS reports it; the header goes by `powerState`.
     public let isCharging: Bool
-    /// The whole Mac's draw, display and GPU included, averaged over about a minute.
+    /// The whole Mac's draw, display and GPU included, averaged over about a
+    /// minute and a half from the power controller's counters (a smoothed
+    /// snapshot where it has none).
     public let drawWatts: Double?
     public let remainingWattHours: Double?
     /// At the current draw; nil unless discharging.
@@ -139,6 +141,9 @@ public struct BatteryOutlook: Equatable, Sendable {
     public var powerState: PowerState? = nil
     /// The charger's rating, while one is connected. Unlike its live input it does not move with load.
     public var adapterRatedWatts: Double? = nil
+    /// The whole Mac's draw over the last five minutes, the window the per-app
+    /// figures cover; nil until the controller's counters have run that long or where it has none.
+    public var averageDrawWatts: Double? = nil
 }
 
 /// Everything the Energy page and the popover show, prepared off the main actor.
@@ -195,8 +200,10 @@ public struct EnergyReport: Equatable, Sendable {
         consumers.first { $0.id == id }
     }
 
-    /// The Mac's whole draw, the figure the header compares the apps against.
-    public var macWatts: Double? { battery?.drawWatts }
+    /// The Mac's whole draw over the same five minutes as `measuredWatts`, the
+    /// figure the header compares the apps against; the smoothed draw until
+    /// the five-minute mean exists.
+    public var macWatts: Double? { battery?.averageDrawWatts ?? battery?.drawWatts }
 
     /// The finding the Overview and popover lead with.
     public var topFinding: EnergyFinding? { findings.first }

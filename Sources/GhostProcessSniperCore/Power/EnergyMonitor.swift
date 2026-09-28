@@ -7,15 +7,22 @@ struct EnergyMonitor: Sendable {
     /// How often the battery and powerd are asked, visible and hidden.
     static let batteryInterval: (visible: TimeInterval, hidden: TimeInterval) = (2, 15)
     static let assertionInterval: (visible: TimeInterval, hidden: TimeInterval) = (5, 30)
-    /// Time constant of the draw average: long enough to hold still, short
-    /// enough to follow a change of work within a minute or two.
+    /// Time constant of the snapshot draw average, used while the power
+    /// controller's counters have not yet made an interval (and on Macs
+    /// without them): long enough to hold still, short enough to follow a
+    /// change of work within a minute or two.
     static let drawTimeConstant: TimeInterval = 60
+    /// The draw behind the time left is the counters' mean over about this long.
+    static let drawWindow: TimeInterval = 90
+    /// The window the per-app figures cover, so the Mac's draw and the apps' share compare like with like.
+    static let averageWindow: TimeInterval = 300
 
     private let batterySource: (any BatterySource)?
     private let assertionSource: (any SleepAssertionSource)?
     private(set) var ledger = EnergyLedger()
     private var battery: BatteryReading?
     private var smoothedDraw: (watts: Double, at: Date, discharging: Bool)?
+    private var loadAverager = DrawAverager()
     /// The header's state, kept between reads so a flow at a threshold does not flip it.
     private var powerState: PowerState?
     private var assertions: [SleepAssertion] = []
@@ -158,6 +165,7 @@ struct EnergyMonitor: Sendable {
         let reading = batterySource.read(now: now)
         battery = reading
         powerState = reading.powerState(after: powerState)
+        loadAverager.add(reading.systemLoadAccumulator, at: now, discharging: reading.isDischarging)
         guard let draw = reading.drawWatts, draw.isFinite, draw > 0 else { return }
         if let previous = smoothedDraw, previous.discharging == reading.isDischarging,
            now > previous.at, now.timeIntervalSince(previous.at) < 10 * Self.drawTimeConstant {
@@ -180,7 +188,8 @@ struct EnergyMonitor: Sendable {
 
     private func outlook(now: Date) -> BatteryOutlook? {
         guard let battery, battery.hasBattery || battery.systemLoadWatts != nil else { return nil }
-        let draw = smoothedDraw.flatMap { $0.discharging == battery.isDischarging ? $0.watts : nil }
+        let snapshotDraw = smoothedDraw.flatMap { $0.discharging == battery.isDischarging ? $0.watts : nil }
+        let draw = loadAverager.watts(over: Self.drawWindow, now: now) ?? snapshotDraw
         let remaining = battery.remainingWattHours
         let minutes: Double? = if battery.isDischarging, let remaining, let draw, draw > 0.5 {
             remaining / draw * 60
@@ -196,7 +205,8 @@ struct EnergyMonitor: Sendable {
             cycleCount: battery.hasBattery ? battery.cycleCount : nil,
             adapterInputWatts: battery.onExternalPower ? battery.adapterInputWatts : nil,
             powerState: powerState,
-            adapterRatedWatts: battery.onExternalPower ? battery.adapterRatedWatts : nil
+            adapterRatedWatts: battery.onExternalPower ? battery.adapterRatedWatts : nil,
+            averageDrawWatts: loadAverager.watts(over: Self.averageWindow, now: now)
         )
     }
 }

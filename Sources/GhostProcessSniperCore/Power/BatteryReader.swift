@@ -1,6 +1,30 @@
 import Foundation
 import IOKit
 
+/// A running total the power controller keeps of one measure: the sum of its
+/// samples (milliwatts) and how many it has taken, about one a second. Two
+/// readings give the exact mean between them, however often the registry
+/// publishes and whatever the load did in between.
+public struct PowerAccumulator: Equatable, Sendable {
+    public var sum: Double
+    public var samples: Double
+
+    public init(sum: Double, samples: Double) {
+        self.sum = sum
+        self.samples = samples
+    }
+
+    /// The mean between two readings, in watts. Nil when nothing new was
+    /// counted, the counter went backwards (a reset) or the mean is not a
+    /// plausible draw.
+    public static func averageWatts(from old: PowerAccumulator, to new: PowerAccumulator) -> Double? {
+        let samples = new.samples - old.samples
+        guard samples >= 1 else { return nil }
+        let watts = (new.sum - old.sum) / samples / 1_000
+        return BatteryReading.isPlausibleDraw(watts) ? watts : nil
+    }
+}
+
 /// One read of the battery and the Mac's power draw. Every field is optional:
 /// desktops have no battery, Intel Macs have no power telemetry, and a key
 /// macOS stops publishing reads as unknown, never as zero.
@@ -25,6 +49,8 @@ public struct BatteryReading: Equatable, Sendable {
     public var adapterInputWatts: Double?
     /// What the charger negotiated with the Mac, the most it can supply.
     public var adapterRatedWatts: Double?
+    /// The controller's running total of `SystemLoad`, for interval means.
+    public var systemLoadAccumulator: PowerAccumulator?
     public var cycleCount: Int?
     public var temperatureCelsius: Double?
     public var readAt: Date
@@ -37,7 +63,8 @@ public struct BatteryReading: Equatable, Sendable {
         fullChargeCapacityMilliampHours: Double? = nil, designCapacityMilliampHours: Double? = nil,
         voltageMillivolts: Double? = nil, amperageMilliamps: Double? = nil,
         systemLoadWatts: Double? = nil, batteryDischargeWatts: Double? = nil, adapterInputWatts: Double? = nil,
-        adapterRatedWatts: Double? = nil, cycleCount: Int? = nil, temperatureCelsius: Double? = nil, readAt: Date
+        adapterRatedWatts: Double? = nil, systemLoadAccumulator: PowerAccumulator? = nil,
+        cycleCount: Int? = nil, temperatureCelsius: Double? = nil, readAt: Date
     ) {
         self.hasBattery = hasBattery
         self.onExternalPower = onExternalPower
@@ -52,6 +79,7 @@ public struct BatteryReading: Equatable, Sendable {
         self.batteryDischargeWatts = batteryDischargeWatts
         self.adapterInputWatts = adapterInputWatts
         self.adapterRatedWatts = adapterRatedWatts
+        self.systemLoadAccumulator = systemLoadAccumulator
         self.cycleCount = cycleCount
         self.temperatureCelsius = temperatureCelsius
         self.readAt = readAt
@@ -88,16 +116,25 @@ public struct BatteryReading: Equatable, Sendable {
         return amps * volts / 1_000_000
     }
 
+    /// The most a Mac draws; anything above is a garbled reading, not a load.
+    static let maximumPlausibleWatts = 400.0
+
+    static func isPlausibleDraw(_ watts: Double) -> Bool {
+        watts.isFinite && watts > 0 && watts <= maximumPlausibleWatts
+    }
+
     /// The Mac's whole draw right now: the battery's output while discharging,
-    /// otherwise the system load the power controller reports.
+    /// otherwise the system load the power controller reports. A wrapped,
+    /// negative or absurd figure is skipped for the next source.
     public var drawWatts: Double? {
         if isDischarging {
-            if let discharge = batteryDischargeWatts, discharge > 0 { return discharge }
+            if let discharge = batteryDischargeWatts, Self.isPlausibleDraw(discharge) { return discharge }
             if let amps = amperageMilliamps, let volts = voltageMillivolts, amps < 0 {
-                return -amps * volts / 1_000_000
+                let out = -amps * volts / 1_000_000
+                if Self.isPlausibleDraw(out) { return out }
             }
         }
-        if let load = systemLoadWatts, load > 0 { return load }
+        if let load = systemLoadWatts, Self.isPlausibleDraw(load) { return load }
         return nil
     }
 }
@@ -124,10 +161,14 @@ public struct IOKitBatterySource: BatterySource {
         let telemetry = IORegistryEntryCreateCFProperty(service, "PowerTelemetryData" as CFString, kCFAllocatorDefault, 0)?
             .takeRetainedValue() as? [String: Any]
         // Signed: int64Value turns a wrapped unsigned value back into a negative one.
-        func milliwatts(_ key: String) -> Double? {
+        func telemetryValue(_ key: String) -> Double? {
             (telemetry?[key] as? NSNumber).map { Double($0.int64Value) }
         }
-        func watts(_ key: String) -> Double? { milliwatts(key).map { $0 / 1_000 } }
+        func watts(_ key: String) -> Double? { telemetryValue(key).map { $0 / 1_000 } }
+        let load: PowerAccumulator? = if let sum = telemetryValue("AccumulatedSystemLoad"),
+                                         let samples = telemetryValue("SystemLoadAccumulatorCount") {
+            PowerAccumulator(sum: sum, samples: samples)
+        } else { nil }
         let external = number("ExternalConnected")?.boolValue ?? false
         // Small, and only meaningful while a charger is connected.
         let adapter = external
@@ -155,9 +196,10 @@ public struct IOKitBatterySource: BatterySource {
             // int64Value turns the registry's wrapped unsigned value back into a signed one.
             amperageMilliamps: (number("InstantAmperage") ?? number("Amperage")).map { Double($0.int64Value) },
             systemLoadWatts: watts("SystemLoad"),
-            batteryDischargeWatts: Self.dischargeWatts(batteryPowerMilliwatts: milliwatts("BatteryPower")),
+            batteryDischargeWatts: Self.dischargeWatts(batteryPowerMilliwatts: telemetryValue("BatteryPower")),
             adapterInputWatts: watts("SystemPowerIn"),
             adapterRatedWatts: Self.adapterRating(adapter),
+            systemLoadAccumulator: load,
             cycleCount: number("CycleCount")?.intValue,
             temperatureCelsius: temperature.flatMap { (0...90).contains($0) ? $0 : nil },
             readAt: now
