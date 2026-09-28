@@ -17,6 +17,12 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public let trend: TrendMetrics
     public private(set) var score: GhostScore
     public let ownedIdentities: [ProcessIdentity]
+    /// Same-user members outside the root's own process tree, in the family
+    /// because macOS holds the root's app responsible for them: a browser's
+    /// tab, graphics and network processes, which launchd started. They exit
+    /// with the app, so the family's stop plan leaves them out, but each can
+    /// be stopped alone.
+    public let linkedIdentities: [ProcessIdentity]
     public let protectedPIDs: [Int32]
     public let signature: ProcessSignature
     public private(set) var baseline: FamilyBaseline?
@@ -59,6 +65,12 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public var childCount: Int { max(0, members.count - 1) }
     public var isKillable: Bool { !ownedIdentities.isEmpty && protectedPIDs.isEmpty }
 
+    /// Whether one member may be previewed and stopped by itself: the family's
+    /// own processes, and the helpers linked in by their app.
+    public func canStopIndividually(_ identity: ProcessIdentity) -> Bool {
+        ownedIdentities.contains(identity) || linkedIdentities.contains(identity)
+    }
+
     public init(
         root: ProcessMetrics,
         members: [ProcessMetrics],
@@ -72,6 +84,7 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         score: GhostScore,
         ownedIdentities: [ProcessIdentity],
         protectedPIDs: [Int32],
+        linkedIdentities: [ProcessIdentity] = [],
         signature: ProcessSignature? = nil,
         baseline: FamilyBaseline? = nil,
         forensics: ProcessForensics? = nil,
@@ -105,6 +118,7 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.trend = trend
         self.score = score
         self.ownedIdentities = ownedIdentities
+        self.linkedIdentities = linkedIdentities
         self.protectedPIDs = protectedPIDs
         let signature = signature ?? ProcessSignature.from(root: root)
         self.signature = signature

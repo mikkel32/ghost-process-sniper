@@ -91,9 +91,10 @@ public struct RadarPipeline: Sendable {
         processes: [ProcessMetrics],
         settings: ThresholdSettings,
         context: RadarContext,
+        responsible: [ProcessIdentity: Int32] = [:],
         now: Date
     ) -> RadarPipelineOutput {
-        let build = buildCandidates(processes: processes, settings: settings, now: now)
+        let build = buildCandidates(processes: processes, settings: settings, responsible: responsible, now: now)
         let scored = score(families: build.families, diff: build.diff, context: context, settings: settings, now: now)
         return RadarPipelineOutput(
             families: scored.families,
@@ -114,9 +115,12 @@ public struct RadarPipeline: Sendable {
         RadarSummaryBuilder.summary(for: families, hostOutlook: hostOutlook)
     }
 
+    /// - Parameter responsible: the app macOS holds responsible for each
+    ///   launchd-started helper, which joins that app's family.
     public mutating func buildCandidates(
         processes: [ProcessMetrics],
         settings: ThresholdSettings,
+        responsible: [ProcessIdentity: Int32] = [:],
         now: Date
     ) -> RadarPipelineBuildOutput {
         let buildStart = Date()
@@ -126,6 +130,7 @@ public struct RadarPipeline: Sendable {
             settings: settings,
             trendWindow: &trendWindow,
             history: &history,
+            responsible: responsible,
             now: now
         )
         return RadarPipelineBuildOutput(

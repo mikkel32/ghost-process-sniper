@@ -194,7 +194,7 @@ struct ThermalWorkloadResolver {
     }
 
     /// A parent that started after its child is a recycled PID, not the real parent.
-    private static func startedNoLater(_ parent: ProcessIdentity, than child: ProcessIdentity) -> Bool {
+    static func startedNoLater(_ parent: ProcessIdentity, than child: ProcessIdentity) -> Bool {
         (parent.startTimeSeconds, parent.startTimeMicroseconds) <= (child.startTimeSeconds, child.startTimeMicroseconds)
     }
 
@@ -213,6 +213,11 @@ struct ThermalWorkloadResolver {
     private static func terminalName(_ appPath: String) -> String? {
         let name = PathText.displayName(appPath)
         return terminals.contains(name.lowercased()) ? name : nil
+    }
+
+    /// Whether the executable is a terminal app: what it starts is a job, never a helper of the app.
+    static func isTerminalApp(_ executable: String) -> Bool {
+        applicationPath(executable).flatMap(terminalName) != nil
     }
 
     /// The outermost bundle, so nested helper apps join their host application.

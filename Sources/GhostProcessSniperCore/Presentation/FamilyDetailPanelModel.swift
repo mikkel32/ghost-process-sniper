@@ -229,7 +229,9 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         memoryPattern = patternAnalysis
         verdict = FamilyVerdict.synthesize(family: family, pattern: patternAnalysis)
         brief = FamilyDecisionBrief(family: family, verdict: verdict, assessment: assessment, pattern: patternAnalysis, culprit: culprit)
-        processTree = FamilyProcessTreeRow.build(members: family.members, root: family.root, ownedIdentities: family.ownedIdentities)
+        // A linked helper is out of the family's own stop plan, not out of reach of its own Stop.
+        processTree = FamilyProcessTreeRow.build(members: family.members, root: family.root,
+                                                 ownedIdentities: family.ownedIdentities + family.linkedIdentities)
         forecastETASeconds = family.forecast.etaSeconds
         scoreValue = family.score.value
         isKillable = family.isKillable
