@@ -289,6 +289,8 @@ public actor SentinelEngine {
             findings[identity] = nil
             return
         }
+        // An exited finding keeps the time it was last seen running: judging it again (a trust decision
+        // for a sibling) must not renew its half hour on the page.
         var finding = SentinelFinding(
             identity: identity, name: record.subject.name, executablePath: record.subject.executablePath,
             commandLine: String(record.subject.commandLine.prefix(4_096)), lineage: record.lineage, signals: signals,
@@ -296,7 +298,8 @@ public actor SentinelEngine {
                                               contentAncestor: record.evaluation.contentAncestor,
                                               fromTerminal: record.evaluation.fromTerminal),
             recommendation: SentinelRules.recommendation(for: signals, fromTerminal: record.evaluation.fromTerminal),
-            firstSeen: previous?.firstSeen ?? record.firstSeen, lastSeen: now, isRunning: running,
+            firstSeen: previous?.firstSeen ?? record.firstSeen, lastSeen: running ? now : (previous?.lastSeen ?? now),
+            isRunning: running,
             signing: record.signing, downloadedFrom: record.downloadedFrom)
         finding.connections = previous?.connections ?? []
         // Offered again at every judgement: once the signature arrives the offer can name the signer.
@@ -325,8 +328,11 @@ public actor SentinelEngine {
         let dismissedBefore = dismissed.count
         dismissed.formIntersection(findings.values.map(\.id))
         changed = changed || dismissed.count != dismissedBefore
+        // An exited process's record stays while its finding is listed: the card still offers Trust,
+        // and trusting needs the record. The filter above has just dropped an expired finding.
         for (identity, record) in records
-        where !alive.contains(identity) && now.timeIntervalSince(record.firstSeen) >= Self.exitedRecordRetention {
+        where !alive.contains(identity) && findings[identity] == nil
+            && now.timeIntervalSince(record.firstSeen) >= Self.exitedRecordRetention {
             records[identity] = nil
         }
         pipelines.prune(now: now)

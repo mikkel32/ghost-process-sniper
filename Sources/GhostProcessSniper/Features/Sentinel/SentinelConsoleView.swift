@@ -86,7 +86,12 @@ struct SentinelConsoleView: View {
             },
             trust: { finding in
                 Task {
-                    guard let entry = await session.monitor.trustSentinelFinding(finding.id) else { return }
+                    guard let entry = await session.monitor.trustSentinelFinding(finding.id) else {
+                        // The finding expired between the card being drawn and the click.
+                        session.toast = RadarToast(message: "Nothing to trust here; the finding has expired",
+                                                   systemImage: "questionmark.circle")
+                        return
+                    }
                     session.toast = RadarToast(message: "Trusted: \(entry.scope)", systemImage: "checkmark.shield")
                 }
             },
