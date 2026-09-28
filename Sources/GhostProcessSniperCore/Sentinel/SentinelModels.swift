@@ -369,6 +369,12 @@ public struct SentinelReport: Sendable {
         findings.filter { $0.isRunning && $0.severity >= .suspicious }.count
     }
 
+    /// Dangerous findings whose process already exited, still listed as history:
+    /// the one-shot commands the spawn watcher exists to catch.
+    public var exitedDangerousCount: Int {
+        findings.filter { !$0.isRunning && $0.severity == .dangerous }.count
+    }
+
     public var flaggedLaunchItems: [LaunchItem] {
         launchItems.filter { $0.severity >= .suspicious }
     }

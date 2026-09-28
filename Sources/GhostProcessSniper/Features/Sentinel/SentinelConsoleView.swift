@@ -145,6 +145,12 @@ struct SentinelHero: View {
     private var title: String {
         let active = report.findings.filter { $0.isRunning && $0.severity >= .suspicious }
         let startup = report.flaggedLaunchItems.count
+        let exited = report.exitedDangerousCount
+        if active.isEmpty, exited > 0 {
+            // Over already, but it ran: the card below says what it was.
+            return exited == 1 ? "A dangerous command ran and has already exited"
+                : "\(exited) dangerous commands ran and have already exited"
+        }
         if active.isEmpty, startup > 0 {
             return startup == 1 ? "1 startup item to review" : "\(startup) startup items to review"
         }

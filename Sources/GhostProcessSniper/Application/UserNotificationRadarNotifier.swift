@@ -44,9 +44,13 @@ actor UserNotificationRadarNotifier: RadarNotifying {
             return
         }
         let content = UNMutableNotificationContent()
-        content.title = finding.severity == .dangerous ? "Security: act now" : "Security: worth a look"
+        // Only a dangerous finding alerts after its process exited (a one-shot command caught in the act).
+        content.title = !finding.isRunning ? "Security: a dangerous command ran"
+            : finding.severity == .dangerous ? "Security: act now" : "Security: worth a look"
         content.subtitle = finding.headline
-        content.body = ([finding.lineageText] + finding.signals.prefix(2).map(\.detail)).joined(separator: "\n")
+        var lines = [finding.lineageText] + finding.signals.prefix(2).map(\.detail)
+        if !finding.isRunning { lines.append("It had already exited when Ghost reported it.") }
+        content.body = lines.joined(separator: "\n")
         content.sound = finding.severity == .dangerous ? .defaultCritical : .default
         content.categoryIdentifier = NotificationRouter.sentinelCategory
         content.userInfo = ["sentinelFinding": finding.id]

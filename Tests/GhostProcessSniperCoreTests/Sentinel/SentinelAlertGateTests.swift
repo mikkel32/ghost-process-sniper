@@ -51,10 +51,41 @@ final class SentinelAlertGateTests: XCTestCase {
         XCTAssertEqual(gate.alerts(for: SentinelReport(findings: [worse]), now: now).findings.count, 1)
     }
 
-    func testQuietOrExitedFindingsNeverAlert() {
+    func testQuietOrExitedSuspiciousFindingsNeverAlert() {
         var gate = SentinelAlertGate()
         let report = SentinelReport(findings: [finding(pid: 40, severity: .notable), finding(pid: 41, running: false)])
         XCTAssertTrue(gate.alerts(for: report, now: now).findings.isEmpty)
+    }
+
+    /// The spawn watcher exists for commands that finish before the next scan: a Dangerous one that already
+    /// exited when the report reached the gate is the case that must not be silent.
+    func testADangerousFindingThatAlreadyExitedStillAlertsOnce() {
+        var gate = SentinelAlertGate()
+        let exited = finding(pid: 60, kind: .reverseShell, severity: .dangerous, running: false)
+        XCTAssertEqual(gate.alerts(for: SentinelReport(findings: [exited]), now: now).findings.map(\.id), [exited.id])
+        XCTAssertTrue(gate.alerts(for: SentinelReport(findings: [exited]), now: now).findings.isEmpty)
+        let sameAgain = finding(pid: 61, kind: .reverseShell, severity: .dangerous, running: false)
+        XCTAssertTrue(gate.alerts(for: SentinelReport(findings: [sameAgain]), now: now.addingTimeInterval(600)).findings.isEmpty,
+                      "the same program for the same reason stays quiet for a day")
+    }
+
+    func testADangerousFindingThatExitsAfterAlertingDoesNotAlertTwice() {
+        var gate = SentinelAlertGate()
+        XCTAssertEqual(gate.alerts(for: SentinelReport(findings: [finding(pid: 62, severity: .dangerous)]), now: now).findings.count, 1)
+        let exited = finding(pid: 62, severity: .dangerous, running: false)
+        XCTAssertTrue(gate.alerts(for: SentinelReport(findings: [exited]), now: now.addingTimeInterval(1)).findings.isEmpty)
+    }
+
+    func testAReportCountsDangerousFindingsThatAlreadyExited() {
+        let report = SentinelReport(findings: [
+            finding(pid: 70, severity: .dangerous, running: false), finding(pid: 71, severity: .dangerous),
+            finding(pid: 72, severity: .suspicious, running: false),
+        ])
+        XCTAssertEqual(report.exitedDangerousCount, 1)
+        XCTAssertEqual(report.activeFindingCount, 1, "only the running one is live")
+        let quiet = SentinelReport(findings: [finding(pid: 73, severity: .dangerous, running: false)])
+        XCTAssertNil(quiet.highestSeverity, "the live level stays running-only")
+        XCTAssertEqual(quiet.exitedDangerousCount, 1)
     }
 
     func testRememberedIDsArePrunedToTheCurrentReport() {
