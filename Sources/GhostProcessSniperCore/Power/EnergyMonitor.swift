@@ -16,6 +16,8 @@ struct EnergyMonitor: Sendable {
     private(set) var ledger = EnergyLedger()
     private var battery: BatteryReading?
     private var smoothedDraw: (watts: Double, at: Date, discharging: Bool)?
+    /// The header's state, kept between reads so a flow at a threshold does not flip it.
+    private var powerState: PowerState?
     private var assertions: [SleepAssertion] = []
     private var assertionsReadAt: Date?
     private var rules = EnergyFindingRules()
@@ -155,6 +157,7 @@ struct EnergyMonitor: Sendable {
         if let battery, abs(now.timeIntervalSince(battery.readAt)) < interval { return }
         let reading = batterySource.read(now: now)
         battery = reading
+        powerState = reading.powerState(after: powerState)
         guard let draw = reading.drawWatts, draw.isFinite, draw > 0 else { return }
         if let previous = smoothedDraw, previous.discharging == reading.isDischarging,
            now > previous.at, now.timeIntervalSince(previous.at) < 10 * Self.drawTimeConstant {
@@ -191,7 +194,9 @@ struct EnergyMonitor: Sendable {
             minutesRemaining: minutes,
             healthPercent: battery.hasBattery ? battery.healthPercent : nil,
             cycleCount: battery.hasBattery ? battery.cycleCount : nil,
-            adapterInputWatts: battery.onExternalPower ? battery.adapterInputWatts : nil
+            adapterInputWatts: battery.onExternalPower ? battery.adapterInputWatts : nil,
+            powerState: powerState,
+            adapterRatedWatts: battery.onExternalPower ? battery.adapterRatedWatts : nil
         )
     }
 }

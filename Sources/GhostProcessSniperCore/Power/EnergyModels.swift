@@ -124,6 +124,7 @@ public struct FamilyPowerFigures: Equatable, Sendable {
 public struct BatteryOutlook: Equatable, Sendable {
     public let chargePercent: Double?
     public let isDischarging: Bool
+    /// The IsCharging flag as macOS reports it; the header goes by `powerState`.
     public let isCharging: Bool
     /// The whole Mac's draw, display and GPU included, averaged over about a minute.
     public let drawWatts: Double?
@@ -132,7 +133,12 @@ public struct BatteryOutlook: Equatable, Sendable {
     public let minutesRemaining: Double?
     public let healthPercent: Double?
     public let cycleCount: Int?
+    /// What the wall delivers right now, including what goes into the battery.
     public let adapterInputWatts: Double?
+    /// What the battery is really doing, from the direction of its current; nil without a battery.
+    public var powerState: PowerState? = nil
+    /// The charger's rating, while one is connected. Unlike its live input it does not move with load.
+    public var adapterRatedWatts: Double? = nil
 }
 
 /// Everything the Energy page and the popover show, prepared off the main actor.
@@ -188,6 +194,9 @@ public struct EnergyReport: Equatable, Sendable {
     public func consumer(id: String) -> EnergyConsumer? {
         consumers.first { $0.id == id }
     }
+
+    /// The Mac's whole draw, the figure the header compares the apps against.
+    public var macWatts: Double? { battery?.drawWatts }
 
     /// The finding the Overview and popover lead with.
     public var topFinding: EnergyFinding? { findings.first }

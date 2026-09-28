@@ -18,9 +18,13 @@ public struct BatteryReading: Equatable, Sendable {
     public var amperageMilliamps: Double?
     /// The whole Mac's draw, display and GPU included (Apple silicon laptops).
     public var systemLoadWatts: Double?
-    /// What the battery itself delivers while discharging.
+    /// What the battery itself delivers while discharging; nil unless power is leaving it.
     public var batteryDischargeWatts: Double?
+    /// What the wall delivers this second: the Mac's load plus whatever goes
+    /// into the battery. It moves with the work, so it is not the charger's size.
     public var adapterInputWatts: Double?
+    /// What the charger negotiated with the Mac, the most it can supply.
+    public var adapterRatedWatts: Double?
     public var cycleCount: Int?
     public var temperatureCelsius: Double?
     public var readAt: Date
@@ -33,7 +37,7 @@ public struct BatteryReading: Equatable, Sendable {
         fullChargeCapacityMilliampHours: Double? = nil, designCapacityMilliampHours: Double? = nil,
         voltageMillivolts: Double? = nil, amperageMilliamps: Double? = nil,
         systemLoadWatts: Double? = nil, batteryDischargeWatts: Double? = nil, adapterInputWatts: Double? = nil,
-        cycleCount: Int? = nil, temperatureCelsius: Double? = nil, readAt: Date
+        adapterRatedWatts: Double? = nil, cycleCount: Int? = nil, temperatureCelsius: Double? = nil, readAt: Date
     ) {
         self.hasBattery = hasBattery
         self.onExternalPower = onExternalPower
@@ -47,6 +51,7 @@ public struct BatteryReading: Equatable, Sendable {
         self.systemLoadWatts = systemLoadWatts
         self.batteryDischargeWatts = batteryDischargeWatts
         self.adapterInputWatts = adapterInputWatts
+        self.adapterRatedWatts = adapterRatedWatts
         self.cycleCount = cycleCount
         self.temperatureCelsius = temperatureCelsius
         self.readAt = readAt
@@ -73,6 +78,14 @@ public struct BatteryReading: Equatable, Sendable {
         guard let full = fullChargeCapacityMilliampHours, let design = designCapacityMilliampHours,
               full > 0, design > 0 else { return nil }
         return min(100, full / design * 100)
+    }
+
+    /// Watts going into the battery (positive) or out of it (negative), from
+    /// the same signed current the registry reports. Independent of the
+    /// IsCharging flag, which says what macOS is attempting, not what happens.
+    public var netBatteryWatts: Double? {
+        guard let amps = amperageMilliamps, let volts = voltageMillivolts, volts > 0 else { return nil }
+        return amps * volts / 1_000_000
     }
 
     /// The Mac's whole draw right now: the battery's output while discharging,
@@ -110,9 +123,17 @@ public struct IOKitBatterySource: BatterySource {
         }
         let telemetry = IORegistryEntryCreateCFProperty(service, "PowerTelemetryData" as CFString, kCFAllocatorDefault, 0)?
             .takeRetainedValue() as? [String: Any]
+        // Signed: int64Value turns a wrapped unsigned value back into a negative one.
         func milliwatts(_ key: String) -> Double? {
-            (telemetry?[key] as? NSNumber).map { $0.doubleValue / 1_000 }
+            (telemetry?[key] as? NSNumber).map { Double($0.int64Value) }
         }
+        func watts(_ key: String) -> Double? { milliwatts(key).map { $0 / 1_000 } }
+        let external = number("ExternalConnected")?.boolValue ?? false
+        // Small, and only meaningful while a charger is connected.
+        let adapter = external
+            ? IORegistryEntryCreateCFProperty(service, "AdapterDetails" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? [String: Any]
+            : nil
         let batteryInstalled = number("BatteryInstalled")?.boolValue ?? true
         // Apple silicon reports CurrentCapacity as a percentage and the raw mAh
         // separately; Intel reports mAh in CurrentCapacity and MaxCapacity.
@@ -124,7 +145,7 @@ public struct IOKitBatterySource: BatterySource {
         let temperature = number("Temperature").map { $0.doubleValue / 100 }
         return BatteryReading(
             hasBattery: batteryInstalled,
-            onExternalPower: number("ExternalConnected")?.boolValue ?? false,
+            onExternalPower: external,
             isCharging: number("IsCharging")?.boolValue ?? false,
             chargePercent: percent,
             currentCapacityMilliampHours: rawCurrent ?? (maximum.map { $0 > 100 } == true ? current : nil),
@@ -133,12 +154,27 @@ public struct IOKitBatterySource: BatterySource {
             voltageMillivolts: number("Voltage")?.doubleValue,
             // int64Value turns the registry's wrapped unsigned value back into a signed one.
             amperageMilliamps: (number("InstantAmperage") ?? number("Amperage")).map { Double($0.int64Value) },
-            systemLoadWatts: milliwatts("SystemLoad"),
-            batteryDischargeWatts: milliwatts("BatteryPower"),
-            adapterInputWatts: milliwatts("SystemPowerIn"),
+            systemLoadWatts: watts("SystemLoad"),
+            batteryDischargeWatts: Self.dischargeWatts(batteryPowerMilliwatts: milliwatts("BatteryPower")),
+            adapterInputWatts: watts("SystemPowerIn"),
+            adapterRatedWatts: Self.adapterRating(adapter),
             cycleCount: number("CycleCount")?.intValue,
             temperatureCelsius: temperature.flatMap { (0...90).contains($0) ? $0 : nil },
             readAt: now
         )
+    }
+
+    /// BatteryPower is signed, positive into the battery: only a negative
+    /// value is power leaving it. A charging figure the telemetry has not yet
+    /// replaced after unplugging is not the battery's output.
+    static func dischargeWatts(batteryPowerMilliwatts: Double?) -> Double? {
+        guard let power = batteryPowerMilliwatts, power < 0 else { return nil }
+        return -power / 1_000
+    }
+
+    /// The charger's negotiated wattage from AppleSmartBattery's `AdapterDetails`.
+    static func adapterRating(_ details: [String: Any]?) -> Double? {
+        guard let watts = (details?["Watts"] as? NSNumber)?.doubleValue, watts > 0, watts <= 500 else { return nil }
+        return watts
     }
 }
