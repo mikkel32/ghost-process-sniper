@@ -52,6 +52,17 @@ final class EnergyHeadlineTests: XCTestCase {
         XCTAssertNil(EnergyHeadline(report(nil)).drawSentence)
     }
 
+    func testTheHeaderSetsTheAppsAgainstTheSameFiveMinutesOfDraw() {
+        // The last minute spiked to 60 W; over the five minutes the apps were measured the Mac drew 20 W.
+        var battery = outlook(.charging, draw: 60)
+        battery.averageDrawWatts = 20
+        let headline = EnergyHeadline(report(battery, measured: 3.4))
+        XCTAssertEqual(headline.drawSentence, "Your Mac is drawing \(EnergyFormat.watts(20))")
+        XCTAssertEqual(headline.attributionSentence, "apps and jobs account for \(EnergyFormat.watts(3.4)) of it (17%)")
+        XCTAssertNil(EnergyHeadline(report(battery, measured: 25)).attributionSentence, "more than the whole Mac")
+        XCTAssertNil(EnergyHeadline(report(nil, measured: 3.4)).attributionSentence, "no draw to compare with")
+    }
+
     func testTheGlanceLineFollowsTheStateToo() {
         func line(_ state: PowerState) -> String? { EnergyGlance(report(outlook(state, draw: 26))).batteryLine }
         XCTAssertEqual(line(.charging), "Charging 76% \u{00B7} drawing 26 W")

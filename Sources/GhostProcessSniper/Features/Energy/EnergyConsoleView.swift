@@ -173,9 +173,7 @@ struct EnergyHero: View {
     private var subtitle: String {
         var parts: [String] = []
         if let draw = headline.drawSentence { parts.append(draw) }
-        if report.perProcessEnergy, report.measuredWatts > 0 {
-            parts.append("apps and jobs account for \(EnergyFormat.watts(report.measuredWatts)) of it")
-        }
+        if let share = headline.attributionSentence { parts.append(share) }
         let awake = report.unexpectedBlockers.count
         if awake > 0 { parts.append(awake == 1 ? "1 app is keeping it awake" : "\(awake) apps are keeping it awake") }
         return parts.isEmpty ? "Measuring energy for every process" : parts.joined(separator: " · ")

@@ -7,6 +7,8 @@ public struct EnergyHeadline: Equatable, Sendable {
     public let title: String
     /// "Your Mac is drawing 26 W", and that the battery covers the rest when the charger is too small.
     public let drawSentence: String?
+    /// "apps and jobs account for 3.4 W of it (17%)", or nil when the comparison would not be valid.
+    public let attributionSentence: String?
     /// "Charger 65 W": the adapter's rating, which does not move with load.
     public let chargerTag: String?
 
@@ -14,6 +16,8 @@ public struct EnergyHeadline: Equatable, Sendable {
         let battery = report.battery
         title = Self.title(battery)
         drawSentence = Self.drawSentence(battery, draw: report.macWatts)
+        attributionSentence = EnergyAttribution(mac: report.macWatts, measured: report.measuredWatts,
+                                                perProcessEnergy: report.perProcessEnergy)?.sentence
         chargerTag = battery?.adapterRatedWatts.map { "Charger \(EnergyFormat.watts($0))" }
     }
 
