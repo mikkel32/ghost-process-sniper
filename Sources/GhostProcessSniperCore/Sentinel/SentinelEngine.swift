@@ -213,13 +213,16 @@ public actor SentinelEngine {
 
     private func judge(_ subject: SentinelSubject, byPID: [Int32: SentinelSubject], at: Date, source: LaunchEventSource,
                        feed: Bool, running: Bool, now: Date) {
-        let ancestors = Self.ancestors(of: subject, in: byPID)
+        let previous = records[subject.identity]
+        // Judged again (late arguments, new ports): a parent that has exited since is gone from this
+        // scan, and launchd has adopted the process. The chain seen first is what launched it.
+        let fresh = Self.ancestors(of: subject, in: byPID)
+        let kept = previous?.ancestors ?? []
+        let ancestors = kept.count > fresh.count ? kept : fresh
         let lineage = (ancestors.reversed() + [subject]).map {
             SentinelLineageNode(pid: $0.identity.pid, name: $0.name, executablePath: $0.executablePath)
         }
-        let previous = records[subject.identity]
-        // Judged again (late arguments, new ports): what is known about the
-        // same file still holds; an exec into another program starts over.
+        // What is known about the same file still holds; an exec into another program starts over.
         let known = previous.flatMap { $0.subject.executablePath == subject.executablePath ? $0 : nil }
         let evaluation = SentinelRules.evaluate(subject, ancestors: ancestors, signing: known?.signing, pipeline: previous?.pipeline)
         // System binaries are Apple's; only third-party programs get a signature check.
