@@ -60,7 +60,7 @@ public struct FamilyRiskForecaster: Sendable {
         let projectedMemory = projectedMemoryBytes(family: family, velocity: memoryVelocity, horizonMinutes: 10)
         let projectedCPU = min(999, family.totalCPUPercent + cpuSlope * 10)
         let cpuEvidence = cpuEvidence(family: family, settings: settings)
-        let inStartupGrace = startupGrace(family: family, now: now)
+        let inStartupGrace = StartupGrace.isStarting(root: family.root, now: now)
         let state = state(
             family: family,
             horizon: horizon,
@@ -178,13 +178,6 @@ public struct FamilyRiskForecaster: Sendable {
             isBreached: isBreached,
             behavior: behavior
         )
-    }
-
-    // Freshly launched tools allocate fast while warming caches; give them a
-    // short grace window before calling that behavior a leak.
-    private func startupGrace(family: ProcessFamily, now: Date) -> Bool {
-        let start = Date(timeIntervalSince1970: TimeInterval(family.root.identity.startTimeSeconds))
-        return now.timeIntervalSince(start) < 150
     }
 
     private func state(

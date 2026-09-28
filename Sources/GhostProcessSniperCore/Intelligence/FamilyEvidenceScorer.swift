@@ -223,7 +223,8 @@ struct FamilyEvidenceScorer: Sendable {
             leakRatio: leakRatio,
             trend: trend,
             hardwareLevel: hardwareLevel,
-            cpuBehavior: cpuBehavior
+            cpuBehavior: cpuBehavior,
+            isStarting: StartupGrace.isStarting(root: root, now: now)
         )
         if let copies, heat.level == .quiet {
             heat = GhostHeat(

@@ -106,7 +106,8 @@ public enum GhostHeatModel {
         leakRatio: Double,
         trend: TrendMetrics,
         hardwareLevel: GhostLevel,
-        cpuBehavior: CPUBehavior = .none
+        cpuBehavior: CPUBehavior = .none,
+        isStarting: Bool = false
     ) -> GhostHeat {
         // The real limit, never one inferred from the last trend sample: that
         // sample is stale whenever a cached reading skipped the append.
@@ -118,7 +119,10 @@ public enum GhostHeatModel {
             sustainedCPUFraction = 0
         }
 
-        let trendTrust = trend.hasSustainedHistory
+        // A launch allocates fast while it warms its caches: however clean the
+        // ramp, it proves no leak until the startup grace is over.
+        let trendProven = trend.hasSustainedHistory && !isStarting
+        let trendTrust = trendProven
             ? min(1, max(0.25, trend.memoryFitQuality))
             : min(0.45, Double(trend.sampleCount) / 8)
         let cpuPersistence = cpuSamples.count >= 4 ? (0.45 + sustainedCPUFraction * 0.55) : 0.42
@@ -148,7 +152,7 @@ public enum GhostHeatModel {
             trend.observedSeconds >= 90
         let sustainedCPU = isBurst ? cpuBehavior.isSustained : (windowSustained || cpuBehavior.isSustained)
         let pattern = trend.resolvedPattern
-        let sustainedLeak = trend.hasSustainedHistory && leakRatio >= 1 && pattern.indicatesAccumulation &&
+        let sustainedLeak = trendProven && leakRatio >= 1 && pattern.indicatesAccumulation &&
             (trend.memoryFitQuality >= 0.5 || pattern.pattern == .risingFloor)
         let corroboratingAxes = axes.filter { $0 >= 55 }.count
         let instantCorroboration = [memoryRatio >= 1, cpuRatio >= 0.8, gpuRatio >= 0.55, leakRatio >= 0.8]
@@ -175,7 +179,10 @@ public enum GhostHeatModel {
         }
         else if cpuRatio >= 1 { evidence.append(isBurst ? "Build or test work is using CPU as expected" : GhostHeat.instantCPUEvidence) }
         if sustainedLeak { evidence.append("Memory growth is sustained with a trusted trend") }
-        else if leakRatio >= 1 { evidence.append("Memory is rising, but the trend still needs confirmation") }
+        else if leakRatio >= 1 {
+            evidence.append(isStarting ? "Memory is rising, but the process only just started"
+                                       : "Memory is rising, but the trend still needs confirmation")
+        }
         if memoryRatio >= 1 { evidence.append(GhostHeat.memoryAboveLimitEvidence) }
         if gpuRatio >= 0.55 { evidence.append("GPU load is materially elevated") }
         if hardwareLevel >= .hot { evidence.append("Hardware-offender detection also flags this process") }
