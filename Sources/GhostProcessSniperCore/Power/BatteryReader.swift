@@ -37,6 +37,9 @@ public struct BatteryReading: Equatable, Sendable {
     public var currentCapacityMilliampHours: Double?
     public var fullChargeCapacityMilliampHours: Double?
     public var designCapacityMilliampHours: Double?
+    /// The smoothed full-charge capacity macOS derives its Maximum Capacity
+    /// from. The raw maximum above moves with charge state and temperature.
+    public var nominalChargeCapacityMilliampHours: Double?
     public var voltageMillivolts: Double?
     /// Signed: negative while the battery discharges.
     public var amperageMilliamps: Double?
@@ -61,7 +64,7 @@ public struct BatteryReading: Equatable, Sendable {
         hasBattery: Bool, onExternalPower: Bool, isCharging: Bool,
         chargePercent: Double? = nil, currentCapacityMilliampHours: Double? = nil,
         fullChargeCapacityMilliampHours: Double? = nil, designCapacityMilliampHours: Double? = nil,
-        voltageMillivolts: Double? = nil, amperageMilliamps: Double? = nil,
+        nominalChargeCapacityMilliampHours: Double? = nil, voltageMillivolts: Double? = nil, amperageMilliamps: Double? = nil,
         systemLoadWatts: Double? = nil, batteryDischargeWatts: Double? = nil, adapterInputWatts: Double? = nil,
         adapterRatedWatts: Double? = nil, systemLoadAccumulator: PowerAccumulator? = nil,
         cycleCount: Int? = nil, temperatureCelsius: Double? = nil, readAt: Date
@@ -73,6 +76,7 @@ public struct BatteryReading: Equatable, Sendable {
         self.currentCapacityMilliampHours = currentCapacityMilliampHours
         self.fullChargeCapacityMilliampHours = fullChargeCapacityMilliampHours
         self.designCapacityMilliampHours = designCapacityMilliampHours
+        self.nominalChargeCapacityMilliampHours = nominalChargeCapacityMilliampHours
         self.voltageMillivolts = voltageMillivolts
         self.amperageMilliamps = amperageMilliamps
         self.systemLoadWatts = systemLoadWatts
@@ -101,9 +105,13 @@ public struct BatteryReading: Equatable, Sendable {
         return capacity * volts / 1_000_000
     }
 
-    /// How much of its design capacity the battery still holds.
+    /// How much of its design capacity the battery still holds, from the
+    /// capacity macOS derives Maximum Capacity from, or the raw maximum where
+    /// a Mac has none. (macOS rounds the same figure its own way, so the
+    /// whole percent can differ by one.)
     public var healthPercent: Double? {
-        guard let full = fullChargeCapacityMilliampHours, let design = designCapacityMilliampHours,
+        let nominal = nominalChargeCapacityMilliampHours.flatMap { $0 > 0 ? $0 : nil }
+        guard let full = nominal ?? fullChargeCapacityMilliampHours, let design = designCapacityMilliampHours,
               full > 0, design > 0 else { return nil }
         return min(100, full / design * 100)
     }
@@ -192,6 +200,7 @@ public struct IOKitBatterySource: BatterySource {
             currentCapacityMilliampHours: rawCurrent ?? (maximum.map { $0 > 100 } == true ? current : nil),
             fullChargeCapacityMilliampHours: rawMax ?? (maximum.map { $0 > 100 } == true ? maximum : nil),
             designCapacityMilliampHours: number("DesignCapacity")?.doubleValue,
+            nominalChargeCapacityMilliampHours: number("NominalChargeCapacity")?.doubleValue,
             voltageMillivolts: number("Voltage")?.doubleValue,
             // int64Value turns the registry's wrapped unsigned value back into a signed one.
             amperageMilliamps: (number("InstantAmperage") ?? number("Amperage")).map { Double($0.int64Value) },
