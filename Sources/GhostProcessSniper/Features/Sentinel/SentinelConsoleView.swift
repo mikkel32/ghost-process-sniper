@@ -233,7 +233,7 @@ struct SentinelSensorStrip: View {
             tile(
                 title: "Microphone",
                 systemImage: sensors.microphoneActive ? "mic.fill" : "mic.slash",
-                active: sensors.microphoneActive,
+                active: sensors.microphoneNeedsAttention,
                 detail: microphoneDetail
             )
             tile(
@@ -249,6 +249,8 @@ struct SentinelSensorStrip: View {
 
     private var microphoneDetail: String {
         guard sensors.available else { return "Checking…" }
+        // Only Siri, holding the microphone open until it hears its wake phrase: the tile stays calm.
+        if sensors.microphoneIsPassive { return "Siri is waiting for \u{201C}Hey Siri\u{201D}" }
         if !sensors.microphoneUsers.isEmpty {
             return "In use by " + sensors.microphoneUsers.map(\.name).joined(separator: ", ")
         }

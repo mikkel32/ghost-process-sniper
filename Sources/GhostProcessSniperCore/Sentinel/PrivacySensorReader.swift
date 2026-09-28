@@ -14,7 +14,9 @@ enum PrivacySensorReader {
             .filter { $0 != getpid() }
             .map { pid in
                 let name = names(pid) ?? processName(pid) ?? "pid \(pid)"
-                return PrivacySensorUser(pid: pid, name: systemAudioClients[name] ?? name)
+                // The path is read only for the one name that could be passive: no cost for other recorders.
+                let passive = name == passiveClientName && isPassiveClient(name: name, path: executablePath(pid))
+                return PrivacySensorUser(pid: pid, name: systemAudioClients[name] ?? name, isPassive: passive)
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         state.microphoneActive = !state.microphoneUsers.isEmpty || defaultInputIsRunning()
@@ -25,6 +27,19 @@ enum PrivacySensorReader {
     }
 
     // MARK: - Microphone
+
+    /// The daemon that holds the microphone open all day, waiting for "Hey Siri".
+    static let passiveClientName = "corespeechd"
+    static let passiveClientPath = "/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd"
+
+    /// Whether a client is Apple's wake-phrase listener, which records nothing
+    /// until it hears the phrase. A name alone proves nothing (any program can
+    /// be called corespeechd), so the file it runs must be the one in the
+    /// sealed system volume, read from the kernel; anything else stays an
+    /// ordinary recorder, orange tile included.
+    static func isPassiveClient(name: String, path: String?) -> Bool {
+        name == passiveClientName && path == passiveClientPath
+    }
 
     /// macOS services that hold the microphone, named for what they do.
     static let systemAudioClients: [String: String] = [
@@ -132,6 +147,12 @@ enum PrivacySensorReader {
         }
         guard status == 0, let name else { return nil }
         return name.takeRetainedValue() as String
+    }
+
+    private static func executablePath(_ pid: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     private static func processName(_ pid: Int32) -> String? {

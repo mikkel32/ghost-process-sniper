@@ -301,11 +301,15 @@ public struct LaunchEvent: Identifiable, Hashable, Sendable {
 public struct PrivacySensorUser: Hashable, Sendable, Identifiable {
     public let pid: Int32
     public let name: String
+    /// A system client that holds the microphone open only to wait for a wake
+    /// phrase ("Hey Siri"); nothing is recording while it does.
+    public let isPassive: Bool
     public var id: Int32 { pid }
 
-    public init(pid: Int32, name: String) {
+    public init(pid: Int32, name: String, isPassive: Bool = false) {
         self.pid = pid
         self.name = name
+        self.isPassive = isPassive
     }
 }
 
@@ -325,6 +329,17 @@ public struct PrivacySensorState: Hashable, Sendable {
         self.cameraActive = cameraActive
         self.cameraDeviceNames = cameraDeviceNames
         self.available = available
+    }
+
+    /// Only system clients that wait for a wake phrase hold the microphone.
+    public var microphoneIsPassive: Bool {
+        microphoneActive && !microphoneUsers.isEmpty && microphoneUsers.allSatisfy(\.isPassive)
+    }
+
+    /// In use by something other than a passive listener, or by nothing macOS
+    /// names: the states worth an orange tile.
+    public var microphoneNeedsAttention: Bool {
+        microphoneActive && !microphoneIsPassive
     }
 
     public static let unknown = PrivacySensorState()
