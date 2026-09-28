@@ -162,18 +162,23 @@ struct SentinelTrust: Sendable {
     }
 
     /// `provenance` is the signature of the file at the path now, nil until read.
-    func match(_ subject: SentinelSubject, provenance: ExecutableProvenance?,
+    /// `commandText` is the whole pasted pipeline a bare stdin runner belongs
+    /// to (`curl … | sh`): its own command line is just `sh`, which says
+    /// nothing, so the pipeline is what a command is trusted by.
+    func match(_ subject: SentinelSubject, provenance: ExecutableProvenance?, commandText: String? = nil,
                stamp: (String) -> FileStamp? = FileStamp.read) -> SentinelTrustMatch {
         let candidates = entries.filter { $0.path == subject.executablePath }
         guard !candidates.isEmpty else { return .none }
         if !Self.allowsWholeProgram(subject) {
             // A shell or tool is trusted for one script or command only.
-            let digest = Self.digest(subject.commandLine)
+            let digest = Self.digest(commandText ?? subject.commandLine)
             for entry in candidates {
                 switch entry.anchor {
                 case .command(let hash) where hash == digest:
                     return .trusted
-                case .script(let script, let scriptStamp) where Self.script(of: subject, stamp: stamp)?.path == script:
+                // `bash -s /path` reads its program from stdin and only carries the path as an argument: no script runs.
+                case .script(let script, let scriptStamp)
+                    where commandText == nil && Self.script(of: subject, stamp: stamp)?.path == script:
                     return stamp(script) == scriptStamp ? .trusted : .changed(entry)
                 default:
                     continue
@@ -208,14 +213,18 @@ struct SentinelTrust: Sendable {
 
     /// What a finding's Trust item would trust, or nil when nothing can be
     /// trusted safely (an invalid signature, or one not read yet).
-    static func offer(for subject: SentinelSubject, provenance: ExecutableProvenance?, now: Date,
+    /// `commandText` is the pasted pipeline the subject belongs to, as in `match`.
+    static func offer(for subject: SentinelSubject, provenance: ExecutableProvenance?, now: Date, commandText: String? = nil,
                       stamp: (String) -> FileStamp? = FileStamp.read) -> SentinelTrustEntry? {
         let path = subject.executablePath
         guard path.hasPrefix("/") else { return nil }
         if !allowsWholeProgram(subject) {
-            guard !subject.commandLine.isEmpty else { return nil }
-            let anchor: SentinelTrustEntry.Anchor = script(of: subject, stamp: stamp)
-                .map { .script(path: $0.path, stamp: $0.stamp) } ?? .command(sha256: digest(subject.commandLine))
+            let command = commandText ?? subject.commandLine
+            guard !command.isEmpty else { return nil }
+            // A pipeline runner has no script of its own, whatever its arguments look like.
+            let scriptAnchor = commandText == nil ? script(of: subject, stamp: stamp) : nil
+            let anchor: SentinelTrustEntry.Anchor = scriptAnchor
+                .map { .script(path: $0.path, stamp: $0.stamp) } ?? .command(sha256: digest(command))
             return SentinelTrustEntry(path: path, name: subject.program, anchor: anchor, added: now)
         }
         guard let provenance, let anchor = programAnchor(provenance) else { return nil }

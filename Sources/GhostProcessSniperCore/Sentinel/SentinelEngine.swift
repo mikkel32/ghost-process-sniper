@@ -110,7 +110,8 @@ public actor SentinelEngine {
     @discardableResult
     public func trust(findingID: String) -> SentinelTrustEntry? {
         guard let record = records.first(where: { SentinelFinding.key(for: $0.key) == findingID })?.value,
-              let entry = SentinelTrust.offer(for: record.subject, provenance: record.provenance, now: Date())
+              let entry = SentinelTrust.offer(for: record.subject, provenance: record.provenance, now: Date(),
+                                              commandText: record.pipeline?.text)
         else { return nil }
         trust.insert(entry)
         trustChanged(path: entry.path)
@@ -265,7 +266,7 @@ public actor SentinelEngine {
     private func upsertFinding(for identity: ProcessIdentity, running: Bool, now: Date) {
         guard let record = records[identity] else { return }
         var trustSignals: [SentinelSignal] = []
-        switch trust.match(record.subject, provenance: record.provenance) {
+        switch trust.match(record.subject, provenance: record.provenance, commandText: record.pipeline?.text) {
         case .trusted, .pending:
             // A trusted program waits for its signature rather than flash an alarm.
             findings[identity] = nil
@@ -296,7 +297,8 @@ public actor SentinelEngine {
             signing: record.signing, downloadedFrom: record.downloadedFrom)
         finding.connections = previous?.connections ?? []
         // Offered again at every judgement: once the signature arrives the offer can name the signer.
-        finding.trustOffer = SentinelTrust.offer(for: record.subject, provenance: record.provenance, now: now)
+        finding.trustOffer = SentinelTrust.offer(for: record.subject, provenance: record.provenance, now: now,
+                                                 commandText: record.pipeline?.text)
         findings[identity] = finding
     }
 

