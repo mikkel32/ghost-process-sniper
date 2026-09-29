@@ -10,6 +10,8 @@ import Foundation
 /// keeps the generic label rather than a guess.
 struct AttentionReason: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
+        case largeButNormal(usual: UInt64)
+        case aboveUsual(multiple: Double, usual: UInt64)
         case hostPressure(detail: String)
         case overLimit(detail: String)
         case copies(Int)
@@ -30,6 +32,24 @@ struct AttentionReason: Equatable, Sendable {
         let components = family.score.components
         func component(_ slot: String) -> GhostScoreComponent? { components.first { $0.slot == slot } }
 
+        if let baseline = family.baseline, baseline.isMeasurementTrusted {
+            let footprint = family.totalPhysicalFootprintBytes
+            let usual = UInt64(baseline.meanMemoryBytes)
+            let multiple = baseline.memoryMultiple(for: footprint)
+            // The heat's own gate for the bigger-than-usual line: outside
+            // the learned spread, or big enough that a wide one does not
+            // excuse it. It says why the family is not held at Watch, or
+            // why it is flagged at all.
+            if multiple >= 1.3, baseline.memoryZScore(for: footprint) >= 3 || footprint > 512 * 1_048_576 {
+                return .aboveUsual(multiple: multiple, usual: usual)
+            }
+            // Only at Watch: a Hot family is never reassured, whatever
+            // evidence an earlier tick left behind.
+            if family.score.level == .watch, family.score.heat.evidence.contains(where: { $0.hasPrefix(GhostHeat.usualSizeEvidence) }) {
+                return .largeButNormal(usual: usual)
+            }
+        }
+
         // Memory over its limit is the fact; whether the Mac is short of
         // memory is why the limit is where it is, so it goes first. The
         // pressure component alone says little: any family over 512 MB
@@ -49,6 +69,8 @@ struct AttentionReason: Equatable, Sendable {
     /// Short enough for a 250 pt sidebar row: about 28 characters.
     var text: String {
         switch kind {
+        case .largeButNormal: GhostHeat.usualSizeEvidence
+        case let .aboveUsual(multiple, _): "\(RadarFormat.fixed1(multiple))x its usual size"
         case .hostPressure: "Memory is tight on this Mac"
         case .overLimit: "Over its memory limit"
         case let .copies(count): "\(count) copies running"
@@ -62,6 +84,8 @@ struct AttentionReason: Equatable, Sendable {
     /// hedge: the reason is the claim, and it is not that.
     func evidence(memory: String, cpu: String) -> String {
         switch kind {
+        case let .largeButNormal(usual): "\(memory), about its usual \(RadarFormat.bytes(usual)); \(cpu) CPU."
+        case let .aboveUsual(_, usual): "\(memory) against a usual \(RadarFormat.bytes(usual)); \(cpu) CPU."
         case let .hostPressure(detail): "\(detail); \(memory) tracked footprint, \(cpu) CPU."
         case let .overLimit(detail): "\(detail); \(cpu) CPU."
         case let .copies(count): "\(count) independent copies are running; this one holds \(memory), \(cpu) CPU."
