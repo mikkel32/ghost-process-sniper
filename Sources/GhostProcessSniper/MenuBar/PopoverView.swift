@@ -249,13 +249,13 @@ private struct PopoverCulprits: View {
                     }
                     Menu {
                         FamilySnoozeMenu { minutes in
-                            Task { await monitor.snooze(signatureID: row.id, minutes: minutes) }
+                            Task { await monitor.snooze(signatureID: row.id, name: row.title, minutes: minutes) }
                         }
                     } label: {
                         Label("Snooze", systemImage: "moon")
                     }
                     Button {
-                        Task { await monitor.ignore(signatureID: row.id) }
+                        Task { await monitor.ignore(signatureID: row.id, name: row.title) }
                     } label: {
                         Label("Ignore Family", systemImage: "eye.slash")
                     }
