@@ -215,6 +215,21 @@ struct ThermalWorkloadResolver {
         return terminals.contains(name.lowercased()) ? name : nil
     }
 
+    /// Where macOS keeps its daemons and agents; command-line tools in
+    /// /usr/bin and /bin are things people run, so they are not listed.
+    static let operatingSystemPrefixes = ["/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/Apple/"]
+
+    static func isOperatingSystemPath(_ path: String) -> Bool {
+        operatingSystemPrefixes.contains { path.hasPrefix($0) }
+    }
+
+    /// A lone process running from macOS's own folders is a service, whoever owns it:
+    /// the kernel's system flag marks only kernel_task, so cloudd or sharingd running as
+    /// the user would read as apps. Apps, jobs someone started and known sources are never services.
+    static func isMacOSService(executablePath: String, kind: ThermalWorkloadKind) -> Bool {
+        kind == .process && isOperatingSystemPath(executablePath)
+    }
+
     /// Whether the executable is a terminal app: what it starts is a job, never a helper of the app.
     static func isTerminalApp(_ executable: String) -> Bool {
         applicationPath(executable).flatMap(terminalName) != nil

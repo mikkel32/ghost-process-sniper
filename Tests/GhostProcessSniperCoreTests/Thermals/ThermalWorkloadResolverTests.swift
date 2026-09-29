@@ -173,6 +173,34 @@ final class ThermalWorkloadResolverTests: XCTestCase {
         XCTAssertNil(ThermalKnownSource.matching(name: "com.apple.Virtua", executablePath: ""), "Too short to be unambiguous")
     }
 
+    /// PROC_FLAG_SYSTEM marks only the kernel, so a daemon that runs as the user
+    /// (suggestd, cloudd, sharingd) used to read as an app: app advice, the app
+    /// icon and, when it repeated while hot, a Stop shortcut.
+    func testMacOSDaemonsRunningAsTheUserAreServices() throws {
+        let suggestd = "/System/Library/PrivateFrameworks/CoreSuggestions.framework/Versions/A/Support/suggestd"
+        let daemon = process(701, parent: 1, name: "suggestd", path: suggestd, cpu: 90)
+        let plist = process(710, parent: 602, name: "PlistBuddy", path: "/usr/libexec/PlistBuddy", cpu: 90)
+        let script = process(711, parent: 602, name: "python3", path: "/usr/bin/python3", cpu: 90)
+        let finder = process(720, parent: 1, name: "Finder",
+                             path: "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder", cpu: 90)
+        let family = RefreshPerformanceFixture.family(daemon)
+        let result = ThermalActivityAnalyzer.project(processes: terminalShell() + [daemon, plist, script, finder],
+                                                     families: [family], now: now, processorCount: 10)
+
+        let service = try XCTUnwrap(result.contributors.first { $0.displayName == "suggestd" })
+        XCTAssertTrue(service.isSystemProcess)
+        XCTAssertEqual(service.workloadSummary, "macOS service")
+        XCTAssertTrue(service.suggestedAction.contains("macOS service"), service.suggestedAction)
+        XCTAssertNil(ThermalStopTarget.resolve(for: service, family: family, ownPID: 1),
+                     "A macOS service is never offered for stopping")
+
+        XCTAssertEqual(result.contributors.first { $0.displayName == "PlistBuddy" }?.isSystemProcess, false,
+                       "A tool someone ran from a shell is their job, wherever it lives")
+        XCTAssertEqual(result.contributors.first { $0.displayName == "python3" }?.isSystemProcess, false)
+        XCTAssertEqual(result.contributors.first { $0.displayName == "Finder" }?.isSystemProcess, false,
+                       "Apple's own apps are still apps you use")
+    }
+
     func testProjectionDoesNotDependOnInputOrder() {
         let processes = terminalShell() + editor() + [
             process(603, parent: 602, name: "make", path: "/usr/bin/make", cpu: 3),
