@@ -19,6 +19,16 @@ public struct SentinelAlertGate: Sendable {
     public struct Alerts: Sendable {
         public var findings: [SentinelFinding] = []
         public var startupItems: [LaunchItem] = []
+
+        /// What the user's choice lets notify. The gate has already counted
+        /// everything as alerted, so a level chosen later replays no backlog,
+        /// and a finding that turns dangerous is a new one. A dangerous
+        /// finding or item always passes.
+        public func filtered(by level: SecurityAlertLevel) -> Alerts {
+            guard level == .dangerousOnly else { return self }
+            return Alerts(findings: findings.filter { $0.severity == .dangerous },
+                          startupItems: startupItems.filter { $0.severity == .dangerous })
+        }
     }
 
     private var seenIDs: Set<String> = []

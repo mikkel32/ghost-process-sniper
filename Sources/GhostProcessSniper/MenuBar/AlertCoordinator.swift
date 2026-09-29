@@ -33,15 +33,18 @@ final class AlertCoordinator {
         let alerts = energyAlerts.alerts(for: monitor.energy.findings, now: Date())
         guard !alerts.isEmpty else { return }
         memory.save(energyAlerts.memory, for: .energy)
+        // The gate has counted them either way, so switching this on later replays nothing.
+        guard monitor.settings.notifications.energy else { return }
         for finding in alerts {
             let notifier = notifier
             Task { await notifier.notify(energy: finding) }
         }
     }
 
-    /// One notification per new suspicious or dangerous thing. Returns nil
-    /// while the report is the one already handled, otherwise whether a new
-    /// dangerous finding should pulse the menu-bar icon.
+    /// One notification per new suspicious or dangerous thing, as far as the
+    /// user's security choice allows. Returns nil while the report is the one
+    /// already handled, otherwise whether a new dangerous finding should pulse
+    /// the menu-bar icon (which follows the report, not the choice).
     func handleSentinelChange() -> Bool? {
         let report = monitor.sentinel
         guard report.revision != lastSentinelRevision else { return nil }
@@ -50,11 +53,12 @@ final class AlertCoordinator {
         if !alerts.findings.isEmpty || !alerts.startupItems.isEmpty {
             memory.save(sentinelAlerts.memory, for: .sentinel)
         }
-        for finding in alerts.findings {
+        let allowed = alerts.filtered(by: monitor.settings.notifications.security)
+        for finding in allowed.findings {
             let notifier = notifier
             Task { await notifier.notify(sentinel: finding) }
         }
-        for item in alerts.startupItems {
+        for item in allowed.startupItems {
             let notifier = notifier
             Task { await notifier.notify(startupItem: item) }
         }

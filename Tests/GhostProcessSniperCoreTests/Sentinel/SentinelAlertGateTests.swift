@@ -193,4 +193,45 @@ final class SentinelAlertGateTests: XCTestCase {
         let inside = SentinelAlertGate(memory: first.memory, now: now.addingTimeInterval(3_600))
         XCTAssertEqual(inside.memory, first.memory)
     }
+
+    // MARK: What may notify
+
+    private func dangerousItem(_ label: String) -> LaunchItem {
+        let path = "/Users/me/Library/LaunchAgents/\(label).plist"
+        return LaunchItem(id: path, plistPath: path, label: label, scope: .userAgent, programPath: "/tmp/.x/agent",
+                          arguments: ["/tmp/.x/agent"], runsAtLoad: true, keepsAlive: true, modified: nil, isNew: true,
+                          signals: [SentinelSignal(.reverseShell, .dangerous, "evidence")], signing: nil)
+    }
+
+    func testDangerousOnlyKeepsDangerousFindingsAndItemsAndDropsTheRest() {
+        var gate = SentinelAlertGate()
+        let suspicious = finding(pid: 80)
+        let dangerous = finding(pid: 81, path: "/tmp/.y/shell", kind: .reverseShell, severity: .dangerous)
+        let report = SentinelReport(findings: [suspicious, dangerous],
+                                    launchItems: [item("com.example.plain", isNew: true), dangerousItem("com.example.bad")])
+        let alerts = gate.alerts(for: report, now: now)
+        XCTAssertEqual(alerts.findings.count, 2)
+        XCTAssertEqual(alerts.startupItems.count, 2)
+
+        let narrowed = alerts.filtered(by: .dangerousOnly)
+        XCTAssertEqual(narrowed.findings.map(\.id), [dangerous.id])
+        XCTAssertEqual(narrowed.startupItems.map(\.label), ["com.example.bad"])
+        let everything = alerts.filtered(by: .suspiciousAndDangerous)
+        XCTAssertEqual(everything.findings.map(\.id), alerts.findings.map(\.id))
+        XCTAssertEqual(everything.startupItems.map(\.label), alerts.startupItems.map(\.label))
+    }
+
+    /// The gate still runs while a level is filtered out, so switching back never replays a backlog,
+    /// and a finding that later turns dangerous is still news.
+    func testNarrowingWhatNotifiesNeitherReplaysABacklogNorHidesAPromotion() {
+        var gate = SentinelAlertGate()
+        let report = SentinelReport(findings: [finding(pid: 90)])
+        XCTAssertTrue(gate.alerts(for: report, now: now).filtered(by: .dangerousOnly).findings.isEmpty)
+        // The user switches back to suspicious and dangerous: the same finding is not announced now.
+        XCTAssertTrue(gate.alerts(for: report, now: now.addingTimeInterval(60)).filtered(by: .suspiciousAndDangerous).findings.isEmpty)
+
+        let worse = SentinelReport(findings: [finding(pid: 90, severity: .dangerous)])
+        let promoted = gate.alerts(for: worse, now: now.addingTimeInterval(120)).filtered(by: .dangerousOnly)
+        XCTAssertEqual(promoted.findings.count, 1, "dangerous always notifies")
+    }
 }

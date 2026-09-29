@@ -14,6 +14,7 @@ public struct ThresholdSettings: Codable, Equatable, Sendable {
     public var detectionMode: RadarDetectionMode
     public var sensitivity: RadarSensitivity
     public var adaptivePerformance: Bool
+    public var notifications: NotificationPreferences
 
     /// Compatibility profile used by tests, imported settings, and callers
     /// that intentionally set exact thresholds.
@@ -62,7 +63,8 @@ public struct ThresholdSettings: Codable, Equatable, Sendable {
         performanceMode: RadarPerformanceMode = .balanced,
         detectionMode: RadarDetectionMode = .custom,
         sensitivity: RadarSensitivity = .balanced,
-        adaptivePerformance: Bool = false
+        adaptivePerformance: Bool = false,
+        notifications: NotificationPreferences = NotificationPreferences()
     ) {
         self.memoryBytes = memoryBytes
         self.cpuPercent = cpuPercent
@@ -76,6 +78,7 @@ public struct ThresholdSettings: Codable, Equatable, Sendable {
         self.detectionMode = detectionMode
         self.sensitivity = sensitivity
         self.adaptivePerformance = adaptivePerformance
+        self.notifications = notifications
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -91,6 +94,7 @@ public struct ThresholdSettings: Codable, Equatable, Sendable {
         case detectionMode
         case sensitivity
         case adaptivePerformance
+        case notifications
     }
 
     public init(from decoder: Decoder) throws {
@@ -110,6 +114,9 @@ public struct ThresholdSettings: Codable, Equatable, Sendable {
         detectionMode = try container.decodeIfPresent(RadarDetectionMode.self, forKey: .detectionMode) ?? .custom
         sensitivity = try container.decodeIfPresent(RadarSensitivity.self, forKey: .sensitivity) ?? .balanced
         adaptivePerformance = try container.decodeIfPresent(Bool.self, forKey: .adaptivePerformance) ?? false
+        // Settings saved before alert choices existed keep every alert on; an unreadable value
+        // must not cost the store every other setting.
+        notifications = (try? container.decodeIfPresent(NotificationPreferences.self, forKey: .notifications)) ?? NotificationPreferences()
     }
 
     @available(*, deprecated, message: "Nothing reads it; saved settings keep it only for compatibility.")

@@ -35,6 +35,20 @@ struct AlertsSettingsTab: View {
         }
     }
 
+    private func alertToggle(_ title: String, detail: String, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .toggleStyle(.switch)
+    }
+
     var body: some View {
         SettingsPage {
             SettingsCard(
@@ -71,6 +85,42 @@ struct AlertsSettingsTab: View {
                 }
 
                 Text("The rule engine decides when a finding is important enough to notify; quiet and merely noisy processes stay in the console.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            SettingsCard(
+                title: "What can notify you",
+                subtitle: "macOS has one switch for all of Ghost; choose here which alerts may interrupt you.",
+                systemImage: "switch.2",
+                accent: RadarTheme.brand
+            ) {
+                alertToggle(
+                    "Process alerts",
+                    detail: "An app or job that turns Hot or Critical. Each alerts once, again if it gets worse, and as a reminder after 12 hours.",
+                    isOn: $monitor.settings.notifications.families
+                )
+                Divider()
+                alertToggle(
+                    "Energy alerts",
+                    detail: "An app that keeps the Mac awake, wakes it constantly, writes heavily to disk or drains the battery, at most once every 12 hours.",
+                    isOn: $monitor.settings.notifications.energy
+                )
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Security alerts")
+                        .font(.headline)
+                    Picker("Security alerts", selection: $monitor.settings.notifications.security) {
+                        ForEach(SecurityAlertLevel.allCases, id: \.self) { level in
+                            Text(level.label).tag(level)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                }
+
+                Text("Dangerous security findings always notify. Whatever you choose here, the Security page, the menu-bar icon and the console still show everything.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

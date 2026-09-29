@@ -108,7 +108,7 @@ struct SystemSettingsTab: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This replaces custom thresholds, scope, and performance choices with the recommended adaptive setup.")
+            Text("This replaces custom thresholds, scope, performance and alert choices with the recommended adaptive setup.")
         }
         .onAppear(perform: readLaunchAtLoginStatus)
         // The approval happens in System Settings; pick it up on return.
