@@ -132,10 +132,13 @@ public struct LiveRadarHistory: Equatable, Sendable {
     }
 
     public static let window: TimeInterval = 300
-    /// A family that does not move still gets a mark this often, so the
-    /// window's start is never older than the window.
-    static let heartbeat: TimeInterval = 30
-    static let capacity = 24
+    /// One mark per family this often, however much it moves in between. A
+    /// mark for every wobble filled the capacity within a minute for any busy
+    /// family, and the "start of the window" slid forward with it.
+    static let interval: TimeInterval = 10
+    /// A mark at each end of the window and one to spare, so trimming by
+    /// count is never reached and the window alone decides what is kept.
+    static let capacity = Int(window / interval) + 2
 
     private var marks: [String: [Mark]] = [:]
 
@@ -151,9 +154,11 @@ public struct LiveRadarHistory: Equatable, Sendable {
             present.insert(input.id)
             var list = marks[input.id, default: []]
             let before = list
-            let distance = input.distance
-            if list.last.map({ abs($0.distance - distance) >= 0.004 || now.timeIntervalSince($0.at) >= Self.heartbeat }) ?? true {
-                list.append(Mark(at: now, distance: distance))
+            // A clock that stepped back would leave marks from the future as
+            // the origin until it caught up: start the trail over.
+            if let last = list.last, last.at > now { list.removeAll() }
+            if list.last.map({ now.timeIntervalSince($0.at) >= Self.interval }) ?? true {
+                list.append(Mark(at: now, distance: input.distance))
             }
             list.removeAll { $0.at < cutoff }
             if list.count > Self.capacity { list.removeFirst(list.count - Self.capacity) }

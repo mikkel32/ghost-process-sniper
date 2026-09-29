@@ -113,6 +113,15 @@ extension RadarConsoleSession {
         )
         if band != overviewThermalBand { overviewThermalBand = band }
     }
+
+    func updateOverviewQueueLayout() {
+        let compact = compactSnapshot
+        let layout = queueLayoutTracker.update(
+            riskCount: compact.riskCount, warmingCount: compact.warmingRows.count,
+            hasSampled: compact.hasSampled, at: Date()
+        )
+        if layout != overviewQueueLayout { overviewQueueLayout = layout }
+    }
 }
 
 extension RadarConsoleSession {

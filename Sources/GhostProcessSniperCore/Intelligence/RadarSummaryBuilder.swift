@@ -8,10 +8,10 @@ enum RadarSummaryBuilder {
                 ? max(family.score.level, family.forecast.state.level)
                 : family.score.level
         }.max() ?? .quiet
-        let hotCount = families.filter { $0.score.level >= .hot || $0.forecastIsCredibleEscalation }.count
-        let leakingCount = families.filter {
-            $0.forecastIsCredibleEscalation && $0.forecast.state >= .leaking
-        }.count
+        let hotCount = families.filter(\.needsReview).count
+        // The Leaks list and the "Sustained memory growth" cause read the same
+        // predicate, so a family cannot be a leak there and missing here.
+        let leakingCount = families.filter(\.hasCredibleLeak).count
         let suggestionCount = families.reduce(0) { $0 + $1.suggestions.count }
         let totalMemory = families.reduce(UInt64(0)) { $0 + $1.totalPhysicalFootprintBytes }
         let top = families.first

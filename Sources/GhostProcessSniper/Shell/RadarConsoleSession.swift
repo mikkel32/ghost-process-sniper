@@ -39,11 +39,15 @@ final class RadarConsoleSession {
     var isSearchingIncidentLog = false
     /// Changes only when the thermal panel should move on the Overview.
     var overviewThermalBand: OverviewThermalBand = .normal
+    /// Changes only when the two queues collapse into the all-clear strip or
+    /// come back out of it.
+    var overviewQueueLayout: OverviewQueueLayout = .allClear
     var history = NavigationHistory()
     @ObservationIgnored var thermalBandTracker = OverviewThermalBandTracker()
     /// The incident log read past the published 80 while the Incidents page is
     /// searched or filtered; nothing while it is not.
     @ObservationIgnored var incidentHistoryTracker = IncidentHistoryTracker()
+    @ObservationIgnored var queueLayoutTracker = OverviewQueueTracker()
     /// The last confirmed stop, so closing its sheet can return the user.
     @ObservationIgnored var lastStopResult: (pendingID: UUID, report: KillReport)?
 
@@ -242,6 +246,7 @@ final class RadarConsoleSession {
         if navigationSubtitle != title { navigationSubtitle = title }
         recordEngineSample()
         updateOverviewThermalBand()
+        updateOverviewQueueLayout()
         renewPortCensusIfUnanswered()
         scheduleQueryUpdate()
         updateCanStopSelection()

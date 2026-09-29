@@ -199,12 +199,16 @@ private struct PopoverCulprits: View {
     var body: some View {
         let compact = monitor.consoleSnapshot.compact
         let risk = Array(compact.topRiskRows.prefix(3))
-        let warnings = Array(compact.warmingRows.prefix(2))
+        // Warming rows list families with something against them first; a
+        // family that is only big is watched, and is not an early warning.
+        let leading = compact.warmingRows.prefix(2)
+        let hasEarlyWarning = leading.first?.isWatchedForSizeOnly == false
+        let warnings = hasEarlyWarning ? leading.filter { !$0.isWatchedForSizeOnly } : Array(leading)
         VStack(alignment: .leading, spacing: 6) {
             if !risk.isEmpty {
                 rows(risk, showsStopButton: true)
             } else if !warnings.isEmpty {
-                Text("EARLY WARNINGS")
+                Text(hasEarlyWarning ? "EARLY WARNINGS" : "WATCHING")
                     .font(.caption2.weight(.bold))
                     .tracking(0.6)
                     .foregroundStyle(.secondary)

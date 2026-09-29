@@ -6,23 +6,37 @@ import SwiftUI
 /// context menu, because an early warning is not yet a reason to stop.
 struct OverviewQueuesSection: View {
     let session: RadarConsoleSession
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // Both queues empty: one slim strip, and no "Needs your attention"
+        // header over nothing. The layout changes only after thirty calm
+        // seconds, so a family hovering around Hot does not move the page.
+        let layout = session.overviewQueueLayout
         VStack(alignment: .leading, spacing: 20) {
-            OverviewSectionLabel(eyebrow: "Triage", title: "Needs your attention",
-                                 detail: "Review current issues first, then keep an eye on emerging changes.")
-            AdaptivePairLayout(breakpoint: 680, spacing: 14) {
-                riskQueue
-                warmingQueue
+            switch layout {
+            case .allClear:
+                OverviewAllClearStrip(familyCount: session.compactSnapshot.allRows.count,
+                                      hasSampled: session.compactSnapshot.hasSampled)
+            case .pair:
+                OverviewSectionLabel(eyebrow: "Triage", title: "Needs your attention",
+                                     detail: "Review current issues first, then keep an eye on emerging changes.")
+                AdaptivePairLayout(breakpoint: 680, spacing: 14) {
+                    riskQueue
+                    warmingQueue
+                }
             }
         }
+        .animation(RadarMotion.response(reduceMotion), value: layout)
     }
 
     private var riskQueue: some View {
-        let rows = Array(session.compactSnapshot.topRiskRows.prefix(6))
+        let compact = session.compactSnapshot
+        let rows = Array(compact.topRiskRows.prefix(6))
         return CompactRadarSection(
             title: "Risk Queue",
-            subtitle: "\(session.compactSnapshot.topRiskRows.count) priority",
+            // The whole count, as the hero and the Needs review card give it.
+            subtitle: "\(compact.riskCount) priority",
             systemImage: "flame",
             tip: RadarTip(
                 title: "Risk Queue",
@@ -37,6 +51,13 @@ struct OverviewQueuesSection: View {
                     .frame(maxWidth: .infinity, minHeight: 130)
             } else {
                 queueRows(rows, showsStopButton: true)
+                if compact.riskCount > rows.count {
+                    Button("Show all \(compact.riskCount)") { session.browseFamilies(filter: .review) }
+                        .buttonStyle(.link)
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .help("Open every family that needs review in Processes")
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
@@ -46,11 +67,11 @@ struct OverviewQueuesSection: View {
         let rows = Array(session.compactSnapshot.warmingRows.prefix(5))
         return CompactRadarSection(
             title: "Warming Up",
-            subtitle: "predictive",
+            subtitle: "early signs first",
             systemImage: "thermometer.medium",
             tip: RadarTip(
                 title: "Warming Up",
-                message: "The predictive queue: families whose trends say trouble is coming before any hard threshold is crossed — rising leak velocity, threshold ETAs, or recurring offenders. Catch them here and you never see them go hot."
+                message: "Families with an early sign of trouble come first, before any hard threshold is crossed: rising memory, sustained CPU, duplicates or a forgotten process tree. Below them are families that are only big, at a size that is usual for them; they never headline the Overview."
             ),
             accent: .orange
         ) {
@@ -195,6 +216,47 @@ private struct CompactFamilyQueueRow: View {
                 .opacity(isHovering && quickStop == nil ? 1 : 0)
         }
         .contentShape(Rectangle())
+    }
+}
+
+/// Stands in for both queues while neither has a row.
+private struct OverviewAllClearStrip: View {
+    let familyCount: Int
+    let hasSampled: Bool
+
+    private var detail: String {
+        familyCount == 0
+            ? "Nothing in the radar's scope is running"
+            : "\(familyCount) \(familyCount == 1 ? "family" : "families") watched"
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // No green seal before the first scan: nothing is known to be clear yet.
+            if hasSampled {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.title3)
+                    .foregroundStyle(.green.gradient)
+                    .accessibilityHidden(true)
+                Text("Nothing needs your attention")
+                    .font(.subheadline.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                RadarWaitLabel("Scanning your processes…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .radarSurface(tint: hasSampled ? .green : RadarTheme.brand, cornerRadius: 14)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(hasSampled ? "Risk Queue and Warming Up: nothing to review. \(detail)"
+                                       : "Risk Queue and Warming Up: scanning your processes")
     }
 }
 

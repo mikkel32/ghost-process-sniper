@@ -88,6 +88,70 @@ final class OverviewLayoutPlanTests: XCTestCase {
         XCTAssertEqual(tracker.update(thermalState: .normal, temperature: temperature, at: start.addingTimeInterval(40)), .normal)
     }
 
+    // MARK: - Queue layout: one slim strip while both queues are empty
+
+    func testAnEmptyFirstScanNeverShowsTwoEmptyCards() {
+        var tracker = OverviewQueueTracker()
+        XCTAssertEqual(tracker.layout, .allClear, "a calm console starts as the strip")
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, sampled: false, at: 0), .allClear)
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, sampled: true, at: 1), .allClear)
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, sampled: true, at: 100), .allClear)
+    }
+
+    func testAnyRowInEitherQueueShowsTheCardsAtOnce() {
+        var risk = OverviewQueueTracker()
+        XCTAssertEqual(queues(&risk, risk: 1, warming: 0, at: 0), .pair)
+        var warming = OverviewQueueTracker()
+        XCTAssertEqual(queues(&warming, risk: 0, warming: 3, at: 0), .pair)
+    }
+
+    /// A family hovering around Hot must not make the page jump under the
+    /// pointer: the cards hold for thirty seconds of consecutive calm.
+    func testTheCardsHoldForThirtySecondsOfCalmBeforeTheStripReturns() {
+        var tracker = OverviewQueueTracker()
+        XCTAssertEqual(queues(&tracker, risk: 2, warming: 1, at: 10), .pair)
+        for offset in stride(from: 11.0, through: 39, by: 4) {
+            XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: offset), .pair, "calm since t=11, at t=\(offset)")
+        }
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 40), .pair, "29 s of calm")
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 41), .allClear, "30 s of calm")
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 45), .allClear)
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 2, at: 46), .pair, "and a row brings the cards back at once")
+    }
+
+    func testARowRestartsTheCalmClock() {
+        var tracker = OverviewQueueTracker()
+        XCTAssertEqual(queues(&tracker, risk: 1, warming: 0, at: 0), .pair)
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 5), .pair)
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 20), .pair)
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 1, at: 30), .pair, "a row at t=30")
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 34), .pair)
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 47), .pair)
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 60), .pair, "26 s since t=34")
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 64), .allClear)
+    }
+
+    /// A hidden console stops updating, so a long gap says nothing about how
+    /// long the queues were empty.
+    func testAGapInUpdatesResetsTheCalmClock() {
+        var tracker = OverviewQueueTracker()
+        XCTAssertEqual(queues(&tracker, risk: 1, warming: 0, at: 0), .pair)
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 5), .pair)
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 25), .pair, "20 s gap: the clock starts over")
+        XCTAssertEqual(queues(&tracker, risk: 0, warming: 0, at: 45), .pair, "another gap")
+        var steady = OverviewQueueTracker()
+        XCTAssertEqual(queues(&steady, risk: 1, warming: 0, at: 0), .pair)
+        for offset in stride(from: 5.0, through: 29, by: 6) {
+            XCTAssertEqual(queues(&steady, risk: 0, warming: 0, at: offset), .pair)
+        }
+        XCTAssertEqual(queues(&steady, risk: 0, warming: 0, at: 35), .allClear, "30 s of updates at most 6 s apart")
+    }
+
+    private func queues(_ tracker: inout OverviewQueueTracker, risk: Int, warming: Int, sampled: Bool = true,
+                        at offset: TimeInterval) -> OverviewQueueLayout {
+        tracker.update(riskCount: risk, warmingCount: warming, hasSampled: sampled, at: start.addingTimeInterval(offset))
+    }
+
     /// The assessment at the last reading, from a window that recorded every reading as it came.
     private func assessment(after readings: [(offset: TimeInterval, celsius: Double)]) -> ThermalTemperatureAssessment {
         var window = ThermalObservationWindow()
