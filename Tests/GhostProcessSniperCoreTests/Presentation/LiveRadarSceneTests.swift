@@ -222,7 +222,7 @@ final class LiveRadarSceneTests: XCTestCase {
         XCTAssertFalse(history.record([input("a", .watch)], at: now.addingTimeInterval(5)), "nothing moved")
         XCTAssertTrue(history.record([input("a", .hot)], at: now.addingTimeInterval(10)))
         XCTAssertEqual(history.origin(of: "a"), input("a", .watch).distance)
-        // Still there, never moving: the heartbeat keeps its start inside the window.
+        // Still there, never moving: a mark every interval keeps its start inside the window.
         var later = now.addingTimeInterval(10)
         for _ in 0..<20 {
             later = later.addingTimeInterval(30)
@@ -232,5 +232,60 @@ final class LiveRadarSceneTests: XCTestCase {
         // Gone for the whole window: forgotten.
         XCTAssertTrue(history.record([], at: later.addingTimeInterval(LiveRadarHistory.window + 1)))
         XCTAssertNil(history.origin(of: "a"))
+    }
+
+    // MARK: - A trail that really remembers five minutes
+
+    /// Before, a mark was added whenever the distance moved a quantum, and
+    /// only the newest 24 were kept: a family whose heat wavers by a point
+    /// forgot its start within a minute, so "closing in" compared with a
+    /// recent, random sample instead of where it was five minutes ago.
+    func testAFamilyThatKeepsMovingStillRemembersItsStart() {
+        var history = LiveRadarHistory()
+        let calm = input("a", .hot, heat: 60), wavering = input("a", .hot, heat: 63)
+        XCTAssertNotEqual(calm.distance, wavering.distance, "a wobble the old rule marked on every scan")
+        for step in 0...100 {
+            history.record([step.isMultiple(of: 2) ? calm : wavering], at: now.addingTimeInterval(Double(step) * 2))
+        }
+        XCTAssertEqual(history.origin(of: "a"), calm.distance, "the start, 200 s ago")
+    }
+
+    /// The origin is the oldest mark inside the window: never older than
+    /// five minutes, and no younger than five minutes less one interval.
+    func testTheOriginIsWithinOneIntervalOfTheWindow() {
+        var history = LiveRadarHistory()
+        // One heat point every 20 s, recorded every 2 s: 58 climbs to 79, inside the Hot ring.
+        func heat(at seconds: Int) -> LiveRadarInput { input("a", .hot, heat: 58 + Double(seconds / 20)) }
+        var wrong: [Int] = []
+        for seconds in stride(from: 0, through: 430, by: 2) {
+            history.record([heat(at: seconds)], at: now.addingTimeInterval(Double(seconds)))
+            guard seconds >= 300 else { continue }
+            // Marks fall on multiples of ten seconds; the oldest one left is the first inside the window.
+            let oldest = (seconds - 300 + 9) / 10 * 10
+            if history.origin(of: "a") != heat(at: oldest).distance { wrong.append(seconds) }
+        }
+        XCTAssertEqual(wrong, [], "seconds at which the origin was not from 290-300 s earlier")
+    }
+
+    /// One mark per interval, however much the family moves: a busy family
+    /// no longer republishes the history on every scan.
+    func testAMovingFamilyIsRecordedOncePerInterval() {
+        var history = LiveRadarHistory()
+        var published = 0
+        for step in 0...10 {
+            if history.record([input("a", .hot, heat: step.isMultiple(of: 2) ? 60 : 63)], at: now.addingTimeInterval(Double(step) * 2)) {
+                published += 1
+            }
+        }
+        XCTAssertEqual(published, 3, "at 0, 10 and 20 s")
+    }
+
+    /// A clock that steps back would otherwise leave marks from "the future"
+    /// as the origin until it caught up.
+    func testAClockThatStepsBackStartsTheTrailOver() {
+        var history = LiveRadarHistory()
+        history.record([input("a", .hot)], at: now.addingTimeInterval(100))
+        history.record([input("a", .quiet)], at: now.addingTimeInterval(50))
+        XCTAssertEqual(history.origin(of: "a"), input("a", .quiet).distance)
     }
 }
