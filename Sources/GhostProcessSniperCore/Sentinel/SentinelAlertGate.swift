@@ -24,7 +24,11 @@ public struct SentinelAlertGate: Sendable {
     var rememberedIDCount: Int { seenIDs.count }
 
     /// New suspicious or dangerous running findings, and startup items that
-    /// appeared while Ghost was running, not alerted before.
+    /// appeared while Ghost was running, not alerted before. A dangerous
+    /// finding alerts even when its process has already exited: the spawn
+    /// watcher exists to catch commands that finish before the next scan, and
+    /// a one-shot stealer is over by the time anyone looks. An exited
+    /// suspicious one stays a card on the Security page.
     public mutating func alerts(for report: SentinelReport, now: Date) -> Alerts {
         lastAlerted = lastAlerted.filter { now.timeIntervalSince($0.value) < Self.cooldown }
         var alerts = Alerts()
@@ -33,7 +37,8 @@ public struct SentinelAlertGate: Sendable {
             // Per severity, so a finding that turns dangerous is news again.
             let id = "finding:\(finding.id)|\(finding.severity.rawValue)"
             present.insert(id)
-            guard finding.isRunning, finding.severity >= .suspicious, admit(id, key: Self.key(for: finding), now: now)
+            guard finding.isRunning || finding.severity == .dangerous, finding.severity >= .suspicious,
+                  admit(id, key: Self.key(for: finding), now: now)
             else { continue }
             alerts.findings.append(finding)
         }

