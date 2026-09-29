@@ -356,18 +356,27 @@ public enum GhostHeatModel {
 
 extension ProcessFamily {
     /// Big, perhaps, and nothing else: no sustained signal, no CPU, GPU or
-    /// leak component, no growth, a quiet or warming forecast, and not above
-    /// a trusted learned normal. Such a family is neither an incident nor a
+    /// leak component, no growth beyond a refill to its usual size, a quiet
+    /// or warming forecast, and not above a trusted learned normal. Such a family is neither an incident nor a
     /// reason to skip learning its normal: before, an app that was Hot only
     /// for its size was never learned, so it stayed Hot for good.
     var hasOnlySizeAgainstIt: Bool {
-        guard score.heat.sustainedSignalCount == 0, forecast.state <= .warming,
-              trend.credibleMemoryVelocity < 1, longTermTrend.persistentSlopeMegabytesPerMinute < 1,
+        guard score.heat.sustainedSignalCount == 0, forecast.state <= .warming, growthIsUsual(baseline: baseline),
               Self.componentsShowOnlySize(score.components)
         else { return false }
         guard let baseline, baseline.isMeasurementTrusted else { return true }
         let footprint = totalPhysicalFootprintBytes
         return !(baseline.memoryZScore(for: footprint) >= 3 && baseline.memoryMultiple(for: footprint) >= 1.3)
+    }
+
+    /// No proven growth, or only growth that takes a trusted family back to
+    /// a size that is usual for it. An app restarted or purged of its caches
+    /// refills for many minutes; before, any growth at all switched "large,
+    /// but normal for it" off, so it read as a problem until it was full.
+    func growthIsUsual(baseline: FamilyBaseline?) -> Bool {
+        let growth = max(trend.credibleMemoryVelocity, longTermTrend.persistentSlopeMegabytesPerMinute)
+        if growth < 1 { return true }
+        return baseline?.staysWithinUsualSize(footprint: totalPhysicalFootprintBytes, growthMegabytesPerMinute: growth) ?? false
     }
 
     /// Memory at or over its limit, and nothing else raised that is a
@@ -398,8 +407,7 @@ extension GhostHeatModel {
                           forecast: RiskForecast, sustained: Int, contextVotes: Int) -> Double? {
         guard let baseline, baseline.isMeasurementTrusted, sustained == 0, contextVotes == 0,
               forecast.state <= .warming, !(pressure.isKnown && pressure.level >= .warning),
-              family.trend.credibleMemoryVelocity < 1, family.longTermTrend.persistentSlopeMegabytesPerMinute < 1,
-              ProcessFamily.componentsShowOnlySize(family.score.components)
+              family.growthIsUsual(baseline: baseline), ProcessFamily.componentsShowOnlySize(family.score.components)
         else { return nil }
         let footprint = family.totalPhysicalFootprintBytes
         guard baseline.memoryZScore(for: footprint) < 2, baseline.memoryMultiple(for: footprint) < 1.3 else { return nil }
