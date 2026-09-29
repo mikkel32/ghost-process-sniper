@@ -197,6 +197,20 @@ public extension ThresholdSettings {
         return .balanced
     }
 
+    /// The paces the Refresh slider offers: the one-second watched pace the
+    /// scheduler never goes under, up to five. Both the slider and the
+    /// scheduler read it, so no position on the slider does nothing.
+    static let refreshIntervalRange: ClosedRange<TimeInterval> = 1...5
+
+    /// The on-screen pace `refreshInterval` asks for, held inside the range
+    /// the slider offers: settings saved when it still offered half a second,
+    /// or edited by hand, cannot ask for more or less than it does.
+    var watchedInterval: TimeInterval {
+        let range = Self.refreshIntervalRange
+        guard refreshInterval.isFinite else { return range.lowerBound }
+        return min(range.upperBound, max(range.lowerBound, refreshInterval))
+    }
+
     private static let mebibyte = 1_048_576.0
     private static let gibibyte = 1_073_741_824 as UInt64
 
