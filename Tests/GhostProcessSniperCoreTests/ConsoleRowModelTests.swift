@@ -94,6 +94,18 @@ final class ConsoleRowModelTests: XCTestCase {
         XCTAssertEqual(IncidentRowViewModel(incident: incident("climbing", memory: 1, seenAt: 1, leak: 247.4)).leakText, "247 MB/min")
     }
 
+    func testIncidentDurationHasNoDecimalSeparator() {
+        func duration(_ seconds: TimeInterval) -> String {
+            var episode = incident("episode", memory: 1, seenAt: 0)
+            episode.lastSeenAt = episode.startedAt.addingTimeInterval(seconds)
+            return IncidentRowViewModel(incident: episode).durationText
+        }
+        XCTAssertEqual(duration(45), "45 s")
+        XCTAssertEqual(duration(12 * 60), "12 min")
+        XCTAssertEqual(duration(96_840), "27 h", "26.9 hours must not need a decimal point that the reader's locale spells differently")
+        XCTAssertEqual(duration(2 * 3_600 + 5 * 60), "2 h 5 min")
+    }
+
     func testRevealSelectsTheOutermostAppBundle() {
         XCTAssertEqual(FinderReveal.path(forExecutable: "/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper"),
                        "/Applications/Visual Studio Code.app")

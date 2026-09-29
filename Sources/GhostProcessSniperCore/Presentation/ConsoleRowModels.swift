@@ -11,6 +11,7 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
     public let leakText: String
     public let occurrenceText: String
     public let timeRangeText: String
+    public let durationText: String
     public let reasons: [String]
     public let isActive: Bool
     /// Sort keys for table columns.
@@ -48,7 +49,14 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
         leakText = Self.growthText(incident.leakVelocityMegabytesPerMinute)
         occurrenceText = "\(incident.occurrenceCount)"
         timeRangeText = "\(incident.startedAt.formatted(date: .abbreviated, time: .shortened)) - \(incident.lastSeenAt.formatted(date: .abbreviated, time: .shortened))"
+        durationText = Self.durationText(of: incident)
         reasons = incident.reasons
+    }
+
+    /// Whole units only ("27 h", not "26.9h"), so no decimal separator can
+    /// disagree with the reader's locale.
+    private static func durationText(of incident: RadarIncident) -> String {
+        EnergyFormat.duration((incident.resolvedAt ?? incident.lastSeenAt).timeIntervalSince(incident.startedAt))
     }
 }
 

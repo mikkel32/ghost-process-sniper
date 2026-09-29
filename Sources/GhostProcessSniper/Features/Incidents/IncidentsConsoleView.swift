@@ -207,7 +207,7 @@ struct IncidentsConsoleView: View {
                         }
                         HStack(spacing: 8) {
                             RadarChip(title: "Score", value: "\(Int(incident.maxScore.rounded()))", systemImage: "gauge.with.dots.needle.67percent", level: incident.level)
-                            RadarChip(title: "Duration", value: incidentDuration(incident), systemImage: "clock")
+                            RadarChip(title: "Duration", value: row.durationText, systemImage: "clock")
                         }
                         FlowTags(title: "Why", items: incident.reasons)
                     }
@@ -239,18 +239,6 @@ struct IncidentsConsoleView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    private func incidentDuration(_ incident: RadarIncident) -> String {
-        let end = incident.resolvedAt ?? incident.lastSeenAt
-        let seconds = max(0, end.timeIntervalSince(incident.startedAt))
-        if seconds < 60 {
-            return "\(Int(seconds.rounded()))s"
-        }
-        if seconds < 3_600 {
-            return "\(Int((seconds / 60).rounded()))m"
-        }
-        return String(format: "%.1fh", seconds / 3_600)
     }
 
     private func detailLine(_ title: String, _ value: String) -> some View {
