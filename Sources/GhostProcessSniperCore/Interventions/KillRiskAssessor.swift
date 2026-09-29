@@ -30,7 +30,7 @@ public enum KillRiskSeverity: Int, Codable, Comparable, Sendable {
 
 public enum KillRiskKind: String, Codable, Sendable {
     case unsavedWork, dataIntegrity, stopsContainers, lockFile, partialInstall, interruptedBuild,
-         respawn, stopsSiblings, unloadsModels, freesPorts, orphaned, leavesChildren
+         respawn, stopsSiblings, unloadsModels, freesPorts, orphaned, leavesChildren, appHelper
 }
 
 public struct KillRisk: Identifiable, Equatable, Sendable {
@@ -203,12 +203,16 @@ public struct KillRiskAssessor: Sendable {
 
         if let supervisor {
             risks.append(Self.restartRisk(supervisor, launchdJob: workload.launchdJob))
-        } else if workload.parentIsLaunchd, workload.launchdJob == nil, !isAppMain,
+        } else if workload.parentIsLaunchd, workload.launchdJob == nil, !isAppMain, !rootPrint.isXPCService,
                   kind == .devServer || kind == .build || kind == .general {
             // Never for a launchd job, even one without KeepAlive: launchd
-            // started it on purpose, so it is no orphan.
+            // started it on purpose, so it is no orphan. Nor for an XPC
+            // service, which an app may start again whenever it needs it.
             risks.append(KillRisk(kind: .orphaned, severity: .info, title: "Orphaned",
                                   detail: "Its terminal or parent is gone, so nothing will restart it."))
+        }
+        if let helper = KillHelperContext(root: root, ancestors: workload.ancestors) {
+            risks.append(helper.risk)
         }
         if !ports.isEmpty {
             risks.append(KillRisk(kind: .freesPorts, severity: .info,
@@ -270,7 +274,9 @@ public struct KillRiskAssessor: Sendable {
                 return KillSupervisor(pid: ancestor.pid, name: print.supervisorName ?? ancestor.name, kind: kind)
             }
         }
-        if workload.parentIsLaunchd, rootPrint.isLaunchdManagedService {
+        // An XPC service sits under launchd too, but the app that uses it
+        // starts it on demand; launchd does not keep it alive.
+        if workload.parentIsLaunchd, rootPrint.isLaunchdManagedService, !rootPrint.isXPCService {
             return KillSupervisor(pid: nil, name: "launchd", kind: .launchd)
         }
         return nil
@@ -375,6 +381,10 @@ private struct Fingerprint {
         guard !executable.isEmpty, !executable.contains("/") else { return false }
         let nested = [".app/contents/frameworks/", "/contents/helpers/", ".app/contents/library/", "/contents/xpcservices/"]
         return !nested.contains(where: path.includes) && !name.includes("helper")
+    }
+
+    var isXPCService: Bool {
+        path.includes(".xpc/")
     }
 
     var isEditorApp: Bool {

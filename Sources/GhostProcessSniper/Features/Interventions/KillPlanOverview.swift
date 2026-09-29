@@ -219,6 +219,7 @@ struct KillRiskCard: View {
         case .freesPorts: "network"
         case .orphaned: "checkmark.circle"
         case .leavesChildren: "arrow.triangle.branch"
+        case .appHelper: "macwindow"
         }
     }
 }
