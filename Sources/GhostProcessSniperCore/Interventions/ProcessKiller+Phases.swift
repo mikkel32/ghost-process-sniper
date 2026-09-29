@@ -71,9 +71,6 @@ extension ProcessKiller {
             // for what an app left behind once it had gone.
             let appIsOpen = quitAccepted.map { app in live.contains { $0.pid == app } } ?? false
             var recipients = phase.isForce || !appIsOpen ? live : []
-            if appIsOpen, !phase.isForce, live.count > 1 {
-                noteHelpersLeftAlone(context: context, report: &report)
-            }
             if phase.reach == .rootOnly, !phase.isForce {
                 recipients = Self.rootAndOutsiders(of: recipients, tree: targets)
             }
@@ -164,11 +161,15 @@ extension ProcessKiller {
                              reportedLate: reportedLate, firstSignalAt: firstSignalAt)
     }
 
-    /// Says why an app's helpers were not sent the polite signal, once: they
-    /// stay for the sheet to explain, and for the user to force if they choose.
-    private func noteHelpersLeftAlone(context: KillPhaseContext, report: inout KillReport) {
+    /// Once the stop is over, says why an app still open has helpers running:
+    /// they were spared while it answers, and are the user's to force. Said at
+    /// the end, since only then is it known whether force was held back; an
+    /// app that stayed open through the grace wait is forced with its helpers.
+    func noteHelpersLeftAlone(context: KillPhaseContext, report: inout KillReport) {
         let note = KillReport.helpersLeftAloneNote(app: context.plan.displayName)
-        guard !report.notes.contains(note) else { return }
+        guard report.appStillOpen, report.survivorPIDs.count > 1,
+              !report.attempts.contains(where: { $0.stage == "forced" }),
+              !report.notes.contains(note) else { return }
         report.notes.append(note)
         appendEvent(.targetUpdated, operationID: context.operationID, message: note, report: &report, eventSink: context.eventSink)
     }

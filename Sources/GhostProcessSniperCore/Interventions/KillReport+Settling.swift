@@ -1,11 +1,9 @@
 import Foundation
 
-/// A report describes the moment its stop ended. What it lists as still
-/// running can end afterwards, most often an app whose save prompt the user
-/// answered once the wait was over. Settling brings the report up to date so
-/// "still open" is not left on screen, and a Force button not offered, for an
-/// app that has quit. It only changes the displayed report: the stop was
-/// learned from as it happened, and nothing is signalled.
+/// A report describes the moment its stop ended, and what it lists as still
+/// running can end afterwards: an app whose save prompt was answered once the
+/// wait was over. Settling brings the displayed report up to date, so an app
+/// that has quit is not left "still open"; nothing is ever signalled.
 public extension KillReport {
     /// This report once `exited` are known to be gone. Only processes it lists
     /// as survivors count, matched by identity, so a reused PID settles

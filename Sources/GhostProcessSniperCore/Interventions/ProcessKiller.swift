@@ -227,6 +227,7 @@ public final class ProcessKiller: Sendable {
                 exitedIdentities = Set(finalVerification.exited.map(\.identity))
             }
             report.appStillOpen = walk.quitAcceptedPID.map(report.survivorPIDs.contains) ?? false
+            noteHelpersLeftAlone(context: context, report: &report)
             let finished = report
             let results = (targets + walk.adopted).map {
                 outcomeClassifier.classify(target: $0, report: finished, exitedIdentities: exitedIdentities)

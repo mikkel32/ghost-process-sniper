@@ -35,7 +35,9 @@ struct RadarConsoleDetail: View {
                     )
                 } else if let remembered = session.recentStops[familyKey] {
                     // The family has left the scan, so whatever the stop
-                    // listed as still running is not: no stale "still open".
+                    // listed as still running is taken as gone: no stale
+                    // "still open". An approximation if a helper was
+                    // regrouped into another family.
                     let report = remembered.settlingSurvivors()
                     RecentStopView(
                         report: report,

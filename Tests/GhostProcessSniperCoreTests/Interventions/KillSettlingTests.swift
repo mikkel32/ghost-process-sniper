@@ -53,6 +53,9 @@ final class KillSettlingTests: XCTestCase {
         XCTAssertFalse(settled.notes.contains(KillReport.helpersLeftAloneNote(app: "Pages")), "nothing is answering any more")
         XCTAssertFalse(settled.succeeded)
         XCTAssertTrue(settled.narrative.headline.contains("Pages Helper (PID 301) is still running"), settled.narrative.headline)
+        let next = settled.nextStep ?? ""
+        XCTAssertFalse(next.contains("save prompt"), "nothing is waiting on the user once the app has gone: \(next)")
+        XCTAssertTrue(next.contains("Check again"), next)
     }
 
     func testAHelperThatExitsFirstLeavesTheAppOpen() {
