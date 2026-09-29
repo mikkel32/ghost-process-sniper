@@ -102,6 +102,50 @@ final class IncidentEpisodeTests: XCTestCase {
         XCTAssertEqual(context.recentIncidentCounts[hot.signature.id], 1)
     }
 
+    func testGapLongerThanTenMinutesEndsTheEpisodeBeforeItContinues() async throws {
+        let store = makeStore()
+        try await persist([family(level: .hot, at: at(0))], store: store, at: at(0))
+        try await persist([family(level: .hot, at: at(3))], store: store, at: at(3))
+        // The Mac slept: no scan for an hour, then the family is still hot.
+        try await persist([family(level: .hot, at: at(3_603))], store: store, at: at(3_603))
+
+        let incidents = try await store.recentIncidents()
+        XCTAssertEqual(incidents.count, 2, "an hour nobody watched is not part of the episode")
+        let fresh = try XCTUnwrap(incidents.first)
+        let old = try XCTUnwrap(incidents.last)
+        XCTAssertNil(fresh.resolvedAt)
+        XCTAssertEqual(fresh.startedAt, at(3_603))
+        XCTAssertEqual(old.resolvedAt, at(3), "the old episode ends at its last sighting")
+        XCTAssertEqual(old.lastSeenAt, at(3))
+        let hot = family(level: .hot, at: at(3_606))
+        let context = try await store.context(for: [hot], settings: .smart, now: at(3_606))
+        XCTAssertEqual(context.recentIncidentCounts[hot.signature.id], 1, "the ended episode counts as a past one")
+    }
+
+    func testGapBetweenNinetySecondsAndTenMinutesReopensAndCountsAHit() async throws {
+        let store = makeStore()
+        try await persist([family(level: .hot, at: at(0))], store: store, at: at(0))
+        try await persist([family(level: .hot, at: at(3))], store: store, at: at(3))
+        try await persist([family(level: .hot, at: at(303))], store: store, at: at(303))
+
+        let incidents = try await store.recentIncidents()
+        XCTAssertEqual(incidents.count, 1)
+        XCTAssertEqual(incidents.first?.occurrenceCount, 2, "five minutes unobserved is a second hit on the same row")
+        XCTAssertEqual(incidents.first?.startedAt, at(0))
+        XCTAssertNil(incidents.first?.resolvedAt)
+    }
+
+    func testMutedFamilyEndsItsEpisodeAtAGapToo() async throws {
+        let store = makeStore()
+        try await persist([family(level: .hot, at: at(0))], store: store, at: at(0))
+        try await persist([family(level: .hot, at: at(3))], store: store, at: at(3))
+        try await persist([family(level: .hot, alert: .snoozed, at: at(3_603))], store: store, at: at(3_603))
+
+        let incidents = try await store.recentIncidents()
+        XCTAssertEqual(incidents.count, 1, "a snoozed family starts no episode")
+        XCTAssertEqual(incidents.first?.resolvedAt, at(3), "the hour before it was snoozed is not part of the episode")
+    }
+
     func testIgnoredFamilyKeepsItsEpisodeAliveWithoutWriting() async throws {
         let store = makeStore()
         try await persist([family(level: .hot, at: at(0))], store: store, at: at(0))

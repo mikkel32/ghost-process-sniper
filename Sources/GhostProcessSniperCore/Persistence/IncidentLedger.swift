@@ -164,6 +164,22 @@ final class IncidentLedger {
             }
         }
 
+        // Close first, before this scan counts as activity. Scans are seconds apart, so
+        // a gap of `closeAfter` or more is time Ghost did not observe (a sleeping
+        // Mac): a family that is hot again must find its old episode already
+        // ended at its last sighting, not stretched across the gap. A return
+        // within `reopenWindow` then reopens it as a hit; a later one starts a
+        // new row, as after a relaunch.
+        for (signatureID, open) in episodes.open where date.timeIntervalSince(open.lastActiveAt) >= Self.closeAfter {
+            queueClose(open)
+            stagedCountChanges.insert(signatureID)
+            episodes.open[signatureID] = nil
+            episodes.recentlyClosed[signatureID] = ClosedIncident(id: open.id, resolvedAt: open.lastActiveAt, peak: open.peak)
+        }
+        episodes.recentlyClosed = episodes.recentlyClosed.filter {
+            date.timeIntervalSince($0.value.resolvedAt) < Self.reopenWindow
+        }
+
         for signatureID in order {
             guard let family = representatives[signatureID] else { continue }
             if family.alertState.kind == .ignored || family.alertState.kind == .snoozed {
@@ -183,15 +199,6 @@ final class IncidentLedger {
             }
         }
 
-        for (signatureID, open) in episodes.open where date.timeIntervalSince(open.lastActiveAt) >= Self.closeAfter {
-            queueClose(open)
-            stagedCountChanges.insert(signatureID)
-            episodes.open[signatureID] = nil
-            episodes.recentlyClosed[signatureID] = ClosedIncident(id: open.id, resolvedAt: open.lastActiveAt, peak: open.peak)
-        }
-        episodes.recentlyClosed = episodes.recentlyClosed.filter {
-            date.timeIntervalSince($0.value.resolvedAt) < Self.reopenWindow
-        }
         staged = episodes
     }
 
