@@ -27,16 +27,16 @@ public struct EnergyHeadline: Equatable, Sendable {
             if let minutes = battery.minutesRemaining {
                 return "About \(EnergyFormat.duration(minutes * 60)) of battery left"
             }
-            return battery.chargePercent.map { "On battery \u{00B7} \(Int($0.rounded()))%" } ?? "On battery"
+            return battery.chargePercent.map { "On battery · \(Int($0.rounded()))%" } ?? "On battery"
         }
         guard let charge = battery.chargePercent else {
             return battery.drawWatts.map { "Drawing \(EnergyFormat.watts($0))" } ?? "Energy use"
         }
         let percent = Int(charge.rounded())
         return switch battery.powerState {
-        case .charging: "Charging \u{00B7} \(percent)%"
-        case .drainingOnPower: "Draining while plugged in \u{00B7} \(percent)%"
-        default: "Plugged in, not charging \u{00B7} \(percent)%"
+        case .charging: "Charging · \(percent)%"
+        case .drainingOnPower: "Draining while plugged in · \(percent)%"
+        default: "Plugged in, not charging · \(percent)%"
         }
     }
 
