@@ -42,6 +42,29 @@ enum ShellRole {
         return false
     }
 
+    /// The script a shell runs, as typed: `bash ./build.sh --release` names ./build.sh. A login
+    /// shell, `-c`, `-i` and a shell with no operand are a command string or a prompt, not a
+    /// script. Options that take a word (`-o pipefail`, `--rcfile file`) do not hand it over,
+    /// which `runsCommand` does not check. The command line joins argv with single spaces,
+    /// so a script path that contains spaces reads short.
+    static func scriptOperand(_ shell: ProcessMetrics) -> String? {
+        guard isShell(shell.name), !shell.name.hasPrefix("-") else { return nil }
+        var words = shell.commandLine.split(whereSeparator: \.isCommandWhitespace).dropFirst()
+        while let word = words.popFirst() {
+            if word == "--" { return words.first.map(String.init) }
+            guard word.hasPrefix("-") || word.hasPrefix("+") else { return String(word) }
+            if word == "--rcfile" || word == "--init-file" {
+                _ = words.popFirst()
+                continue
+            }
+            if word.hasPrefix("--") { continue }
+            let flags = word.dropFirst()
+            if flags.contains("c") || flags.contains("i") { return nil }
+            if flags.last == "o" || flags.last == "O" { _ = words.popFirst() }
+        }
+        return nil
+    }
+
     private static func bareName(_ name: String) -> String {
         let lower = name.lowercased()
         return lower.hasPrefix("-") ? String(lower.dropFirst()) : lower

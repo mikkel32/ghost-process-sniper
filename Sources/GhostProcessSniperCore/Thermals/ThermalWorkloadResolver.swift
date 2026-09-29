@@ -158,16 +158,26 @@ struct ThermalWorkloadResolver {
         var visited: Set<Int32> = [process.pid]
         var hops = 0
         var root = process
+        // The script's own shell is part of its job, so it is named like the tools it runs.
+        var script: ProcessMetrics? = isScript(process) ? process : nil
         while let parent = parent(of: root, visited: &visited, hops: &hops) {
             if isRecipeShell(parent) {
                 root = parent
                 continue
             }
             if Self.isShell(parent.name) {
+                // A script run from a prompt is the job its tools belong to, however many it runs one
+                // after another; nested scripts climb to the outermost. Named after each tool, every
+                // step would be a new job that never builds up history.
+                if isScript(parent) {
+                    script = parent
+                    root = parent
+                    continue
+                }
                 let enclosing = enclosingApp(above: parent, visited: &visited, hops: &hops)
                 // An Xcode run-script phase goes through a shell of its own, and stays Xcode's.
                 if let bundle, enclosing == bundle { return appAssignment(bundle) }
-                return Self.job(root: root, host: enclosing.flatMap(Self.terminalName), kind: .job)
+                return Self.job(root: root, host: enclosing.flatMap(Self.terminalName), kind: .job, script: script)
             }
             if let app = Self.applicationPath(parent.executablePath) {
                 // Xcode's tools (xcodebuild, swift-build, make) start more of them, so the climb
@@ -201,7 +211,15 @@ struct ThermalWorkloadResolver {
             }
             return appAssignment(app)
         }
-        return Self.job(root: root, host: nil, kind: root.identity == process.identity ? .process : .job)
+        return Self.job(root: root, host: nil, kind: root.identity == process.identity ? .process : .job, script: script)
+    }
+
+    /// A shell running a script that someone started from a prompt: its parent is an interactive
+    /// shell or session host (a recycled pid is not one).
+    private func isScript(_ shell: ProcessMetrics) -> Bool {
+        guard ShellRole.scriptOperand(shell) != nil, let outer = processesByPID[shell.parentPID],
+              ShellRole.isShell(outer.name) || ShellRole.isSessionHost(outer.name) else { return false }
+        return Self.startedNoLater(outer.identity, than: shell.identity)
     }
 
     /// The app macOS holds responsible for a launchd-started process, unless its pid was
@@ -256,11 +274,18 @@ struct ThermalWorkloadResolver {
         return assignment
     }
 
-    private static func job(root: ProcessMetrics, host: String?, kind: ThermalWorkloadKind) -> ThermalWorkloadAssignment {
+    /// A job is named after the process that started it, or after the script when that is the root.
+    private static func job(root: ProcessMetrics, host: String?, kind: ThermalWorkloadKind,
+                            script: ProcessMetrics? = nil) -> ThermalWorkloadAssignment {
         let identity = root.identity
+        var name = root.name
+        if let script, script.identity == identity, let operand = ShellRole.scriptOperand(script) {
+            let file = PathText.lastComponent(operand[...])
+            if !file.isEmpty { name = String(file) }
+        }
         return ThermalWorkloadAssignment(
             groupKey: "job:\(identity.pid):\(identity.startTimeSeconds).\(identity.startTimeMicroseconds)",
-            displayName: root.name, applicationPath: nil, hostAppName: host, kind: kind)
+            displayName: name, applicationPath: nil, hostAppName: host, kind: kind)
     }
 
     /// A parent that started after its child is a recycled PID, not the real parent.

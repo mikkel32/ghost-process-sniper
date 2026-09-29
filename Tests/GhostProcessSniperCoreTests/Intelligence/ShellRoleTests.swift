@@ -23,6 +23,30 @@ final class ShellRoleTests: XCTestCase {
         }
     }
 
+    /// `bash ./build.sh` at a prompt is a script; a login shell, `-c`, `-i` and a
+    /// bare shell are not, and options that take a word must not hand it over.
+    func testAScriptOperandIsTheFirstWordThatIsNotAnOption() {
+        let scripts: [(String, String)] = [
+            ("bash ./a.sh", "./a.sh"), ("/bin/bash -e ./scripts/build.sh --release", "./scripts/build.sh"),
+            ("bash -o pipefail ./a.sh", "./a.sh"), ("bash -eo pipefail ./a.sh", "./a.sh"),
+            ("bash -O extglob ./a.sh", "./a.sh"), ("zsh +o nomatch ./a.zsh", "./a.zsh"),
+            ("sh -- ./a.sh", "./a.sh"), ("sh -x build.sh -c 1", "build.sh")
+        ]
+        for (command, operand) in scripts {
+            let name = String(command.split(separator: " ")[0].split(separator: "/").last!)
+            XCTAssertEqual(ShellRole.scriptOperand(shell(name, command)), operand, command)
+        }
+        let notScripts: [(String, String)] = [
+            ("-zsh", "-zsh"), ("zsh", "zsh"), ("zsh", "/bin/zsh -l"), ("bash", "bash --login"), ("bash", "bash -i"),
+            ("bash", "bash -i -c ls"), ("bash", "bash -c make"), ("zsh", "zsh -lc npm run build"), ("sh", "sh -ec make -C sub"),
+            ("bash", "bash --rcfile /tmp/rc"), ("bash", "bash --init-file /tmp/rc -i"), ("bash", "bash -o pipefail"),
+            ("tmux", "tmux new -s work"), ("python3", "python3 build.py")
+        ]
+        for (name, command) in notScripts {
+            XCTAssertNil(ShellRole.scriptOperand(shell(name, command)), command)
+        }
+    }
+
     func testOnlyAToolsShellIsARecipeShell() {
         let recipe = shell("sh", "/bin/sh -c cc -c a.c")
         let make = Fixture.process(pid: 600, name: "make", path: "/usr/bin/make", command: "make -j8")

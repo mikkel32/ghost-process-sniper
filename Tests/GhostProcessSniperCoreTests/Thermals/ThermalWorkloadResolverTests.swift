@@ -307,6 +307,67 @@ final class ThermalWorkloadResolverTests: XCTestCase {
         XCTAssertEqual(assignment.groupKey, "job:631:2000199000.0")
     }
 
+    // MARK: - Shell scripts
+
+    /// `bash ./build.sh` typed at a prompt is one job named after the script. Its
+    /// tools run one after another, and a job per tool never built up any history.
+    func testShellScriptStepsAreOneJobNamedAfterTheScript() throws {
+        var history = ThermalActivityHistory()
+        var current = ThermalActivitySummary.empty
+        for (index, tool) in ["clang", "ld"].enumerated() {
+            let date = now.addingTimeInterval(Double(index) * 10)
+            let script = process(603, parent: 602, name: "bash", path: "/bin/bash", cpu: 0, at: date,
+                                 command: "bash ./scripts/build.sh --release")
+            let step = process(Int32(700 + index), parent: 603, name: tool, path: "/usr/bin/\(tool)", cpu: 180,
+                               start: 2_000_199_000 + UInt64(index * 10), at: date)
+            let summary = ThermalActivityAnalyzer.project(processes: terminalShell(at: date) + [script, step],
+                                                          families: [], now: date, processorCount: 10)
+            let job = try XCTUnwrap(summary.contributors.first)
+            XCTAssertEqual(summary.contributors.count, 1)
+            XCTAssertEqual(job.id, "job:603:2000199000.0")
+            XCTAssertEqual(job.displayName, "build.sh")
+            XCTAssertEqual(job.kind, .job)
+            XCTAssertEqual(job.hostAppName, "Terminal")
+            XCTAssertEqual(job.processCount, 2)
+            current = history.record(summary, at: date)
+        }
+        XCTAssertEqual(current.recentContributors.count, 1)
+        XCTAssertEqual(current.recentContributors.first?.activeSampleCount, 2)
+    }
+
+    func testNestedScriptsClimbToTheOutermostAndAPromptShellIsNotAScript() throws {
+        let nested = projection(terminalShell() + [
+            process(603, parent: 602, name: "bash", path: "/bin/bash", cpu: 0, command: "bash ./ci.sh"),
+            process(604, parent: 603, name: "bash", path: "/bin/bash", cpu: 0, command: "/bin/bash ./scripts/build.sh"),
+            process(700, parent: 604, name: "clang", path: "/usr/bin/clang", cpu: 95)
+        ])
+        XCTAssertEqual(nested.contributors.map(\.id), ["job:603:2000199000.0"])
+        XCTAssertEqual(nested.contributors.first?.displayName, "ci.sh")
+        XCTAssertEqual(nested.contributors.first?.processCount, 3)
+
+        // A command string or a prompt someone opened is a boundary, and the tool is the job.
+        let command = projection(terminalShell() + [
+            process(603, parent: 602, name: "bash", path: "/bin/bash", cpu: 0, command: "bash -c make"),
+            process(604, parent: 603, name: "make", path: "/usr/bin/make", cpu: 1),
+            process(700, parent: 604, name: "clang", path: "/usr/bin/clang", cpu: 95)
+        ])
+        XCTAssertEqual(command.contributors.map(\.id), ["job:604:2000199000.0"])
+        XCTAssertEqual(command.contributors.first?.displayName, "make")
+        let prompt = projection(terminalShell() + [
+            process(603, parent: 602, name: "bash", path: "/bin/bash", cpu: 0, command: "bash --rcfile /tmp/rc"),
+            process(700, parent: 603, name: "python3", path: "/usr/bin/python3", cpu: 95)
+        ])
+        XCTAssertEqual(prompt.contributors.map(\.id), ["job:700:2000199000.0"])
+        XCTAssertEqual(prompt.contributors.first?.displayName, "python3")
+    }
+
+    /// A script nothing above it explains keeps the shell's name and its process kind.
+    func testALoneScriptShellKeepsItsName() {
+        let result = projection([process(800, parent: 1, name: "bash", path: "/bin/bash", cpu: 90, command: "bash ./x.sh")])
+        XCTAssertEqual(result.contributors.first?.displayName, "bash")
+        XCTAssertEqual(result.contributors.first?.kind, .process)
+    }
+
     // MARK: - Xcode's command-line tools
 
     /// With Xcode selected, the xcrun shims for swift, clang, git, make and python3 run
