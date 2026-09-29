@@ -70,16 +70,20 @@ enum IntelligenceFixture {
     }
 
     /// Builds and scores one tick through the real builder and intelligence.
+    /// `processorCount` pins the core count the CPU limits scale by; nil is this Mac's.
     static func scored(
         _ processes: [ProcessMetrics],
         settings: ThresholdSettings = .smart,
         context: RadarContext = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []),
+        processorCount: Int? = nil,
         window: inout TrendWindow,
         at date: Date = now
     ) -> [ProcessFamily] {
-        let builder = ProcessFamilyBuilder(currentUserID: 501)
+        let cores = processorCount ?? ProcessInfo.processInfo.activeProcessorCount
+        let builder = ProcessFamilyBuilder(currentUserID: 501, processorCount: cores)
+        let intelligence = RadarIntelligence(forecaster: FamilyRiskForecaster(processorCount: cores))
         return builder.buildFamilies(from: processes, settings: settings, trendWindow: &window, now: date)
-            .map { RadarIntelligence().enrich(family: $0, context: context, settings: settings, now: date) }
+            .map { intelligence.enrich(family: $0, context: context, settings: settings, now: date) }
     }
 
     /// Deterministic ±amplitude jitter (a 64-bit LCG), so noisy fixtures replay exactly.

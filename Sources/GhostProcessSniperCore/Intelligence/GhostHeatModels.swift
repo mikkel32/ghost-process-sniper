@@ -431,4 +431,13 @@ struct BaselineCPUAnomaly {
             evidence = "CPU is \(RadarFormat.fixed1(multiple))x this family's learned normal"
         }
     }
+
+    /// Hot only when the burst is heavy for this Mac as well as for the family:
+    /// at least half the core-aware family CPU limit. 61% of one core is 20x a
+    /// chat app's usual 3%, but on a ten-core Mac it is a seventh of the limit.
+    /// A Hot component of its own kind stops a big app at its usual size being
+    /// read as normal, so a small burst is a Watch, with the same text and heat.
+    func level(cpuPercent: Double, familyLimit: Double) -> GhostLevel {
+        multiple >= 5 && cpuPercent >= familyLimit * 0.5 ? .hot : .watch
+    }
 }

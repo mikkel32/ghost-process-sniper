@@ -1,7 +1,7 @@
 import Foundation
 
 public struct FamilyRiskForecaster: Sendable {
-    private let processorCount: Int
+    let processorCount: Int
     private let physicalMemoryBytes: UInt64
 
     /// Tests pass a fixed core count and RAM; the Mac's own are the default.
