@@ -183,6 +183,7 @@ struct KillResultPanel: View {
                         Button("Stop It Too") { stopLeftRunning(target) }
                             .controlSize(.small)
                             .disabled(isBusy)
+                            .accessibilityLabel("Stop \(target.name), PID \(String(target.pid)), too")
                     }
                 }
             }
