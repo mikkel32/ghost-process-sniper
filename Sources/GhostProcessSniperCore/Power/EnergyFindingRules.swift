@@ -27,8 +27,7 @@ struct EnergyFindingRules: Sendable {
     private var since: [String: Date] = [:]
 
     mutating func evaluate(
-        consumers: [EnergyConsumer], blockers: [SleepBlocker], battery: BatteryOutlook?,
-        classifications: [String: DevProcessKind], now: Date
+        consumers: [EnergyConsumer], blockers: [SleepBlocker], battery: BatteryOutlook?, now: Date
     ) -> [EnergyFinding] {
         var findings: [EnergyFinding] = []
         let byID = Dictionary(consumers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -38,10 +37,9 @@ struct EnergyFindingRules: Sendable {
                 findings.append(finding)
             }
         }
-        for consumer in consumers where consumer.isRunning && !consumer.isSystem {
+        for consumer in consumers where Self.judges(consumer) {
             if let finding = wakeups(consumer, battery: battery, now: now) { findings.append(finding) }
-            let kind = consumer.familyKey.flatMap { classifications[$0] }
-            if let finding = diskWrites(consumer, kind: kind, now: now) { findings.append(finding) }
+            if let finding = diskWrites(consumer, now: now) { findings.append(finding) }
             if let finding = drain(consumer, battery: battery, now: now) { findings.append(finding) }
         }
         let live = Set(findings.map(\.id))
@@ -57,6 +55,30 @@ struct EnergyFindingRules: Sendable {
 
     private func threshold(_ value: Double, _ id: String) -> Double {
         active(id) ? value * Self.hysteresis : value
+    }
+
+    // MARK: - What each rule looks at
+    // The Energy rows colour a figure with these same tests, so an orange figure and a
+    // finding cannot disagree. `holding` is the lower threshold of a finding that is showing.
+
+    /// Running work that is not macOS's own: the groups the rules judge.
+    static func judges(_ consumer: EnergyConsumer) -> Bool { consumer.isRunning && !consumer.isSystem }
+
+    /// A process wakes the processor above macOS's limit while its group is nearly idle. The limit is per
+    /// process, so the busiest member is judged, not the group's sum.
+    static func wakesProcessor(_ consumer: EnergyConsumer, holding: Bool = false) -> Bool {
+        guard judges(consumer), let busiest = consumer.busiestWakeups, consumer.observedSeconds >= 240,
+              consumer.averageCores < wakeupCoreLimit else { return false }
+        return busiest.perSecond >= wakeupsPerSecond * (holding ? hysteresis : 1)
+    }
+
+    /// The group has written at a sustained heavy rate, over ten minutes. Builds, databases and VMs
+    /// write for a living and have a much higher limit.
+    static func writesToDisk(_ consumer: EnergyConsumer, holding: Bool = false) -> Bool {
+        guard judges(consumer), consumer.knownSource == nil, consumer.tenMinuteObservedSeconds >= 480 else { return false }
+        let expected = consumer.devKind.map { expectedWriters.contains($0) } ?? false
+        let limit = expected ? heavyDiskBytesPerSecond : diskBytesPerTenMinutes / 600
+        return consumer.tenMinuteDiskWriteBytesPerSecond >= limit * (holding ? hysteresis : 1)
     }
 
     private mutating func finding(
@@ -104,12 +126,9 @@ struct EnergyFindingRules: Sendable {
 
     private mutating func wakeups(_ consumer: EnergyConsumer, battery: BatteryOutlook?, now: Date) -> EnergyFinding? {
         let id = "\(EnergyFindingKind.wakeups.rawValue)|\(consumer.id)"
-        // macOS's limit is per process, so the busiest member is judged, not the app's sum.
-        guard let busiest = consumer.busiestWakeups, consumer.observedSeconds >= 240,
-              busiest.perSecond >= threshold(Self.wakeupsPerSecond, id) else { return nil }
+        guard let busiest = consumer.busiestWakeups, Self.wakesProcessor(consumer, holding: active(id)) else { return nil }
         let rate = busiest.perSecond
         let cores = consumer.averageCores
-        guard cores < Self.wakeupCoreLimit else { return nil }
         let name = consumer.displayName
         let severity: EnergyFindingSeverity = rate >= Self.busyWakeupsPerSecond ||
             (battery?.isDischarging == true && rate >= 2 * Self.wakeupsPerSecond) ? .attention : .notable
@@ -125,14 +144,10 @@ struct EnergyFindingRules: Sendable {
                        advice: advice, now: now)
     }
 
-    private mutating func diskWrites(_ consumer: EnergyConsumer, kind: DevProcessKind?, now: Date) -> EnergyFinding? {
-        guard consumer.knownSource == nil else { return nil }
+    private mutating func diskWrites(_ consumer: EnergyConsumer, now: Date) -> EnergyFinding? {
         let id = "\(EnergyFindingKind.heavyDiskWrites.rawValue)|\(consumer.id)"
+        guard Self.writesToDisk(consumer, holding: active(id)) else { return nil }
         let rate = consumer.tenMinuteDiskWriteBytesPerSecond
-        guard consumer.tenMinuteObservedSeconds >= 480 else { return nil }
-        let expected = kind.map { Self.expectedWriters.contains($0) } ?? false
-        let limit = expected ? Self.heavyDiskBytesPerSecond : Self.diskBytesPerTenMinutes / 600
-        guard rate >= threshold(limit, id) else { return nil }
         let name = consumer.displayName
         let perHour = EnergyFormat.bytes(rate * 3_600)
         let advice = consumer.kind == .job || consumer.kind == .process

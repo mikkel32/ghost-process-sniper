@@ -17,6 +17,8 @@ public struct EnergyConsumer: Identifiable, Equatable, Sendable {
     public let hostAppName: String?
     /// The radar family to open or stop; nil for processes no family owns.
     public let familyKey: String?
+    /// What the radar classified that family as (a build, a database, a test runner…), when it did.
+    public let devKind: DevProcessKind?
     public let isSystem: Bool
     /// Processes running now; zero once the group has exited.
     public let processCount: Int
@@ -48,6 +50,23 @@ public struct EnergyConsumer: Identifiable, Equatable, Sendable {
         return nil
     }
     public var canInspectFamily: Bool { familyKey != nil }
+
+    /// A "Wakes the processor" finding would apply now, so the row's figure is coloured only when it means that:
+    /// one process is over macOS's limit while the group is nearly idle. The figure itself is the group's sum.
+    public var wakesProcessorTooOften: Bool { EnergyFindingRules.wakesProcessor(self) }
+
+    /// A "Writing to disk" finding would apply now.
+    public var writesTooMuch: Bool { EnergyFindingRules.writesToDisk(self) }
+
+    /// What the wake-ups figure means, for its tooltip; nil until a process has been averaged long enough.
+    public var wakeupsNote: String? {
+        guard let busiest = busiestWakeups else { return nil }
+        let limit = RadarFormat.fixed0(EnergyFindingRules.wakeupsPerSecond)
+        let meaning = "Orange means one process passes macOS\u{2019}s limit of \(limit) wake-ups a second while \(displayName) uses under a quarter of a core."
+        // Alone, the sum is the busiest process and naming it would only repeat the figure.
+        guard processCount > 1 else { return meaning }
+        return "Busiest process: \(busiest.name), \(EnergyFormat.rate(busiest.perSecond)). " + meaning
+    }
 }
 
 /// Something keeping the Mac (or its display) from sleeping.
@@ -194,6 +213,12 @@ public struct EnergyReport: Equatable, Sendable {
         self.unmeasuredProcessCount = unmeasuredProcessCount
         self.families = families
         self.today = today
+    }
+
+    /// Whether a finding of `kind` names this family, so its page can colour the figure the finding is about.
+    /// A family's own figures are sums over its processes, which the per-process rules do not judge.
+    public func hasFinding(_ kind: EnergyFindingKind, familyKey: String) -> Bool {
+        findings.contains { $0.kind == kind && $0.familyKey == familyKey }
     }
 
     public func consumer(id: String) -> EnergyConsumer? {

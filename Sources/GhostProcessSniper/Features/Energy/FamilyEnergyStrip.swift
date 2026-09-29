@@ -3,7 +3,9 @@ import SwiftUI
 
 /// A family's energy, wake-ups and disk writes, averaged over about a
 /// minute, and whether it keeps the Mac awake. Only this strip observes the
-/// energy report on a family page.
+/// energy report on a family page. Wake-ups and writes are the family's
+/// totals; their chips are marked only while a finding of that kind names the
+/// family, because the rules judge one process (and exempt builds), not a sum.
 struct FamilyEnergyStrip: View {
     let monitor: ProcessMonitor
     let familyKey: String
@@ -16,9 +18,9 @@ struct FamilyEnergyStrip: View {
                     chip("Energy", EnergyFormat.watts(figures.watts), "bolt.fill", figures.watts >= 2 ? .watch : .quiet)
                 }
                 chip("Wake-ups", EnergyFormat.rate(figures.wakeupsPerSecond), "alarm",
-                     figures.wakeupsPerSecond >= 150 ? .watch : .quiet)
+                     report.hasFinding(.wakeups, familyKey: familyKey) ? .watch : .quiet)
                 chip("Disk writes", EnergyFormat.bytes(figures.diskWriteBytesPerSecond) + "/s", "internaldrive",
-                     figures.diskWriteBytesPerSecond >= 1_800_000 ? .watch : .quiet)
+                     report.hasFinding(.heavyDiskWrites, familyKey: familyKey) ? .watch : .quiet)
                 chip("Sleep", sleepText(figures.keepsAwake), "moon.zzz", figures.keepsAwake == nil ? .quiet : .watch)
             }
         }

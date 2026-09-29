@@ -71,8 +71,7 @@ struct EnergyMonitor: Sendable {
                                           families: families, now: now)
         let consumers = builder.consumers()
         let blockers = builder.blockers(assertions)
-        let findings = rules.evaluate(consumers: consumers, blockers: blockers, battery: outlook,
-                                      classifications: builder.classifications, now: now)
+        let findings = rules.evaluate(consumers: consumers, blockers: blockers, battery: outlook, now: now)
         updateFamilies(families, blockers: blockers, now: now)
         let host = ledger.hostWindow(minutes: 5)
         return EnergyReport(

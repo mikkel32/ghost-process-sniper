@@ -15,8 +15,8 @@ struct EnergyReportBuilder {
     let processes: [ProcessMetrics]
     let families: [ProcessFamily]
     let now: Date
-    /// Each family's workload kind, by family key, for finding rules.
-    let classifications: [String: DevProcessKind]
+    /// Each family's workload kind, by family key; a consumer carries its family's as `devKind`.
+    private let classifications: [String: DevProcessKind]
     private let processesByPID: [Int32: ProcessMetrics]
 
     init(ledger: EnergyLedger, battery: BatteryOutlook?, processes: [ProcessMetrics],
@@ -64,6 +64,7 @@ struct EnergyReportBuilder {
                 applicationPath: group.assignment.applicationPath,
                 hostAppName: group.assignment.hostAppName,
                 familyKey: group.familyKey,
+                devKind: group.familyKey.flatMap { classifications[$0] },
                 isSystem: isSystem(group),
                 processCount: group.processCount,
                 wattsNow: group.currentWatts,

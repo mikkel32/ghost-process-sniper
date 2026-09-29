@@ -79,10 +79,12 @@ struct EnergyConsumerRow: View {
                 }
                 .frame(width: 76, alignment: .trailing)
             }
+            // Orange means a finding would show: the figures are sums, the rules judge one process (wake-ups)
+            // or a ten-minute rate that builds and databases are exempt from (writes).
             metric(EnergyFormat.rate(consumer.wakeupsPerSecond), caption: "wake-ups",
-                   highlighted: consumer.wakeupsPerSecond >= 150)
+                   highlighted: consumer.wakesProcessorTooOften, help: consumer.wakeupsNote)
             metric(EnergyFormat.bytes(consumer.diskWriteBytesPerSecond) + "/s", caption: "writes",
-                   highlighted: consumer.diskWriteBytesPerSecond >= 1_800_000)
+                   highlighted: consumer.writesTooMuch)
             if let gained = consumer.batteryMinutesGained, gained >= 1 {
                 Text("+\(EnergyFormat.duration(gained * 60))")
                     .font(.caption.monospacedDigit().weight(.semibold))
@@ -107,8 +109,10 @@ struct EnergyConsumerRow: View {
         .help(consumer.canInspectFamily ? "Click to open \(consumer.displayName)\u{2019}s family" : consumer.displayName)
     }
 
-    private func metric(_ value: String, caption: String, highlighted: Bool) -> some View {
-        VStack(alignment: .trailing, spacing: 1) {
+    /// `help` replaces the row's tooltip over this figure; without one the row's shows.
+    @ViewBuilder
+    private func metric(_ value: String, caption: String, highlighted: Bool, help: String? = nil) -> some View {
+        let figure = VStack(alignment: .trailing, spacing: 1) {
             Text(value)
                 .font(.caption.monospacedDigit().weight(highlighted ? .bold : .regular))
                 .foregroundStyle(highlighted ? Color.orange : Color.primary)
@@ -117,6 +121,7 @@ struct EnergyConsumerRow: View {
                 .foregroundStyle(.secondary)
         }
         .frame(width: 70, alignment: .trailing)
+        if let help { figure.help(help) } else { figure }
     }
 }
 
