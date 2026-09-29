@@ -23,6 +23,10 @@ public struct KillOutcomeNarrative: Equatable, Sendable {
 /// exited, which needed force, which are still running and why, and what
 /// the stop freed. Port claims come only from the ports actually checked.
 public struct KillOutcomeNarrator: Sendable {
+    /// Begins the fact that names what the stop left running; the result
+    /// list shows those processes on their own.
+    public static let leftRunningPrefix = "Left running (now orphaned):"
+
     public init() {}
 
     public func narrate(_ report: KillReport) -> KillOutcomeNarrative {
@@ -124,7 +128,7 @@ public struct KillOutcomeNarrator: Sendable {
             facts.append("Kept running after \(report.displayName) stopped: \(Self.names(keptRunning)).")
         }
         if !report.leftRunning.isEmpty {
-            facts.append("Left running (now orphaned): \(Self.names(report.leftRunning)).")
+            facts.append("\(Self.leftRunningPrefix) \(Self.names(report.leftRunning)).")
         }
         if report.forkStorm {
             facts.append("It kept starting new processes; Ghost froze and stopped \(report.frozenCount) of them. Check that nothing starts it again.")

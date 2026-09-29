@@ -198,16 +198,21 @@ struct KillPreviewSheet: View {
             } else {
                 KillTargetRows(rows: rows)
             }
-            if !preview.scopePreview.nearbyCandidates.isEmpty {
-                KillNearbyPanel(candidates: preview.scopePreview.nearbyCandidates)
+            // A child in the same process group is already a row above.
+            let leftBehind = Set(preview.leftBehind.map(\.identity))
+            let nearby = preview.scopePreview.nearbyCandidates.filter { !leftBehind.contains($0.identity) }
+            if !nearby.isEmpty {
+                KillNearbyPanel(candidates: nearby)
             }
         }
     }
 
-    /// Everything the preview sorted, one row per process.
+    /// Everything the preview sorted, one row per process, then the children
+    /// a single-process stop leaves running.
     private var planRows: [KillTarget] {
         var seen = Set<ProcessIdentity>()
         let all = preview.targets + preview.lockedTargets + preview.staleTargets + preview.recycledTargets + preview.exitedTargets
+            + preview.leftBehind
         return all.filter { seen.insert($0.identity).inserted }
     }
 
@@ -230,6 +235,13 @@ struct KillPreviewSheet: View {
             stopPortHolder: { pid in
                 session.dismissStopSheetForFollowUp()
                 session.prepareKill(portHolder: pid)
+            },
+            canStopLeftRunning: { target in
+                session.monitor.sampledProcesses.contains { $0.identity == target.identity && $0.userID == geteuid() }
+            },
+            stopLeftRunning: { target in
+                session.dismissStopSheetForFollowUp()
+                session.prepareKill(processIdentity: target.identity, name: target.name)
             }
         )
     }

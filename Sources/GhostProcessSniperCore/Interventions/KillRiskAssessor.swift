@@ -30,7 +30,7 @@ public enum KillRiskSeverity: Int, Codable, Comparable, Sendable {
 
 public enum KillRiskKind: String, Codable, Sendable {
     case unsavedWork, dataIntegrity, stopsContainers, lockFile, partialInstall, interruptedBuild,
-         respawn, stopsSiblings, unloadsModels, freesPorts, orphaned
+         respawn, stopsSiblings, unloadsModels, freesPorts, orphaned, leavesChildren
 }
 
 public struct KillRisk: Identifiable, Equatable, Sendable {

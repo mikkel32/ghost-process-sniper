@@ -218,6 +218,7 @@ struct KillRiskCard: View {
         case .unloadsModels: "cpu"
         case .freesPorts: "network"
         case .orphaned: "checkmark.circle"
+        case .leavesChildren: "arrow.triangle.branch"
         }
     }
 }

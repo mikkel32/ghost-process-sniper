@@ -51,7 +51,7 @@ public struct KillReport: Equatable, Sendable {
     /// rest, or, with force held, only reported (state `.locked`).
     public var lateTargets: [KillTarget] = []
     /// Processes the stop left alone that lost their parent to it and now
-    /// run on under launchd.
+    /// run on under launchd, with the children they keep.
     public var leftRunning: [KillTarget] = []
     /// Processes frozen with SIGSTOP right before SIGKILL.
     public var frozenCount = 0

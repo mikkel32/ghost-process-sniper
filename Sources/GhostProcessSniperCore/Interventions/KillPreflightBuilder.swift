@@ -10,6 +10,8 @@ struct KillPreflight {
     /// Zombies: already exited, so never signalled.
     let exited: [KillTarget]
     let zombieParentName: String?
+    /// The children a single-process stop does not touch.
+    let leftBehind: [KillTarget]
 }
 
 /// Turns a snapshot into the preview a stop is approved from and the target
@@ -134,9 +136,14 @@ struct KillPreflightBuilder: Sendable {
         // assessor's card of its kind; as factors they weigh on readiness
         // like the assessor's own.
         let replaced = policy.risk.risks.filter { risk in protectionFloor.cautions.contains { $0.kind == risk.kind } }
+        let appQuits = policy.risk.appQuitPID == plan.rootIdentity.pid
+        let children = targets.isEmpty ? KillLeftBehind.none : leftBehind(plan: plan, arena: arena, appQuits: appQuits)
+        // A quitting app takes its helpers along, so only other stops warn.
+        let leavesChildren = appQuits ? nil : leavesChildrenRisk(children, plan: plan)
+        let notes = protectionFloor.cautions + [leavesChildren].compactMap { $0 }
         var decisionScore = policy.decisionScore.removing { factor in
             factor.source == .risk && replaced.contains { $0.title == factor.title && $0.detail == factor.detail }
-        }.adding(protectionFloor.cautions.map {
+        }.adding(notes.map {
             KillDecisionFactor(kind: .whyWait, title: $0.title, detail: $0.detail, weight: $0.severity == .info ? -1 : -6, source: .risk)
         })
         if targets.contains(where: { $0.condition == .suspended }) {
@@ -177,12 +184,13 @@ struct KillPreflightBuilder: Sendable {
             strategyForecast: forecast,
             watcherAvailable: !targets.isEmpty && usesDarwinProcessNamespace,
             arenaStats: arena.stats,
-            riskAssessment: policy.risk.merging(protectionFloor.cautions, headline: protectionFloor.rootReason),
+            riskAssessment: policy.risk.merging(notes, headline: protectionFloor.rootReason),
             alternatives: advisor.alternatives(plan: plan, arena: arena, targets: targets, risk: policy.risk, currentUserID: currentUserID),
-            launchdJob: plan.workload?.launchdJob
+            launchdJob: plan.workload?.launchdJob,
+            leftBehind: children.targets
         )
         return KillPreflight(preview: preview, targets: targets, locked: locked, stale: stale, recycled: recycled,
-                             exited: zombies.exited, zombieParentName: zombies.parentName)
+                             exited: zombies.exited, zombieParentName: zombies.parentName, leftBehind: children.targets)
     }
 
     /// Children an approved process started after the preview stop with it;

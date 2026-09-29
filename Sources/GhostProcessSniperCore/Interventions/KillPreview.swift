@@ -34,6 +34,10 @@ public struct KillPreview: Equatable, Sendable {
     public let alternatives: [KillAlternative]
     /// The launchd job that runs the root, when launchd started it.
     public let launchdJob: LaunchdJob?
+    /// The children of a single-process stop that it does not touch: they
+    /// lose their parent and may keep running. Apart from `lockedTargets`,
+    /// which belong to other users and feed `deniedPIDs`.
+    public let leftBehind: [KillTarget]
 
     public var targetIdentities: [ProcessIdentity] { targets.map(\.identity) }
     public var targetPIDs: [Int32] { targets.map(\.pid) }
@@ -103,7 +107,8 @@ public struct KillPreview: Equatable, Sendable {
         arenaStats: KillGraphArenaStats = .empty,
         riskAssessment: KillRiskAssessment = .none,
         alternatives: [KillAlternative] = [],
-        launchdJob: LaunchdJob? = nil
+        launchdJob: LaunchdJob? = nil,
+        leftBehind: [KillTarget] = []
     ) {
         self.displayName = displayName
         self.rootPID = rootPID
@@ -129,5 +134,6 @@ public struct KillPreview: Equatable, Sendable {
         self.riskAssessment = riskAssessment
         self.alternatives = alternatives
         self.launchdJob = launchdJob
+        self.leftBehind = leftBehind
     }
 }
