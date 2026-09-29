@@ -34,7 +34,7 @@ public struct ProcessBrowserRowModel: Identifiable, Equatable, Sendable {
         identity = row.familyID
         name = row.displayName
         nameHighlights = match?.nameHighlights ?? []
-        detail = match?.reason ?? row.assessment.cause
+        detail = match?.reason ?? Self.detail(reason: row.assessment.reason, processCount: row.childCount + 1)
         memoryBytes = row.memoryBytes
         memoryText = row.memoryText
         cpuPercent = row.cpuPercent
@@ -66,6 +66,12 @@ public struct ProcessBrowserRowModel: Identifiable, Equatable, Sendable {
         executablePath = row.executablePath
         commandLine = row.commandLine
         isStoppable = row.isStoppable
+    }
+
+    /// "3 processes · 1.7x its usual size": a family is several processes,
+    /// and a big app should read as a group, not as one oddly big process.
+    static func detail(reason: String, processCount: Int) -> String {
+        processCount > 1 ? "\(processCount) processes · \(reason)" : reason
     }
 
     public static func untrackedID(_ identity: ProcessIdentity) -> String {
