@@ -62,7 +62,7 @@ private struct RecentIncidentsCard: View {
         if !rows.isEmpty {
             CompactRadarSection(
                 title: "Recent Incidents",
-                subtitle: "\(session.monitor.incidents.count) total",
+                subtitle: IncidentListScope.published(total: session.monitor.incidents.count).overviewText,
                 systemImage: "clock.badge.exclamationmark",
                 tip: RadarTip(
                     title: "Incidents",

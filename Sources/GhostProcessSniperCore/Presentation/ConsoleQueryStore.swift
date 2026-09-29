@@ -4,6 +4,9 @@ import Observation
 public struct ConsoleProjectionRequest: Sendable {
     public let source: RadarConsoleSnapshot
     public let incidents: [RadarIncident]
+    /// The whole incident log, while the Incidents page is searched or
+    /// filtered. When present it replaces `incidents` as the rows searched.
+    public let incidentHistory: IncidentHistory?
     public let state: RadarConsoleState
     /// Tracked families with their helpers, so a search reaches helper names
     /// and command lines, not only what the row displays.
@@ -15,6 +18,7 @@ public struct ConsoleProjectionRequest: Sendable {
     public init(
         source: RadarConsoleSnapshot,
         incidents: [RadarIncident],
+        incidentHistory: IncidentHistory? = nil,
         state: RadarConsoleState,
         families: [ProcessFamily] = [],
         processes: [ProcessMetrics] = [],
@@ -22,6 +26,7 @@ public struct ConsoleProjectionRequest: Sendable {
     ) {
         self.source = source
         self.incidents = incidents
+        self.incidentHistory = incidentHistory
         self.state = state
         self.families = families
         self.processes = processes

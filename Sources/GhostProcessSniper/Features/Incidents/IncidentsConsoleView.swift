@@ -9,7 +9,7 @@ struct IncidentsConsoleView: View {
     /// The displayed row, then the full incident behind it for the timeline.
     private var selection: (row: IncidentRowViewModel, incident: RadarIncident)? {
         guard let tableSelection, let row = session.incidentRows.first(where: { $0.id == tableSelection }),
-              let incident = session.monitor.incidents.first(where: { $0.id == row.id }) else {
+              let incident = session.incident(id: row.id) else {
             return nil
         }
         return (row, incident)
@@ -22,7 +22,15 @@ struct IncidentsConsoleView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if session.incidentRows.isEmpty {
+            if session.incidentRows.isEmpty, session.isSearchingIncidentLog {
+                // The window found nothing, but the whole log has not answered yet.
+                ContentUnavailableView(
+                    "Searching Incidents",
+                    systemImage: "magnifyingglass",
+                    description: Text("Reading every recorded incident.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if session.incidentRows.isEmpty {
                 ContentUnavailableView(
                     hasQuery ? "No Matching Incidents" : "No Incidents",
                     systemImage: hasQuery ? "magnifyingglass" : "checkmark.circle",
@@ -59,7 +67,11 @@ struct IncidentsConsoleView: View {
             RadarPageHeader(
                 eyebrow: "Evidence Log",
                 title: "Incidents",
-                subtitle: "\(session.incidentRows.count) events shown",
+                subtitle: session.incidentScope.caption(
+                    shown: session.incidentRows.count,
+                    query: session.state.incidentQuery,
+                    isLoadingHistory: session.isSearchingIncidentLog
+                ),
                 systemImage: "waveform.path.ecg",
                 accent: .pink
             ) {
@@ -226,6 +238,19 @@ struct IncidentsConsoleView: View {
                             detailLine("Started", incident.startedAt.formatted(date: .abbreviated, time: .shortened))
                             detailLine("Last seen", incident.lastSeenAt.formatted(date: .abbreviated, time: .shortened))
                             detailLine("Resolved", incident.resolvedAt?.formatted(date: .abbreviated, time: .shortened) ?? "not resolved")
+                        }
+                    }
+
+                    // Facts about the app's other episodes, never a verdict: the scorer counts a repeat against a family.
+                    if let recurrence = row.recurrence {
+                        RadarSection(title: "Recurrence", subtitle: "Same app and command") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                detailLine("Episodes", recurrence.episodesText)
+                                if let length = recurrence.lengthText {
+                                    detailLine("Typical length", length)
+                                }
+                                detailLine("Peak memory", recurrence.peakText)
+                            }
                         }
                     }
                 }

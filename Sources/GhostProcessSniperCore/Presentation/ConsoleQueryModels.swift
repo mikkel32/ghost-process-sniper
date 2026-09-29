@@ -11,6 +11,10 @@ public struct ConsoleDerivedSnapshotKey: Hashable, Sendable {
     public let incidentSort: RadarIncidentSort
     public let incidentAscending: Bool
     public let incidentLimit: Int
+    /// Which read of the incident log the request searches, 0 for the published
+    /// list. The content revision hashes only the published rows, so without
+    /// this a new read would be served the projection of the old one.
+    public let incidentHistoryRevision: UInt64
     /// Live samples only matter while searching: results then follow every
     /// refresh, and an idle console does no projection work at all.
     public let sampleRevision: UInt64
@@ -27,6 +31,7 @@ public struct ConsoleDerivedSnapshotKey: Hashable, Sendable {
         incidentSort = state.incidentQuery.sort
         incidentAscending = state.incidentQuery.ascending
         incidentLimit = state.incidentQuery.limit
+        incidentHistoryRevision = request.incidentHistory?.revision ?? 0
         sampleRevision = searchText.isEmpty ? 0 : request.sampleRevision
     }
 }
@@ -37,6 +42,8 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
     public let compactFamilyRows: [CompactSidebarRowModel]
     public let compactSidebarSections: [CompactSidebarSection]
     public let incidentRows: [IncidentRowViewModel]
+    /// Which incidents `incidentRows` were drawn from, for the page's caption.
+    public let incidentScope: IncidentListScope
     public let duplicateRows: [DuplicateClusterViewModel]
     public let search: ConsoleSearchResults
     /// Tracked families and untracked matches, ordered for the browser table.
@@ -60,7 +67,8 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
         incidentRows: [IncidentRowViewModel],
         duplicateRows: [DuplicateClusterViewModel],
         search: ConsoleSearchResults,
-        browserRows: [ProcessBrowserRowModel] = []
+        browserRows: [ProcessBrowserRowModel] = [],
+        incidentScope: IncidentListScope = .published(total: 0)
     ) {
         self.key = key
         self.familyRows = familyRows
@@ -70,6 +78,7 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
         self.duplicateRows = duplicateRows
         self.search = search
         self.browserRows = browserRows
+        self.incidentScope = incidentScope
     }
 
     /// Projection without a live process sample: families are searched by
@@ -77,9 +86,13 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
     public static func build(
         snapshot: RadarConsoleSnapshot,
         incidents: [RadarIncident],
+        incidentHistory: IncidentHistory? = nil,
         state: RadarConsoleState
     ) -> ConsoleDerivedSnapshot {
-        build(ConsoleProjectionRequest(source: snapshot, incidents: incidents, state: state), index: nil)
+        build(
+            ConsoleProjectionRequest(source: snapshot, incidents: incidents, incidentHistory: incidentHistory, state: state),
+            index: nil
+        )
     }
 
     static func build(_ request: ConsoleProjectionRequest, index: ProcessSearchIndex?) -> ConsoleDerivedSnapshot {
@@ -107,17 +120,27 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
         for row in snapshot.families where liveKeys[row.signature.id] == nil {
             liveKeys[row.signature.id] = row.familyKey
         }
+        // The published list is capped for display; the log is searched whole.
+        let searched = request.incidentHistory?.incidents ?? request.incidents
+        var incidentQuery = state.incidentQuery
+        if request.incidentHistory != nil { incidentQuery.limit = max(incidentQuery.limit, searched.count) }
+        // Counted over everything loaded, so a filter or search never hides an episode from it.
+        let patterns = IncidentPattern.bySignature(in: searched)
         return ConsoleDerivedSnapshot(
             key: ConsoleDerivedSnapshotKey(request),
             familyRows: projection.rows,
             compactFamilyRows: compactRows,
             compactSidebarSections: CompactConsoleSnapshot.sidebarSections(from: compactRows),
-            incidentRows: state.incidentQuery
-                .apply(to: request.incidents)
-                .map { IncidentRowViewModel(incident: $0, liveFamilyKey: liveKeys[$0.signature.id]) },
+            incidentRows: incidentQuery
+                .apply(to: searched)
+                .map {
+                    IncidentRowViewModel(incident: $0, liveFamilyKey: liveKeys[$0.signature.id], recurrence: patterns[$0.signature.id])
+                },
             duplicateRows: duplicateRows,
             search: projection.results,
-            browserRows: browserRows(request, rows: projection.rows, results: projection.results)
+            browserRows: browserRows(request, rows: projection.rows, results: projection.results),
+            incidentScope: request.incidentHistory.map { .history(total: $0.incidents.count, isTruncated: $0.isTruncated) }
+                ?? .published(total: request.incidents.count)
         )
     }
 
