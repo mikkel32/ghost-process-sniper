@@ -240,6 +240,19 @@ struct IncidentsConsoleView: View {
                             detailLine("Resolved", incident.resolvedAt?.formatted(date: .abbreviated, time: .shortened) ?? "not resolved")
                         }
                     }
+
+                    // Facts about the app's other episodes, never a verdict: the scorer counts a repeat against a family.
+                    if let recurrence = row.recurrence {
+                        RadarSection(title: "Recurrence", subtitle: "Same app and command") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                detailLine("Episodes", recurrence.episodesText)
+                                if let length = recurrence.lengthText {
+                                    detailLine("Typical length", length)
+                                }
+                                detailLine("Peak memory", recurrence.peakText)
+                            }
+                        }
+                    }
                 }
                 .padding(14)
             }

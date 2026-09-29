@@ -124,6 +124,8 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
         let searched = request.incidentHistory?.incidents ?? request.incidents
         var incidentQuery = state.incidentQuery
         if request.incidentHistory != nil { incidentQuery.limit = max(incidentQuery.limit, searched.count) }
+        // Counted over everything loaded, so a filter or search never hides an episode from it.
+        let patterns = IncidentPattern.bySignature(in: searched)
         return ConsoleDerivedSnapshot(
             key: ConsoleDerivedSnapshotKey(request),
             familyRows: projection.rows,
@@ -131,7 +133,9 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
             compactSidebarSections: CompactConsoleSnapshot.sidebarSections(from: compactRows),
             incidentRows: incidentQuery
                 .apply(to: searched)
-                .map { IncidentRowViewModel(incident: $0, liveFamilyKey: liveKeys[$0.signature.id]) },
+                .map {
+                    IncidentRowViewModel(incident: $0, liveFamilyKey: liveKeys[$0.signature.id], recurrence: patterns[$0.signature.id])
+                },
             duplicateRows: duplicateRows,
             search: projection.results,
             browserRows: browserRows(request, rows: projection.rows, results: projection.results),
