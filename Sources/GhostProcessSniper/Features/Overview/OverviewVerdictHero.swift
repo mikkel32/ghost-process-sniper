@@ -80,14 +80,12 @@ struct OverviewVerdictHero: View {
 
                 HStack(spacing: 10) {
                     if let familyKey = brief.familyKey {
-                        Button {
+                        // A red Quick Stop is the one call to action; otherwise
+                        // this review button is, as before.
+                        OverviewVerdictReviewButton(title: brief.actionTitle, accent: accent,
+                                                    isPrimary: quickStop?.emphasis != .recommended) {
                             session.focus(.family(familyKey))
-                        } label: {
-                            Label(brief.actionTitle, systemImage: "arrow.right")
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(accent)
-                        .help("Open the process family behind this recommendation")
                     }
                     if let quickStop {
                         OverviewVerdictStopButton(session: session, action: quickStop)
@@ -109,6 +107,29 @@ struct OverviewVerdictHero: View {
     static func headline(for brief: RadarIntelligenceBrief, hasFamilies: Bool, hasSampled: Bool) -> String {
         if brief.familyKey != nil || (hasSampled && !hasFamilies) { return brief.title }
         return hasFamilies ? "Your Mac is running smoothly" : "Learning what is normal"
+    }
+}
+
+/// Opens the family page behind the recommendation. A button style is a type,
+/// not a value, so the prominent and plain looks are two branches.
+private struct OverviewVerdictReviewButton: View {
+    let title: String
+    let accent: Color
+    let isPrimary: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Group {
+            if isPrimary {
+                Button(action: action) { Label(title, systemImage: "arrow.right") }
+                    .buttonStyle(.borderedProminent)
+                    .tint(accent)
+            } else {
+                Button(action: action) { Label(title, systemImage: "arrow.right") }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .help("Open the process family behind this recommendation")
     }
 }
 

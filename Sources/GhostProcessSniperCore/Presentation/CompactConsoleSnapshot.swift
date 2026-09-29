@@ -332,19 +332,20 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
-    /// Mirrors the stop planner's strategy choice for the cases it takes
-    /// from the risk assessment alone.
+    /// Names where the hero's first button goes: the family's page. Stopping is
+    /// the Quick Stop's job, so no title promises a stop; the kind of workload
+    /// only says what the page will be about. A supervised server is
+    /// "Review family" too: the button opens the server's page, not the
+    /// supervisor's, and the recommendation already names the supervisor.
     private static func actionTitle(for risk: KillRiskAssessment) -> String {
         if risk.appQuitPID != nil {
-            return "Quit app"
+            return "Review app"
         }
-        if risk.kind == .dataStore || risk.kind == .containerRuntime {
-            return "Stop safely"
+        switch risk.kind {
+        case .dataStore: return "Review database"
+        case .containerRuntime: return "Review containers"
+        default: return "Review family"
         }
-        if risk.supervisor != nil || risk.risks.contains(where: { $0.kind == .respawn }) {
-            return "Review supervisor"
-        }
-        return "Review family"
     }
 }
 

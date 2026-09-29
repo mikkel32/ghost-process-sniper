@@ -19,6 +19,7 @@ final class IntelligenceBriefTests: XCTestCase {
         let brief = snapshot([spike], processes: []).compact.intelligenceBrief
         XCTAssertEqual(brief.familyKey, spike.familyKey)
         XCTAssertEqual(brief.eyebrow, "Confirming activity")
+        XCTAssertEqual(brief.actionTitle, "Inspect signals")
         XCTAssertNil(brief.stopConsequence)
     }
 
@@ -29,17 +30,43 @@ final class IntelligenceBriefTests: XCTestCase {
 
         XCTAssertEqual(brief.familyKey, server.familyKey)
         XCTAssertTrue(brief.recommendation.contains("nodemon"), brief.recommendation)
-        XCTAssertEqual(brief.actionTitle, "Review supervisor")
+        XCTAssertEqual(brief.actionTitle, "Review family", "it opens the server's page, not the supervisor's")
         let risk = KillRiskAssessor().assess(KillWorkloadProfile(family: server, sample: [supervisor, server.root]))
         XCTAssertEqual(brief.stopConsequence, risk.headline)
     }
 
-    func testDataStoreIsStoppedSafely() {
+    func testDataStoreIsReviewedNotStopped() {
         let database = family(pid: 970, name: "postgres", heat: heat(85, confirmed: true))
         let brief = snapshot([database], processes: [database.root]).compact.intelligenceBrief
-        XCTAssertEqual(brief.actionTitle, "Stop safely")
+        XCTAssertEqual(brief.actionTitle, "Review database")
         XCTAssertNotNil(brief.stopConsequence)
         XCTAssertTrue(brief.recommendation.hasPrefix(brief.stopConsequence ?? "-"))
+    }
+
+    /// The hero's first button opens the family page; only the Quick Stop
+    /// beside it stops anything, so no label may promise a stop.
+    func testTheReviewButtonNeverSaysItStopsAnything() {
+        let app = family(pid: 980, parent: 77, name: "TextEdit", heat: heat(85, confirmed: true),
+                         path: "/System/Applications/TextEdit.app/Contents/MacOS/TextEdit")
+        let database = family(pid: 970, name: "postgres", heat: heat(85, confirmed: true))
+        let docker = family(pid: 965, name: "docker", heat: heat(85, confirmed: true))
+        let server = family(pid: 990, name: "vite", heat: heat(85, confirmed: true))
+        let supervisor = process(pid: 950, parent: 1, name: "nodemon", command: "node /usr/local/bin/nodemon server.js")
+        let supervised = family(pid: 960, parent: supervisor.pid, name: "node", heat: heat(80, confirmed: true))
+        let cases: [(ProcessFamily, [ProcessMetrics], String)] = [
+            (app, [app.root], "Review app"),
+            (database, [database.root], "Review database"),
+            (docker, [docker.root], "Review containers"),
+            (server, [server.root], "Review family"),
+            (supervised, [supervisor, supervised.root], "Review family")
+        ]
+        for (family, processes, title) in cases {
+            let brief = snapshot([family], processes: processes).compact.intelligenceBrief
+            XCTAssertEqual(brief.actionTitle, title, family.displayName)
+            for verb in ["Quit", "Stop", "Shut"] {
+                XCTAssertFalse(brief.actionTitle.hasPrefix(verb), "\(family.displayName): \(brief.actionTitle)")
+            }
+        }
     }
 
     func testAppRecommendationSaysItOnce() {
@@ -106,6 +133,7 @@ final class IntelligenceBriefTests: XCTestCase {
             let brief = snapshot([family], processes: []).compact.intelligenceBrief
             XCTAssertEqual(brief.familyKey, family.familyKey, reason)
             XCTAssertEqual(brief.eyebrow, "Early warning", reason)
+            XCTAssertEqual(brief.actionTitle, "Inspect early", reason)
         }
     }
 
