@@ -110,21 +110,22 @@ struct IncidentsConsoleView: View {
         Table(session.incidentRows, selection: $tableSelection, sortOrder: sortOrder) {
             TableColumn("Family", value: \.familyName) { row in
                 HStack(spacing: 6) {
+                    // The name comes first: a capsule beside it cut "Safari" to "Saf…".
                     Label(row.familyName, systemImage: RadarStyle.icon(for: row.level))
                         .foregroundStyle(RadarStyle.color(for: row.level))
                         .lineLimit(1)
+                        .layoutPriority(1)
                     if row.liveFamilyKey != nil {
-                        Text("Running")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.green)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1)
-                            .background(Color.green.opacity(0.12), in: Capsule())
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 7, height: 7)
+                            .help("Running now")
+                            .accessibilityLabel("Running now")
                     }
                 }
                 .help("Peak growth: \(row.leakText)\n\(row.timeRangeText)")
             }
-            .width(min: 160, ideal: 220)
+            .width(min: 170, ideal: 230)
 
             TableColumn("State") { row in
                 Text(row.stateText)
