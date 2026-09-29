@@ -110,6 +110,7 @@ public struct FamilyDecisionBrief: Equatable, Sendable {
         }
 
         var evidence = family.score.components
+            .filter(\.explainsFlag)
             .sorted { $0.impact > $1.impact }
             .prefix(3)
             .map { "\($0.title): \($0.detail)" }
@@ -145,5 +146,16 @@ public struct FamilyDecisionBrief: Equatable, Sendable {
         }
         let watched = observed >= 120 ? "\(Int((observed / 60).rounded())) min" : "\(Int(observed.rounded())) s"
         return "\(confidence.label) confidence: watched \(watched), \(shape)"
+    }
+}
+
+extension GhostScoreComponent {
+    /// Whether it says why a family is flagged: raised to Watch or beyond,
+    /// and not scope relevance, which every developer process carries as
+    /// context ("85% confidence this belongs to the selected radar scope").
+    /// A quiet component is a measurement, and "3% is 0.0x the 90% limit"
+    /// is not a reason for anything.
+    var explainsFlag: Bool {
+        level >= .watch && slot != "relevance"
     }
 }

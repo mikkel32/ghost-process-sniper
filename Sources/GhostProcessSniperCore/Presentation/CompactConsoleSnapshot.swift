@@ -284,7 +284,7 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         }
 
         let evidence = panel.heatEvidence.isEmpty
-            ? panel.scoreComponents.sorted { $0.impact > $1.impact }.prefix(3).map(\.title)
+            ? panel.scoreComponents.filter(\.explainsFlag).sorted { $0.impact > $1.impact }.prefix(3).map(\.title)
             : Array(panel.heatEvidence.prefix(3))
         let hasCredibleForecastEscalation = row.forecastState >= .leaking && row.forecastConfidence >= 0.55
         let isConfirmedUrgent = row.level >= .hot && panel.heatConfirmed
