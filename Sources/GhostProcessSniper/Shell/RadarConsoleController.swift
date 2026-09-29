@@ -14,6 +14,7 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         monitor: ProcessMonitor,
         killer: ProcessKiller,
         quickStops: QuickStopAdvisor,
+        welcome: Bool = false,
         openSettings: @escaping () -> Void
     ) {
         self.monitor = monitor
@@ -35,6 +36,7 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         if let key = session.state.focusedSelection.familyKey, session.family(forKey: key) == nil {
             session.state.focusedSelection = .overview
         }
+        if welcome { session.showWelcome = true }
         let rootView = RadarConsoleView(session: session)
         let hosting = NSHostingController(rootView: rootView)
         // The console owns its window dimensions. A lazy process list must not
@@ -209,6 +211,8 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         if session?.cullRun?.isRunning != true { session?.cullRun = nil }
         session?.toast = nil
         session?.showQuickGuide = false
+        // Never resurfaces: the launch recorded it as shown before opening.
+        session?.showWelcome = false
         window = nil
         RadarLogger.ui.info("Closed radar console")
     }

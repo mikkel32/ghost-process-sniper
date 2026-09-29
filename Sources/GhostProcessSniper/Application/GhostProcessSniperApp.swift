@@ -35,15 +35,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        coordinator.start()
         let arguments = ProcessInfo.processInfo.arguments
+        // Before start(): the first refresh creates the store's folder, and no
+        // folder is how a first-ever launch is told from an upgrade.
+        let welcome = claimWelcome(arguments: arguments)
+        coordinator.start()
         // `--section security` (or overview, processes, energy, duplicates, incidents,
         // rules) opens the console on that page.
         if let index = arguments.firstIndex(of: "--section"), arguments.indices.contains(index + 1) {
             coordinator.openConsole(section: RadarFocusedSelection(storageValue: arguments[index + 1]))
         } else if arguments.contains("--console") {
             coordinator.openConsole()
+        } else if welcome {
+            coordinator.openConsole(welcome: true)
         }
+    }
+
+    /// Whether this launch opens the console with the welcome. The version is
+    /// recorded here, win or lose, so the welcome never repeats however its
+    /// window is closed, and an upgrade is written down as seen too.
+    private func claimWelcome(arguments: [String]) -> Bool {
+        // Unbundled dev builds have no notification center to offer.
+        guard Bundle.main.bundleIdentifier != nil else {
+            return false
+        }
+        let key = "GhostProcessSniper.Welcome.seenVersion"
+        let seen = UserDefaults.standard.integer(forKey: key)
+        let welcome = WelcomePolicy.shouldWelcome(
+            lastSeenVersion: seen,
+            isFirstEverLaunch: WelcomePolicy.isFirstEverLaunch(),
+            launchArguments: arguments
+        )
+        UserDefaults.standard.set(max(seen, WelcomePolicy.currentVersion), forKey: key)
+        return welcome
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

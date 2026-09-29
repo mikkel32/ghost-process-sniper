@@ -19,6 +19,8 @@ final class RadarConsoleSession {
     var searchFocusToken = 0
     var familyQueryResetToken = 0
     var showQuickGuide = false
+    /// The first-run welcome sheet, set once by the launch that decided on it.
+    var showWelcome = false
     private(set) var isRefreshing = false
     /// Drives the Stop toolbar button and menu item without making them
     /// depend on `monitor.families`, which changes every sample.
