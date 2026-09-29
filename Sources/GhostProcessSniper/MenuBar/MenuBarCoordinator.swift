@@ -11,6 +11,7 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     private let consoleController = RadarConsoleController()
     private let settingsController = SettingsWindowController()
     private let quickStops: QuickStopAdvisor
+    private let alerts: AlertCoordinator
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var statusObserverID: UUID?
@@ -18,10 +19,6 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     private var lastRenderedLevel: GhostLevel?
     private var lastRenderedPresentationKey = ""
     private var sentinelObserverID: UUID?
-    private var lastSentinelRevision: UInt64 = 0
-    private var sentinelAlerts = SentinelAlertGate()
-    private var energyAlerts = EnergyAlertGate()
-    private var lastEnergyGlance = EnergyGlance.empty
 
     init(
         monitor: ProcessMonitor? = nil,
@@ -33,6 +30,7 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         self.killer = killer
         self.notifier = notifier
         quickStops = QuickStopAdvisor(monitor: monitor)
+        alerts = AlertCoordinator(monitor: monitor, notifier: notifier)
         super.init()
     }
 
@@ -55,38 +53,12 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
     private func startSentinelAlerts() {
         sentinelObserverID = monitor.addPublishedStateObserver { [weak self] state in
             self?.handleSentinelChange(state: state)
-            self?.handleEnergyChange()
-        }
-    }
-
-    /// One notification per energy finding that needs attention, such as an
-    /// idle app keeping the Mac awake for hours; the glance changes rarely,
-    /// so most publishes return at the first comparison.
-    private func handleEnergyChange() {
-        let glance = monitor.energyGlance
-        guard glance != lastEnergyGlance else { return }
-        lastEnergyGlance = glance
-        for finding in energyAlerts.alerts(for: monitor.energy.findings, now: Date()) {
-            let notifier = notifier
-            Task { await notifier.notify(energy: finding) }
+            self?.alerts.handleEnergyChange()
         }
     }
 
     private func handleSentinelChange(state: ProcessMonitorPublishedState) {
-        let report = monitor.sentinel
-        guard report.revision != lastSentinelRevision else { return }
-        lastSentinelRevision = report.revision
-        var pulse = false
-        let alerts = sentinelAlerts.alerts(for: report, now: Date())
-        for finding in alerts.findings {
-            let notifier = notifier
-            Task { await notifier.notify(sentinel: finding) }
-            pulse = pulse || finding.severity == .dangerous
-        }
-        for item in alerts.startupItems {
-            let notifier = notifier
-            Task { await notifier.notify(startupItem: item) }
-        }
+        guard let pulse = alerts.handleSentinelChange() else { return }
         updateStatusIcon(state: state, force: true)
         if pulse { pulseStatusIcon() }
     }

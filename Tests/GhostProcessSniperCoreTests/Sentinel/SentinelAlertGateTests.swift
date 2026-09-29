@@ -105,4 +105,92 @@ final class SentinelAlertGateTests: XCTestCase {
         XCTAssertEqual(gate.alerts(for: report, now: now).startupItems.map(\.label), ["com.example.new"])
         XCTAssertTrue(gate.alerts(for: report, now: now.addingTimeInterval(60)).startupItems.isEmpty)
     }
+
+    // MARK: Cooldowns across a relaunch
+
+    func testACooldownSurvivesARelaunch() {
+        var first = SentinelAlertGate()
+        XCTAssertEqual(first.alerts(for: SentinelReport(findings: [finding(pid: 10)]), now: now).findings.count, 1)
+        let saved = first.memory
+
+        // The same process is still running after Ghost restarts, or the program restarted meanwhile.
+        for pid: Int32 in [10, 99] {
+            var second = SentinelAlertGate(memory: saved, now: now.addingTimeInterval(3_600))
+            let report = SentinelReport(findings: [finding(pid: pid)])
+            XCTAssertTrue(second.alerts(for: report, now: now.addingTimeInterval(3_600)).findings.isEmpty, "pid \(pid)")
+        }
+        let nextDay = now.addingTimeInterval(SentinelAlertGate.cooldown + 1)
+        var later = SentinelAlertGate(memory: saved, now: nextDay)
+        XCTAssertEqual(later.alerts(for: SentinelReport(findings: [finding(pid: 99)]), now: nextDay).findings.count, 1,
+                       "a day later it is news again")
+    }
+
+    func testAfterARelaunchADifferentProgramOrReasonStillAlerts() {
+        var first = SentinelAlertGate()
+        _ = first.alerts(for: SentinelReport(findings: [finding(pid: 10)]), now: now)
+        var second = SentinelAlertGate(memory: first.memory, now: now.addingTimeInterval(60))
+        let other = finding(pid: 11, path: "/Users/Shared/.u/agent", kind: .hiddenLocation)
+        let differentReason = finding(pid: 12, kind: .reverseShell, severity: .suspicious)
+        let alerts = second.alerts(for: SentinelReport(findings: [other, differentReason]), now: now.addingTimeInterval(60))
+        XCTAssertEqual(alerts.findings.map(\.id), [other.id, differentReason.id])
+    }
+
+    /// The one alert that must never be swallowed: an earlier run's dangerous alert (perhaps dropped while
+    /// notifications were off) does not hold back the next run's, though within a run it still waits a day.
+    func testADangerousCooldownDoesNotOutliveTheRun() {
+        var first = SentinelAlertGate()
+        let dangerous = finding(pid: 20, kind: .reverseShell, severity: .dangerous)
+        XCTAssertEqual(first.alerts(for: SentinelReport(findings: [dangerous]), now: now).findings.count, 1)
+        XCTAssertTrue(first.alerts(for: SentinelReport(findings: [finding(pid: 21, kind: .reverseShell, severity: .dangerous)]),
+                                   now: now.addingTimeInterval(600)).findings.isEmpty, "within a run it stays quiet for a day")
+
+        var second = SentinelAlertGate(memory: first.memory, now: now.addingTimeInterval(3_600))
+        XCTAssertEqual(second.alerts(for: SentinelReport(findings: [dangerous]), now: now.addingTimeInterval(3_600)).findings.count, 1)
+    }
+
+    func testAFindingThatTurnsDangerousAlertsAfterARelaunchToo() {
+        var first = SentinelAlertGate()
+        _ = first.alerts(for: SentinelReport(findings: [finding(pid: 30)]), now: now)
+        var second = SentinelAlertGate(memory: first.memory, now: now.addingTimeInterval(60))
+        let worse = finding(pid: 30, severity: .dangerous)
+        XCTAssertEqual(second.alerts(for: SentinelReport(findings: [worse]), now: now.addingTimeInterval(60)).findings.count, 1)
+    }
+
+    func testAStartupItemAlertedBeforeARelaunchStaysQuiet() {
+        var first = SentinelAlertGate()
+        let report = SentinelReport(launchItems: [item("com.example.new", isNew: true)])
+        XCTAssertEqual(first.alerts(for: report, now: now).startupItems.count, 1)
+        var second = SentinelAlertGate(memory: first.memory, now: now.addingTimeInterval(60))
+        XCTAssertTrue(second.alerts(for: report, now: now.addingTimeInterval(60)).startupItems.isEmpty)
+    }
+
+    /// Alert keys hold executable paths, and the saved memory must not: only hashes reach the disk.
+    func testTheSavedMemoryHoldsHashesNeverPaths() throws {
+        var gate = SentinelAlertGate()
+        let flagged = finding(pid: 40, path: "/private/tmp/bench3/agent")
+        _ = gate.alerts(for: SentinelReport(findings: [flagged], launchItems: [item("com.example.bench", isNew: true)]), now: now)
+        let memory = gate.memory
+        XCTAssertEqual(memory.lastAlerted.count, 2)
+        XCTAssertTrue(memory.lastAlerted.keys.contains(AlertMemory.hash(SentinelAlertGate.key(for: flagged))))
+        for key in memory.lastAlerted.keys {
+            XCTAssertEqual(key.count, 64)
+            XCTAssertTrue(key.allSatisfy(\.isHexDigit), key)
+        }
+        let saved = try XCTUnwrap(String(data: JSONEncoder().encode(memory), encoding: .utf8))
+        for leak in ["bench3", "agent", "/private", "com.example", "LaunchAgents"] {
+            XCTAssertFalse(saved.contains(leak), "\(leak) reached the saved memory")
+        }
+    }
+
+    func testAMemoryFromABadClockOrAnOldRunIsDropped() {
+        var first = SentinelAlertGate()
+        _ = first.alerts(for: SentinelReport(findings: [finding(pid: 50)]), now: now)
+        // Restored before it was written (the clock was wrong): honoring it would silence the alert for years.
+        let beforeItWasWritten = SentinelAlertGate(memory: first.memory, now: now.addingTimeInterval(-3_600))
+        XCTAssertTrue(beforeItWasWritten.memory.lastAlerted.isEmpty)
+        let aWeekLater = SentinelAlertGate(memory: first.memory, now: now.addingTimeInterval(7 * 24 * 3_600))
+        XCTAssertTrue(aWeekLater.memory.lastAlerted.isEmpty, "older than the cooldown")
+        let inside = SentinelAlertGate(memory: first.memory, now: now.addingTimeInterval(3_600))
+        XCTAssertEqual(inside.memory, first.memory)
+    }
 }
