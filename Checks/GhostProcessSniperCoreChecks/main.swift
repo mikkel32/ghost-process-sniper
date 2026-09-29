@@ -266,7 +266,7 @@ private func duplicateDetectorCapturesSmallSameUserProcesses() throws {
         name: "miniwatch",
         executablePath: "/Users/dev/.local/bin/miniwatch",
         commandLine: "miniwatch --repo api --port 4010",
-        memory: 22_000_000,
+        memory: 40_000_000, // the older copy must free 32 MB to raise its family
         cpu: 1
     )
     let second = sample(
@@ -276,7 +276,7 @@ private func duplicateDetectorCapturesSmallSameUserProcesses() throws {
         name: "miniwatch",
         executablePath: "/Users/dev/.local/bin/miniwatch",
         commandLine: "miniwatch --repo web --port 4011",
-        memory: 24_000_000,
+        memory: 44_000_000,
         cpu: 2
     )
 
@@ -2262,7 +2262,7 @@ private func radarSnapshotSurfacesDuplicateRowsAndStableRevision() throws {
         name: "tiny-agent",
         executablePath: "/Users/dev/.local/bin/tiny-agent",
         commandLine: "tiny-agent a",
-        memory: 12_000_000,
+        memory: 20_000_000, // the pair needs 32 MB in all to be a row
         cpu: 1
     )
     let smallerB = sample(
@@ -2272,7 +2272,7 @@ private func radarSnapshotSurfacesDuplicateRowsAndStableRevision() throws {
         name: "tiny-agent",
         executablePath: "/Users/dev/.local/bin/tiny-agent",
         commandLine: "tiny-agent b",
-        memory: 10_000_000,
+        memory: 18_000_000,
         cpu: 1
     )
     let detector = DuplicateClusterDetector(currentUserID: 501)

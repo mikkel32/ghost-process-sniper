@@ -58,7 +58,8 @@ struct AttentionReason: Equatable, Sendable {
             if let pressure = component("pressure") { return .hostPressure(detail: pressure.detail) }
             return .overLimit(detail: memory.detail)
         }
-        if let copies = family.duplicateCluster, copies.countsAsIndependentCopies {
+        // The score's own gate: copies it did not count are not why it is here.
+        if let copies = family.duplicateCluster, copies.countsAsIndependentCopies, copies.copiesMatter {
             return .copies(copies.independentRootCount)
         }
         if let forgotten = component("forgotten") { return .forgotten(detail: forgotten.detail) }

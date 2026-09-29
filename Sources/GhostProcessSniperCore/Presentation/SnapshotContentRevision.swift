@@ -103,6 +103,9 @@ struct SnapshotContentBaseline: Equatable, Sendable {
             facts.combine(cluster.id)
             facts.combine(cluster.memberCount)
             facts.combine(cluster.independentRootCount)
+            // Crossing the listing floor adds or drops a row, however little
+            // the memory or CPU behind it moved.
+            facts.combine(cluster.addsUp)
             facts.combine(cluster.representativePIDs)
             facts.combine(cluster.relatedFamilyKeys)
             clusterSum &+= facts.finalize()

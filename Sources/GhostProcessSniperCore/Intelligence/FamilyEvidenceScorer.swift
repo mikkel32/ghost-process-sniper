@@ -30,8 +30,10 @@ struct FamilyEvidenceScorer: Sendable {
         let leakRatio = leakVelocity / max(settings.leakVelocityMegabytesPerMinute, 1)
         let childFanout = max(0, members.count - 6)
         // Only copies started independently count; a worker pool inside one
-        // family is how the tool works, not a duplicate.
-        let copies = duplicateCluster.flatMap { $0.countsAsIndependentCopies ? $0 : nil }
+        // family is how the tool works, not a duplicate. And only ones whose
+        // stopping gives something back: idle 2 MB leftovers stay listed on
+        // the Duplicates page but are not evidence about any family.
+        let copies = duplicateCluster.flatMap { $0.countsAsIndependentCopies && $0.copiesMatter ? $0 : nil }
         let duplicateImpact = copies.map { min(12, Double($0.independentRootCount - 1) * 4) } ?? 0
         let hardwareImpact = min(24, hardwareSignals.reduce(0) { $0 + $1.impact })
         let ageMinutes = max(0, now.timeIntervalSince(Date(timeIntervalSince1970: TimeInterval(root.identity.startTimeSeconds))) / 60)
