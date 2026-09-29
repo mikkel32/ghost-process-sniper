@@ -55,6 +55,12 @@ public enum SentinelCatalog {
     /// Installs whose executable is named by version, not by product
     /// (`~/.local/share/claude/versions/2.1.5`, Claude Desktop's embedded CLI).
     static let codingAgentFolders: [String] = ["/claude-code/", "/.local/share/claude/"]
+    /// Where the real tools install, under the user's home. A file that only
+    /// carries an assistant's name, anywhere else, is not the assistant.
+    static let codingAgentHomeFolders: [String] = [
+        "/applications/", "/library/application support/claude/", "/.local/share/claude/", "/.local/bin/",
+        "/.claude/", "/.codex/", "/.npm-global/", "/.npm/", "/.nvm/", "/.bun/", "/.volta/", "/.pnpm/", "/.yarn/",
+    ]
 
     /// Programs that turn text into actions: the usual second step of an attack.
     static let commandRunners: Set<String> = [
@@ -93,6 +99,7 @@ public enum SentinelCatalog {
         "/.moon/", "/.go/", "/go/bin/", "/.kube/", "/.terraform", "/.pulumi/", "/.config/", "/.git/",
         "/.build/", "/.venv/", "/venv/", "/.tox/", "/.conda/", "/miniconda3/", "/anaconda3/", "/.pixi/",
         "/.foundry/", "/.rvm/", "/.pub-cache/", "/.flutter/", "/.android/", "/.gemini/", "/.opencode/", "/.lmstudio/",
+        "/.npm-global/",
     ]
 
     /// Temporary locations nothing should normally be *installed* in.
@@ -130,13 +137,27 @@ public enum SentinelCatalog {
         return terminalApps.contains(name.lowercased())
     }
 
-    /// Claude or Codex, by bundle, process name or install folder. Says nothing
-    /// about where it runs from: a copy dropped in /tmp is not one.
+    /// Claude or Codex, by bundle, process name or install folder, and only
+    /// from where such tools install (`isInAgentInstallPlace`): a file that
+    /// merely carries the name is not one, whether in /tmp or in ~/Documents.
     static func isCodingAgent(path: String, name: String) -> Bool {
+        guard isInAgentInstallPlace(path) else { return false }
         if let app = appName(forPath: path)?.lowercased(), codingAgentApps.contains(app) { return true }
         if codingAgentNames.contains(programName(name, path: path)) || codingAgentNames.contains(name.lowercased()) { return true }
         let lower = path.lowercased()
         return codingAgentFolders.contains(where: lower.contains)
+    }
+
+    /// /Applications, Homebrew and /usr/local, or one of the home-folder places
+    /// the tools' installers use, directly under the user's home.
+    static func isInAgentInstallPlace(_ path: String) -> Bool {
+        let lower = path.lowercased()
+        if lower.hasPrefix("/applications/") || lower.hasPrefix("/opt/homebrew/") || lower.hasPrefix("/usr/local/") { return true }
+        guard lower.hasPrefix("/users/") else { return false }
+        let afterUser = lower.dropFirst("/users/".count)
+        guard let slash = afterUser.firstIndex(of: "/") else { return false }
+        let inHome = afterUser[slash...]
+        return codingAgentHomeFolders.contains { inHome.hasPrefix($0) }
     }
 
     /// The bare program name: "-zsh" → "zsh", "python3.12" → "python3".

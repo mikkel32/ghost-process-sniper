@@ -270,6 +270,31 @@ final class SentinelPrecisionTests: XCTestCase {
         }
     }
 
+    /// A file that merely carries the assistant's name, in an ordinary folder, is not the assistant:
+    /// it must not turn a dropper's /tmp payload into a Notable that never alerts.
+    func testACopyNamedLikeTheAssistantInAnOrdinaryFolderIsNotOne() {
+        let program = subject("bench3", path: bench)
+        let shell = subject("zsh", path: "/bin/zsh")
+        for path in ["/Users/me/Library/Caches/claude", "/Users/me/Documents/claude", "/Users/me/Desktop/codex",
+                     "/Users/me/projects/x/claude", "/Users/me/Desktop/Claude.app/Contents/MacOS/Claude",
+                     "/Users/me/Library/Application Support/Other/claude", "/opt/evil/claude", "/Users/me/src/.local/bin/claude"] {
+            let host = subject((path as NSString).lastPathComponent, path: path)
+            XCTAssertEqual(evaluate(program, ancestors: [shell, host]).severity, .suspicious, "a copy named like the assistant at \(path)")
+        }
+    }
+
+    func testTheRealInstallsStillCount() {
+        let program = subject("bench3", path: bench)
+        let shell = subject("zsh", path: "/bin/zsh")
+        for path in ["/Users/me/.local/bin/codex", "/opt/homebrew/bin/claude", "/usr/local/bin/codex", "/Applications/Codex.app/Contents/MacOS/Codex",
+                     "/Users/me/Applications/Claude.app/Contents/MacOS/Claude", "/Users/me/.local/share/claude/versions/2.1.5",
+                     "/Users/me/.npm-global/bin/claude", "/Users/me/.codex/bin/codex", "/Users/me/.claude/local/claude",
+                     "/Users/me/Library/Application Support/Claude/claude-code/2.1.5/claude.app/Contents/MacOS/claude"] {
+            let host = subject((path as NSString).lastPathComponent, path: path)
+            XCTAssertEqual(evaluate(program, ancestors: [shell, host]).severity, .notable, "the assistant installed at \(path)")
+        }
+    }
+
     func testAnyOtherSignOnAnAssistantsProgramKeepsItSuspiciousOrWorse() {
         let program = subject("bench3", path: bench)
         let miner = subject("bench3", path: bench, command: bench + " --pool stratum+tcp://x.example:3333")
