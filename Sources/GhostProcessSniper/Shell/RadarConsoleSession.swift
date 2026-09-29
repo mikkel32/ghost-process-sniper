@@ -34,10 +34,16 @@ final class RadarConsoleSession {
     /// The open "Stop the extras" run. It lives here, not on the Duplicates
     /// page, so its sheet survives moving to another page mid-run.
     var cullRun: DuplicateCullRun?
+    /// The Incidents page has asked for the whole log and its rows are not the
+    /// log's yet. See `incidentHistoryForProjection`.
+    var isSearchingIncidentLog = false
     /// Changes only when the thermal panel should move on the Overview.
     var overviewThermalBand: OverviewThermalBand = .normal
     var history = NavigationHistory()
     @ObservationIgnored var thermalBandTracker = OverviewThermalBandTracker()
+    /// The incident log read past the published 80 while the Incidents page is
+    /// searched or filtered; nothing while it is not.
+    @ObservationIgnored var incidentHistoryTracker = IncidentHistoryTracker()
     /// The last confirmed stop, so closing its sheet can return the user.
     @ObservationIgnored var lastStopResult: (pendingID: UUID, report: KillReport)?
 
@@ -106,6 +112,11 @@ final class RadarConsoleSession {
 
     var incidentRows: [IncidentRowViewModel] {
         currentDerivedSnapshot().incidentRows
+    }
+
+    /// Which incidents `incidentRows` were drawn from.
+    var incidentScope: IncidentListScope {
+        currentDerivedSnapshot().incidentScope
     }
 
     var duplicateRows: [DuplicateClusterViewModel] {
@@ -218,6 +229,8 @@ final class RadarConsoleSession {
         panelTask = nil
         requestedQueryKey = nil
         queries.cancel()
+        incidentHistoryTracker.reset()
+        isSearchingIncidentLog = false
         // Otherwise every later refresh keeps prioritising forensics for
         // families nobody is looking at.
         lastFocusedFamilySignatures = []
@@ -268,6 +281,7 @@ final class RadarConsoleSession {
         let request = ConsoleProjectionRequest(
             source: monitor.consoleSnapshot,
             incidents: monitor.incidents,
+            incidentHistory: incidentHistoryForProjection(),
             state: state.coreState,
             families: monitor.families,
             processes: monitor.sampledProcesses,
@@ -281,6 +295,7 @@ final class RadarConsoleSession {
         queryTask = Task { [weak self] in
             let published = await queries.update(request)
             guard published, !Task.isCancelled else { return }
+            self?.syncIncidentSearchState()
             self?.updateFocusedFamilies()
         }
         return queryTask

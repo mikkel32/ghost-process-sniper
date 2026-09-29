@@ -80,6 +80,11 @@ final class IncidentLedger {
     private var stagedCountChanges: Set<String> = []
     private var stagedCountsReset = false
     static let countCacheLifetime: TimeInterval = 15 * 60
+    /// Row writes that reached the table, plus one whenever the file was
+    /// replaced. A reader of the incident table re-reads only when this moves;
+    /// a flush that wrote nothing here leaves it alone. Pruning old rows is
+    /// not counted: it removes nothing a reader still needs.
+    private(set) var writeCount = 0
 
     init(db: SQLiteDatabase, codec: StoreCodec) {
         self.db = db
@@ -237,6 +242,7 @@ final class IncidentLedger {
             committed = staged
         }
         staged = nil
+        writeCount += pendingWrites.count
         pendingWrites.removeAll(keepingCapacity: true)
         stagedCountChanges.removeAll(keepingCapacity: true)
         stagedCountsReset = false
@@ -253,6 +259,7 @@ final class IncidentLedger {
     /// reloads the episodes from the new file.
     func reset() {
         committed = nil
+        writeCount += 1
         invalidateCounts()
         discardStaged()
     }

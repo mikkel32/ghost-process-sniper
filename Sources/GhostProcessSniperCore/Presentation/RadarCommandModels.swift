@@ -114,20 +114,28 @@ public struct IncidentQuery: Equatable, Sendable {
     public var ascending: Bool
     public var limit: Int
 
-    public static let `default` = IncidentQuery(text: "", filter: .all, sort: .recent, limit: 80)
+    public static let `default` = IncidentQuery(text: "", filter: .all, sort: .recent, limit: IncidentHistory.publishedWindow)
 
     public init(
         text: String = "",
         filter: RadarIncidentFilter = .all,
         sort: RadarIncidentSort = .recent,
         ascending: Bool = false,
-        limit: Int = 80
+        limit: Int = IncidentHistory.publishedWindow
     ) {
         self.text = text
         self.filter = filter
         self.sort = sort
         self.ascending = ascending
         self.limit = limit
+    }
+
+    /// Whether the answer depends on incidents older than the newest published
+    /// ones: a search, or a filter on how an incident ended or peaked. Active
+    /// incidents are always among the newest rows, so that filter needs none.
+    public var reachesHistory: Bool {
+        if !ProcessSearchQuery(text).terms.isEmpty { return true }
+        return filter == .resolved || filter == .critical
     }
 
     private func matches(_ incident: RadarIncident, query: ProcessSearchQuery) -> Bool {

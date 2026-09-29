@@ -269,6 +269,96 @@ final class IncidentEpisodeTests: XCTestCase {
         XCTAssertEqual(sorted.first?.id, reopened.id, "four hits in one episode outrank two single-hit rows")
     }
 
+    // MARK: History
+
+    func testHistoryReachesPastThePublishedWindow() async throws {
+        let store = makeStore()
+        try await persistJobs(120, store: store)
+
+        let published = try await store.recentIncidents()
+        XCTAssertEqual(published.count, IncidentHistory.publishedWindow)
+        XCTAssertFalse(published.contains { $0.familyName == "job-000" }, "the oldest episode is outside the published window")
+
+        let history = try await store.incidentHistory()
+        XCTAssertEqual(history.incidents.count, 120)
+        XCTAssertFalse(history.isTruncated)
+        XCTAssertEqual(history.incidents.first?.familyName, "job-119", "newest first, like the published list")
+        XCTAssertEqual(history.incidents.last?.familyName, "job-000")
+    }
+
+    func testHistoryReportsWhenTheTableHoldsMoreThanItReturned() async throws {
+        let store = makeStore()
+        try await persistJobs(7, store: store)
+
+        let short = try await store.incidentHistory(limit: 5)
+        XCTAssertEqual(short.incidents.map(\.familyName), ["job-006", "job-005", "job-004", "job-003", "job-002"])
+        XCTAssertTrue(short.isTruncated)
+
+        let exact = try await store.incidentHistory(limit: 7)
+        XCTAssertEqual(exact.incidents.count, 7)
+        XCTAssertFalse(exact.isTruncated, "asking for exactly what is there leaves nothing out")
+    }
+
+    func testEveryHistoryReadHasItsOwnRevision() async throws {
+        let store = makeStore()
+        try await persistJobs(2, store: store)
+        let first = try await store.incidentHistory()
+        let second = try await store.incidentHistory()
+        XCTAssertGreaterThan(first.revision, 0, "zero means no history in a console request")
+        XCTAssertGreaterThan(second.revision, first.revision, "an unchanged table must still be told apart from an earlier read")
+    }
+
+    func testIncidentWritesCountOnlyWhatReachedTheTable() async throws {
+        let store = makeStore()
+        var writes = await store.storeHealth().writeStats.incidentWrites
+        XCTAssertEqual(writes, 0)
+
+        try await persist([family(level: .hot, at: at(0))], store: store, at: at(0))
+        writes = await store.storeHealth().writeStats.incidentWrites
+        XCTAssertEqual(writes, 1, "opening an episode inserts one row")
+
+        try await persist([family(level: .hot, at: at(3))], store: store, at: at(3))
+        let quiet = await store.storeHealth().writeStats.incidentWrites
+        XCTAssertEqual(quiet, writes, "a throttled tick writes nothing, so a reader has nothing to re-read")
+
+        try await persist([], store: store, at: at(100))
+        let closed = await store.storeHealth().writeStats.incidentWrites
+        XCTAssertGreaterThan(closed, quiet, "closing the episode is a write")
+    }
+
+    func testHistoryCarriesTheWriteCountItWasReadAt() async throws {
+        let store = makeStore()
+        try await persist([family(level: .hot, at: at(0))], store: store, at: at(0))
+        let health = await store.storeHealth()
+        let history = try await store.incidentHistory()
+        XCTAssertEqual(history.writeCount, health.writeStats.incidentWrites, "rows and counter are read together, so they cannot disagree")
+    }
+
+    func testAFailedFlushDoesNotCountItsStagedWrites() async throws {
+        let store = makeStore()
+        try await persist([family(level: .hot, at: at(0))], store: store, at: at(0))
+        let before = await store.storeHealth().writeStats.incidentWrites
+
+        // The next episode's insert fails inside the transaction and is discarded.
+        try await store.execute("DROP TABLE incidents")
+        do {
+            try await persist([family(level: .hot, name: "other", at: at(1_200))], store: store, at: at(1_200))
+            XCTFail("the flush should have failed without an incidents table")
+        } catch {}
+        let after = await store.storeHealth().writeStats.incidentWrites
+        XCTAssertEqual(after, before, "a rolled-back write must not tell readers the table changed")
+    }
+
+    /// `count` distinct jobs twenty minutes apart: each is its own episode,
+    /// closed by the next one's scan.
+    private func persistJobs(_ count: Int, store: RadarStore) async throws {
+        for index in 0..<count {
+            let date = at(Double(index) * 1_200)
+            let name = "job-" + String(format: "%03d", index)
+            try await persist([family(level: .hot, name: name, at: date)], store: store, at: date)
+        }
+    }
+
     /// 200 MB/min for a minute: a real TrendWindow, so its growth is credible.
     private func climbingTrend() -> TrendMetrics {
         IntelligenceFixture.trend(megabytes: (0..<10).map { 500 + Double($0) * 20 }, cadence: 6)
@@ -301,6 +391,7 @@ final class IncidentEpisodeTests: XCTestCase {
 
     private func family(
         level: GhostLevel,
+        name: String = "node",
         alert: AlertStateKind = .normal,
         memory: UInt64? = nil,
         cpu: Double = 0,
@@ -310,8 +401,8 @@ final class IncidentEpisodeTests: XCTestCase {
     ) -> ProcessFamily {
         let identity = ProcessIdentity(pid: 731, startTimeSeconds: 1_000, startTimeMicroseconds: 0)
         let footprint = memory ?? (level >= .hot ? 3_000_000_000 : 40_000_000)
-        let root = ProcessMetrics(identity: identity, parentPID: 1, userID: 501, ownerName: "test", name: "node",
-                                  executablePath: "/usr/local/bin/node", commandLine: "node server.js",
+        let root = ProcessMetrics(identity: identity, parentPID: 1, userID: 501, ownerName: "test", name: name,
+                                  executablePath: "/usr/local/bin/\(name)", commandLine: "\(name) server.js",
                                   residentMemoryBytes: footprint, physicalFootprintBytes: footprint,
                                   virtualMemoryBytes: footprint * 2, cpuPercent: cpu, totalProcessorSeconds: 10,
                                   threadCount: 2, isSystemProcess: false, sampledAt: date)
