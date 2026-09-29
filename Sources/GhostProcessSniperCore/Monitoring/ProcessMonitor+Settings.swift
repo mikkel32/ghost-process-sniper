@@ -91,6 +91,7 @@ extension ThresholdSettings {
         carry(\.detectionMode)
         carry(\.sensitivity)
         carry(\.adaptivePerformance)
+        carry(\.notifications)
         return merged
     }
 }

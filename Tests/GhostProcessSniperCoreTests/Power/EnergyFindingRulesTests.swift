@@ -146,4 +146,36 @@ final class EnergyAlertGateTests: XCTestCase {
         _ = gate.alerts(for: [], now: now.addingTimeInterval(3_700))
         XCTAssertEqual(gate.alerts(for: [finding("a", .attention)], now: now.addingTimeInterval(13 * 3_600)).map(\.id), ["a"])
     }
+
+    func testACooldownSurvivesARelaunch() {
+        var first = EnergyAlertGate()
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(first.alerts(for: [finding("Safari|keepsMacAwake", .attention)], now: now).count, 1)
+
+        // Ghost restarts while Safari still holds the Mac awake.
+        var second = EnergyAlertGate(memory: first.memory, now: now.addingTimeInterval(3_600))
+        XCTAssertTrue(second.alerts(for: [finding("Safari|keepsMacAwake", .attention)], now: now.addingTimeInterval(3_600)).isEmpty)
+        XCTAssertEqual(second.alerts(for: [finding("Notes|keepsMacAwake", .attention)], now: now.addingTimeInterval(3_600)).count, 1,
+                       "another app is still news")
+
+        var nextNight = EnergyAlertGate(memory: first.memory, now: now.addingTimeInterval(13 * 3_600))
+        XCTAssertEqual(nextNight.alerts(for: [finding("Safari|keepsMacAwake", .attention)],
+                                        now: now.addingTimeInterval(13 * 3_600)).count, 1)
+    }
+
+    func testTheSavedEnergyMemoryHoldsHashesNotAppNames() throws {
+        var gate = EnergyAlertGate()
+        _ = gate.alerts(for: [finding("com.apple.Safari|keepsMacAwake", .attention)], now: Date(timeIntervalSince1970: 1_000_000))
+        XCTAssertEqual(gate.memory.lastAlerted.keys.first, AlertMemory.hash("com.apple.Safari|keepsMacAwake"))
+        let saved = try XCTUnwrap(String(data: JSONEncoder().encode(gate.memory), encoding: .utf8))
+        XCTAssertFalse(saved.contains("Safari"))
+    }
+
+    func testAnOldOrFutureMemoryIsDroppedOnRestore() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        var first = EnergyAlertGate()
+        _ = first.alerts(for: [finding("a", .attention)], now: now)
+        XCTAssertTrue(EnergyAlertGate(memory: first.memory, now: now.addingTimeInterval(13 * 3_600)).memory.lastAlerted.isEmpty)
+        XCTAssertTrue(EnergyAlertGate(memory: first.memory, now: now.addingTimeInterval(-60)).memory.lastAlerted.isEmpty)
+    }
 }
