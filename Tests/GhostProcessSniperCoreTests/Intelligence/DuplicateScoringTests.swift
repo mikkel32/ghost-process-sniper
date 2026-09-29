@@ -201,6 +201,50 @@ final class DuplicateScoringTests: XCTestCase {
         XCTAssertEqual(result.duplicateClusters.first?.independentRootCount, 2)
     }
 
+    /// Each booted device runs its own launchd_sim and its own copy of every
+    /// daemon in the runtime: two devices on one runtime are never copies of
+    /// each other, and neither is a device to "stop the older copy" of.
+    func testTwoBootedSimulatorsAreNotCopiesOfEachOther() throws {
+        let runtime = "/Library/Developer/CoreSimulator/Volumes/iOS_23F77/Library/Developer/CoreSimulator/Profiles/Runtimes"
+            + "/iOS 26.5.simruntime/Contents/Resources/RuntimeRoot"
+        func device(launchd: Int32, startedAgo: TimeInterval) -> [ProcessMetrics] {
+            let daemons = [
+                ("backboardd", "\(runtime)/usr/libexec/backboardd"),
+                ("cfprefsd", "\(runtime)/usr/sbin/cfprefsd"),
+                ("SpringBoard", "\(runtime)/System/Library/CoreServices/SpringBoard.app/SpringBoard"),
+            ]
+            let root = Fixture.process(pid: launchd, parent: 1, name: "launchd_sim", path: "\(runtime)/sbin/launchd_sim",
+                                       command: "launchd_sim /Users/dev/Library/Developer/CoreSimulator/Devices/D\(launchd)/data/var/run/launchd_bootstrap.plist",
+                                       megabytes: 120, started: Fixture.now.addingTimeInterval(-startedAgo))
+            return [root] + daemons.enumerated().map { index, daemon in
+                Fixture.process(pid: launchd + 1 + Int32(index), parent: launchd, name: daemon.0, path: daemon.1, command: daemon.1,
+                                megabytes: 200, started: Fixture.now.addingTimeInterval(-startedAgo))
+            }
+        }
+        let result = build(device(launchd: 2_000, startedAgo: 10_800) + device(launchd: 2_100, startedAgo: 7_200))
+
+        XCTAssertEqual(result.families.count, 2, "each device is still a family of its own")
+        XCTAssertTrue(result.duplicateClusters.isEmpty, "\(result.duplicateClusters.map(\.displayName))")
+        for family in result.families {
+            XCTAssertNil(family.duplicateCluster, family.displayName)
+            XCTAssertFalse(family.score.components.contains { $0.slot == "duplicate" }, family.displayName)
+            let enriched = RadarIntelligence().enrich(
+                family: family, context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []),
+                settings: .smart, now: Fixture.now)
+            XCTAssertFalse(enriched.suggestions.contains { $0.targetIdentities != nil }, "\(enriched.suggestions.map(\.title))")
+        }
+    }
+
+    func testSimulatorToolsAreNotCopiesButOtherToolsStillAre() {
+        let xcode = "/Applications/Xcode.app/Contents/Developer"
+        let simctl = (0..<2).map {
+            Fixture.process(pid: 2_300 + Int32($0), name: "simctl", path: "\(xcode)/usr/bin/simctl", command: "simctl spawn booted log stream \($0)")
+        }
+        XCTAssertTrue(build(simctl).duplicateClusters.isEmpty)
+        XCTAssertEqual(build(simctl + [node(2_400, "/Users/dev/api/server.js"), node(2_401, "/Users/dev/api/server.js")])
+            .duplicateClusters.map(\.independentRootCount), [2])
+    }
+
     func testAppsAreSkippedButBundledCommandLineToolsCount() {
         let app = "/Applications/Docker.app/Contents"
         let mains = (0..<2).map {
