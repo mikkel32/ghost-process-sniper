@@ -1507,8 +1507,8 @@ private func menuBarPresentationKeepsDiagnosticsOutOfTitle() throws {
     )
 
     try check(first.title.isEmpty, "hot/leak diagnostics should never appear in menu bar title")
-    try check(first.tooltip.contains("2 hot"), "tooltip should include hot count")
-    try check(first.tooltip.contains("1 leaks"), "tooltip should include leak count")
+    try check(first.tooltip.contains("2 to review"), "tooltip should include the review count")
+    try check(first.tooltip.contains("1 leak") && !first.tooltip.contains("1 leaks"), "tooltip should include the leak count, singular")
     try check(first.tooltip.contains("3 duplicate clusters"), "tooltip should include duplicate cluster count")
     try check(first.renderKey == second.renderKey, "diagnostics-only publish cost changes should not invalidate status presentation")
 }

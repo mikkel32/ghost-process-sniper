@@ -34,6 +34,13 @@ public enum RadarFormat {
         return String(format: "%.1f s", clamped)
     }
 
+    /// A count on a badge: nothing for zero, and "99+" past two digits so the
+    /// badge stays narrow.
+    public static func badge(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count > 99 ? "99+" : "\(count)"
+    }
+
     public static func leak(_ value: Double) -> String {
         "\(Int(value.rounded())) MB/min"
     }

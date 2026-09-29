@@ -167,6 +167,25 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         "\(signature.id)|pid:\(root.pid)|start:\(root.startTimeSeconds).\(root.startTimeMicroseconds)"
     }
 
+    /// The signature id inside a family key, that is the key without the
+    /// `|pid:N|start:S.U` instance suffix `key(signature:root:)` adds. Anything
+    /// that does not end in that suffix (a signature id already) comes back
+    /// unchanged. A family that exited, or restarted under a new pid, no
+    /// longer has its key in the scan; its signature is what a rule can hold
+    /// on to, and it is what the restarted copy carries too.
+    public static func signatureID(fromFamilyKey key: String) -> String {
+        guard let marker = key.range(of: "|pid:", options: .backwards) else { return key }
+        let suffix = key[marker.upperBound...].split(separator: "|", omittingEmptySubsequences: false)
+        guard suffix.count == 2, isASCIIDigits(suffix[0]), suffix[1].hasPrefix("start:") else { return key }
+        let start = suffix[1].dropFirst("start:".count).split(separator: ".", omittingEmptySubsequences: false)
+        guard start.count == 2, isASCIIDigits(start[0]), isASCIIDigits(start[1]) else { return key }
+        return String(key[..<marker.lowerBound])
+    }
+
+    private static func isASCIIDigits(_ token: Substring) -> Bool {
+        !token.isEmpty && token.utf8.allSatisfy { $0 >= 48 && $0 <= 57 }
+    }
+
     mutating func attribute(growth: [MemberGrowth]) {
         self.growth = growth
     }

@@ -293,8 +293,18 @@ public struct RadarCommandRouter: Sendable {
     ) -> RadarCommandAvailability {
         let family = selectedFamily(selection: selection, families: families)
         switch command {
-        case .refresh, .openConsole, .toggleInspector, .copyReport, .copyDiagnostics, .find:
+        case .refresh, .openConsole, .copyReport, .copyDiagnostics, .find:
             return RadarCommandAvailability(command: command, isEnabled: true)
+        case .toggleInspector:
+            // Only family pages have an inspector. The key is what counts, as
+            // for the toolbar button: the page of a family that just exited
+            // is still a family page, and its inspector can still be closed.
+            let enabled = selection.familyKey != nil
+            return RadarCommandAvailability(
+                command: command,
+                isEnabled: enabled,
+                reason: enabled ? nil : "Open a family to use the inspector."
+            )
         case .nextFamily, .previousFamily:
             return RadarCommandAvailability(
                 command: command,

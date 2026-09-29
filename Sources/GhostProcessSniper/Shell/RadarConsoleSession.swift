@@ -307,6 +307,9 @@ final class RadarConsoleSession {
     }
 
     func toggleInspector() {
+        // Off a family page there is no inspector to show, and flipping the
+        // saved choice there would change what the next family page opens with.
+        guard state.focusedSelection.familyKey != nil else { return }
         state.showInspector.toggle()
         // Remembered for the next family page, including after relaunch.
         ConsolePreferences.showInspector = state.showInspector
@@ -423,14 +426,19 @@ final class RadarConsoleSession {
         ignore(familyKey: signatureID, name: selectedFamily?.displayName)
     }
 
+    // The toast follows the save, so it never announces a rule that is not there.
     func snooze(familyKey: String, name: String? = nil, minutes: TimeInterval = 60) {
-        Task { await monitor.snooze(signatureID: familyKey, minutes: minutes) }
-        showToast("Snoozed \(name ?? "family") for \(Self.durationText(minutes: minutes))", systemImage: "moon")
+        Task {
+            await monitor.snooze(signatureID: familyKey, name: name, minutes: minutes)
+            showToast("Snoozed \(name ?? "family") for \(Self.durationText(minutes: minutes))", systemImage: "moon")
+        }
     }
 
     func ignore(familyKey: String, name: String? = nil) {
-        Task { await monitor.ignore(signatureID: familyKey) }
-        showToast("Ignoring \(name ?? "family") — undo under Rules", systemImage: "eye.slash")
+        Task {
+            await monitor.ignore(signatureID: familyKey, name: name)
+            showToast("Ignoring \(name ?? "family") — undo under Rules", systemImage: "eye.slash")
+        }
     }
 
     func prepareKillSelected() {

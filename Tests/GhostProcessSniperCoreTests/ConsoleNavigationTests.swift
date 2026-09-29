@@ -64,6 +64,32 @@ final class ConsoleNavigationTests: XCTestCase {
         XCTAssertEqual(coordinator.selection(after: .family("a"), orderedFamilyKeys: ["a", "b", "c"], direction: -4), .family("c"))
     }
 
+    func testInspectorNeedsAFamilyPage() {
+        let family = makeFamily(pid: 42)
+        let router = RadarCommandRouter()
+        for page: RadarFocusedSelection in [.overview, .processes, .duplicates, .incidents, .rules, .security, .energy] {
+            let availability = router.availability(for: .toggleInspector, selection: page, families: [family])
+            XCTAssertFalse(availability.isEnabled, "\(page) has no inspector to toggle")
+            XCTAssertNotNil(availability.reason)
+        }
+        // The key is what counts, as for the toolbar button: a family that just
+        // exited still shows its page, and its inspector can be closed.
+        for key in [family.familyKey, family.signature.id, "exited"] {
+            XCTAssertTrue(router.availability(for: .toggleInspector, selection: .family(key), families: [family]).isEnabled)
+        }
+    }
+
+    func testSnoozeAndIgnoreNeedALiveFamily() {
+        let family = makeFamily(pid: 42)
+        let router = RadarCommandRouter()
+        for command in [RadarCommand.snooze, .ignore] {
+            XCTAssertTrue(router.availability(for: command, selection: .family(family.familyKey), families: [family]).isEnabled)
+            XCTAssertFalse(router.availability(for: command, selection: .family("exited"), families: [family]).isEnabled,
+                           "a page whose family has left the scan has nothing to \(command)")
+            XCTAssertFalse(router.availability(for: command, selection: .overview, families: [family]).isEnabled)
+        }
+    }
+
     func testHistoryStepsBackAndForward() {
         var history = NavigationHistory()
         history.visit(.overview)

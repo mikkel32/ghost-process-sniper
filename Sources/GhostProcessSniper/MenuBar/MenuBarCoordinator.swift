@@ -160,9 +160,11 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         let appItem = NSMenuItem()
         let editItem = NSMenuItem()
         let radarItem = NSMenuItem()
+        let windowItem = NSMenuItem()
         mainMenu.addItem(appItem)
         mainMenu.addItem(editItem)
         mainMenu.addItem(radarItem)
+        mainMenu.addItem(windowItem)
 
         let appMenu = NSMenu(title: "Ghost Process Sniper")
         appItem.submenu = appMenu
@@ -214,6 +216,16 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         addMenuItem("Ignore Family", key: "e", modifiers: [.command, .shift], action: #selector(ignoreCommand), to: radarMenu)
         addMenuItem("Stop…", key: String(UnicodeScalar(NSBackspaceCharacter)!), modifiers: [.command, .shift], action: #selector(killPreviewCommand), to: radarMenu)
 
+        // ⌘W, ⌘M and Zoom for the console and Settings. Nil targets send them
+        // down the responder chain to the key window, which enables each only
+        // if that window can close, minimize or zoom.
+        let windowMenu = NSMenu(title: "Window")
+        windowItem.submenu = windowMenu
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        NSApp.windowsMenu = windowMenu
+
         // The single menu definition: the SwiftUI scene declares no commands.
         NSApp.mainMenu = mainMenu
     }
@@ -233,14 +245,21 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
-        case #selector(refreshCommand), #selector(openConsoleCommand), #selector(openSettingsCommand), #selector(toggleInspectorCommand), #selector(copyReportCommand), #selector(copyDiagnosticsCommand), #selector(findCommand):
+        case #selector(refreshCommand), #selector(openConsoleCommand), #selector(openSettingsCommand), #selector(copyReportCommand), #selector(copyDiagnosticsCommand), #selector(findCommand):
             return true
         case #selector(nextFamilyCommand), #selector(previousFamilyCommand):
-            return monitor.commandAvailability(menuItem.action == #selector(nextFamilyCommand) ? .nextFamily : .previousFamily, selection: .overview).isEnabled
-        case #selector(snoozeCommand), #selector(ignoreCommand):
-            return consoleController.canActOnSelection(stop: false)
+            // With the console open its filtered list decides; closed, the
+            // shortcut opens it, so any family to move through will do.
+            let command: RadarCommand = menuItem.action == #selector(nextFamilyCommand) ? .nextFamily : .previousFamily
+            return (consoleController.availability(command) ?? monitor.commandAvailability(command, selection: .overview)).isEnabled
+        case #selector(toggleInspectorCommand):
+            return consoleController.availability(.toggleInspector)?.isEnabled ?? false
+        case #selector(snoozeCommand):
+            return consoleController.availability(.snooze)?.isEnabled ?? false
+        case #selector(ignoreCommand):
+            return consoleController.availability(.ignore)?.isEnabled ?? false
         case #selector(killPreviewCommand):
-            return consoleController.canActOnSelection(stop: true)
+            return consoleController.availability(.killPreview)?.isEnabled ?? false
         case #selector(goBackCommand):
             return consoleController.canGoBack
         case #selector(goForwardCommand):
@@ -377,7 +396,7 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         }
         let menu = NSMenu()
         let presentation = MenuBarStatusPresentation(state: monitor.publishedState)
-        let statusLine = NSMenuItem(title: presentation.tooltip, action: nil, keyEquivalent: "")
+        let statusLine = NSMenuItem(title: presentation.menuTitle, action: nil, keyEquivalent: "")
         statusLine.isEnabled = false
         menu.addItem(statusLine)
         menu.addItem(.separator())

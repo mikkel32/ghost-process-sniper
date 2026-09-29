@@ -475,20 +475,6 @@ public final class ProcessMonitor {
         families.first { $0.familyKey == signatureID || $0.signature.id == signatureID }
     }
 
-    public func snooze(signatureID: String, minutes: TimeInterval = 60) async {
-        guard let family = family(signatureID: signatureID) else {
-            return
-        }
-        await snooze(family, minutes: minutes)
-    }
-
-    public func ignore(signatureID: String) async {
-        guard let family = family(signatureID: signatureID) else {
-            return
-        }
-        await ignore(family)
-    }
-
     nonisolated public static func createDefaultStore() -> RadarStore? {
         RadarStore()
     }
