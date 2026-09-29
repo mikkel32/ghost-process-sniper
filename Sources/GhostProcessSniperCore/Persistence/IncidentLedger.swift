@@ -15,15 +15,31 @@ final class IncidentLedger {
     static let refreshInterval: TimeInterval = 30
     private static let chunkSize = 400
 
+    /// The episode's highest values. Every column the tracker writes is a
+    /// peak (SQL MAX), so a relaunch that restarts this at zero cannot lower a
+    /// stored row.
     struct Peak: Equatable {
         var level: GhostLevel
         var score: Double
         var memoryBytes: UInt64
+        var cpuPercent = 0.0
+        /// Proven growth in MB/min, never the raw slope.
+        var growthMegabytesPerMinute = 0.0
+
+        private static let physicalMemoryBytes = ProcessInfo.processInfo.physicalMemory
 
         mutating func absorb(_ family: ProcessFamily) {
             level = max(level, family.score.level)
             score = max(score, family.score.value)
             memoryBytes = max(memoryBytes, family.totalPhysicalFootprintBytes)
+            cpuPercent = max(cpuPercent, family.totalCPUPercent)
+            // What the scorer counts as growth: two close samples can make any
+            // jump look like thousands of MB/min, and the raw slope can be
+            // negative. A slow leak counts at its long-term slope.
+            growthMegabytesPerMinute = max(
+                growthMegabytesPerMinute,
+                PressureAttribution.credibleGrowth(of: family, physicalMemoryBytes: Self.physicalMemoryBytes)
+            )
         }
     }
 
@@ -247,7 +263,8 @@ final class IncidentLedger {
         open.lastActiveAt = date
         let escalated = open.peak.level > previous.level
         // Small drifts wait for the periodic refresh; the tracked peak is exact
-        // and is what gets written then.
+        // and is what gets written then. CPU and growth never write on their
+        // own: they ride along with the next refresh or the close.
         let peakRose = escalated ||
             open.peak.score >= previous.score + 1 ||
             Double(open.peak.memoryBytes) >= Double(previous.memoryBytes) * 1.05
@@ -259,8 +276,8 @@ final class IncidentLedger {
             .text(open.peak.level.label),
             .double(open.peak.score),
             .int64(Int64(clamping: open.peak.memoryBytes)),
-            .double(family.totalCPUPercent),
-            .double(family.trend.memoryVelocityMegabytesPerMinute),
+            .double(open.peak.cpuPercent),
+            .double(open.peak.growthMegabytesPerMinute),
             .double(date.timeIntervalSince1970)
         ]
         // The reasons that explain the peak level, not the latest tick's.
@@ -283,8 +300,8 @@ final class IncidentLedger {
                 .text(peak.level.label),
                 .double(peak.score),
                 .int64(Int64(clamping: peak.memoryBytes)),
-                .double(family.totalCPUPercent),
-                .double(family.trend.memoryVelocityMegabytesPerMinute),
+                .double(peak.cpuPercent),
+                .double(peak.growthMegabytesPerMinute),
                 .text(closed.id.uuidString)
             ]
         ))
@@ -293,6 +310,8 @@ final class IncidentLedger {
 
     private func insert(_ family: ProcessFamily, at date: Date) throws -> OpenIncident {
         let id = UUID()
+        var peak = Peak(level: family.score.level, score: family.score.value, memoryBytes: family.totalPhysicalFootprintBytes)
+        peak.absorb(family)
         pendingWrites.append((
             RadarStoreQueries.insertIncident,
             [
@@ -305,14 +324,13 @@ final class IncidentLedger {
                 .text(family.score.level.label),
                 .double(family.score.value),
                 .int64(Int64(clamping: family.totalPhysicalFootprintBytes)),
-                .double(family.totalCPUPercent),
-                .double(family.trend.memoryVelocityMegabytesPerMinute),
+                .double(peak.cpuPercent),
+                .double(peak.growthMegabytesPerMinute),
                 .text(try codec.encode(family.score.reasons)),
                 .double(date.timeIntervalSince1970),
                 .double(date.timeIntervalSince1970)
             ]
         ))
-        let peak = Peak(level: family.score.level, score: family.score.value, memoryBytes: family.totalPhysicalFootprintBytes)
         return OpenIncident(id: id, peak: peak, lastActiveAt: date, lastWrittenAt: date)
     }
 
@@ -327,6 +345,8 @@ final class IncidentLedger {
                 .double(lastActive),
                 .double(open.peak.score),
                 .int64(Int64(clamping: open.peak.memoryBytes)),
+                .double(open.peak.cpuPercent),
+                .double(open.peak.growthMegabytesPerMinute),
                 .text(open.id.uuidString)
             ]
         ))

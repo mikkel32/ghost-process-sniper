@@ -110,7 +110,7 @@ struct IncidentsConsoleView: View {
                             .background(Color.green.opacity(0.12), in: Capsule())
                     }
                 }
-                .help("\(row.leakText)\n\(row.timeRangeText)")
+                .help("Peak growth: \(row.leakText)\n\(row.timeRangeText)")
             }
             .width(min: 160, ideal: 220)
 
@@ -212,11 +212,12 @@ struct IncidentsConsoleView: View {
                         FlowTags(title: "Why", items: incident.reasons)
                     }
 
-                    RadarSection(title: "Metrics") {
+                    // Every value is the episode's highest, not the last sample.
+                    RadarSection(title: "Metrics", subtitle: "Peak values") {
                         HStack(spacing: 8) {
-                            RadarChip(title: "Memory", value: RadarFormat.bytes(incident.memoryBytes), systemImage: "memorychip", level: incident.level)
-                            RadarChip(title: "CPU", value: "\(Int(incident.cpuPercent.rounded()))%", systemImage: "cpu", level: incident.level)
-                            RadarChip(title: "Leak", value: "\(Int(incident.leakVelocityMegabytesPerMinute.rounded())) MB/min", systemImage: "chart.line.uptrend.xyaxis", level: incident.leakVelocityMegabytesPerMinute > 0 ? .watch : .quiet)
+                            RadarChip(title: "Memory", value: row.memoryText, systemImage: "memorychip", level: incident.level)
+                            RadarChip(title: "CPU", value: row.cpuText, systemImage: "cpu", level: incident.level)
+                            RadarChip(title: "Growth", value: row.leakText, systemImage: "chart.line.uptrend.xyaxis", level: incident.leakVelocityMegabytesPerMinute >= 0.5 ? .watch : .quiet)
                         }
                     }
 
@@ -277,8 +278,9 @@ struct IncidentsConsoleView: View {
             "Family: \(incident.familyName)",
             "State: \(incident.resolvedAt == nil ? "Active" : "Resolved")",
             "Score: \(Int(incident.maxScore.rounded()))",
-            "Memory: \(RadarFormat.bytes(incident.memoryBytes))",
-            "CPU: \(RadarFormat.percent(incident.cpuPercent))",
+            "Peak memory: \(RadarFormat.bytes(incident.memoryBytes))",
+            "Peak CPU: \(RadarFormat.percent(incident.cpuPercent))",
+            "Peak growth: \(IncidentRowViewModel.growthText(incident.leakVelocityMegabytesPerMinute))",
             "Reasons: \(incident.reasons.joined(separator: ", "))"
         ].joined(separator: "\n")
     }

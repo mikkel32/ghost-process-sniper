@@ -21,6 +21,13 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
     /// signature; nil once it has exited.
     public let liveFamilyKey: String?
 
+    /// The episode's peak growth. "none" below 1 MB/min, which also covers the
+    /// raw, possibly negative slope that rows written before peaks were
+    /// tracked still hold.
+    public static func growthText(_ megabytesPerMinute: Double) -> String {
+        megabytesPerMinute >= 0.5 ? RadarFormat.leak(megabytesPerMinute) : "none"
+    }
+
     public init(incident: RadarIncident) {
         self.init(incident: incident, liveFamilyKey: nil)
     }
@@ -38,7 +45,7 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
         scoreText = "\(Int(incident.maxScore.rounded()))"
         memoryText = RadarFormat.bytes(incident.memoryBytes)
         cpuText = RadarFormat.percent(incident.cpuPercent)
-        leakText = RadarFormat.leak(incident.leakVelocityMegabytesPerMinute)
+        leakText = Self.growthText(incident.leakVelocityMegabytesPerMinute)
         occurrenceText = "\(incident.occurrenceCount)"
         timeRangeText = "\(incident.startedAt.formatted(date: .abbreviated, time: .shortened)) - \(incident.lastSeenAt.formatted(date: .abbreviated, time: .shortened))"
         reasons = incident.reasons
