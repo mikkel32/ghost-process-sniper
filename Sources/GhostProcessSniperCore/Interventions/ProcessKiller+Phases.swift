@@ -66,7 +66,14 @@ extension ProcessKiller {
             }
             // An app that accepted the quit request may be showing a save
             // prompt, and SIGTERM would close it past that; only force may.
-            var recipients = phase.isForce ? live : live.filter { $0.pid != quitAccepted }
+            // Its renderers and helpers hold what that prompt is about, so
+            // while the app is still open they are left alone too: SIGTERM is
+            // for what an app left behind once it had gone.
+            let appIsOpen = quitAccepted.map { app in live.contains { $0.pid == app } } ?? false
+            var recipients = phase.isForce || !appIsOpen ? live : []
+            if appIsOpen, !phase.isForce, live.count > 1 {
+                noteHelpersLeftAlone(context: context, report: &report)
+            }
             if phase.reach == .rootOnly, !phase.isForce {
                 recipients = Self.rootAndOutsiders(of: recipients, tree: targets)
             }
@@ -155,6 +162,15 @@ extension ProcessKiller {
         }
         return KillPhaseWalk(remaining: remaining, quitAcceptedPID: quitAccepted, adopted: adopted,
                              reportedLate: reportedLate, firstSignalAt: firstSignalAt)
+    }
+
+    /// Says why an app's helpers were not sent the polite signal, once: they
+    /// stay for the sheet to explain, and for the user to force if they choose.
+    private func noteHelpersLeftAlone(context: KillPhaseContext, report: inout KillReport) {
+        let note = KillReport.helpersLeftAloneNote(app: context.plan.displayName)
+        guard !report.notes.contains(note) else { return }
+        report.notes.append(note)
+        appendEvent(.targetUpdated, operationID: context.operationID, message: note, report: &report, eventSink: context.eventSink)
     }
 
     /// Sends one phase's action and returns the targets it can never reach:

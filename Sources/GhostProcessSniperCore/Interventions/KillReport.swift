@@ -218,6 +218,14 @@ public struct KillReport: Equatable, Sendable {
     }
 }
 
+extension KillReport {
+    /// What a quit says when the app was still answering it and its helpers
+    /// were therefore left running; the settled report drops it again.
+    static func helpersLeftAloneNote(app: String) -> String {
+        "Left the helpers of \(app) running while it answers the quit request."
+    }
+}
+
 private extension String {
     func ifEmpty(_ fallback: String) -> String {
         isEmpty ? fallback : self
