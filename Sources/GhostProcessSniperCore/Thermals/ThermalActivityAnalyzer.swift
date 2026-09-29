@@ -33,14 +33,16 @@ public enum ThermalActivityAnalyzer {
         let samples = processes.map { process in
             let key = ownership[process.identity]
             let identity = process.identity
+            let assignment = resolver.assignment(for: process)
             return ThermalActivitySample(identity: identity,
                 familyKey: key ?? "process:\(identity.pid):\(identity.startTimeSeconds).\(identity.startTimeMicroseconds)",
                 name: process.name, executablePath: process.executablePath,
                 cpuPercent: process.cpuPercent, gpuPercent: process.gpuUsagePercent,
                 measuredAt: process.cpuMeasurementDate, gpuMeasuredAt: process.gpuMeasurementDate,
                 canInspectFamily: key != nil,
-                isSystemProcess: process.isSystemProcess,
-                assignment: resolver.assignment(for: process))
+                isSystemProcess: process.isSystemProcess ||
+                    ThermalWorkloadResolver.isMacOSService(executablePath: process.executablePath, kind: assignment.kind),
+                assignment: assignment)
         }
         return ThermalActivitySummary.build(samples: samples, now: now, processorCount: processorCount)
     }

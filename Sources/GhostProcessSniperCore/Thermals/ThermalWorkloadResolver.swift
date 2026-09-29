@@ -4,6 +4,7 @@ import Foundation
 /// These are explained and never offered as something to stop.
 public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
     case virtualMachine, spotlight, photosAnalysis, timeMachine, windowServer
+    case cloudSync, securityChecks, softwareUpdate
 
     public var label: String {
         switch self {
@@ -12,6 +13,9 @@ public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
         case .photosAnalysis: "Photos analysis"
         case .timeMachine: "Time Machine backup"
         case .windowServer: "Screen drawing — many windows, external displays or animations"
+        case .cloudSync: "iCloud sync — iCloud Drive, CloudKit and cloud-storage folders"
+        case .securityChecks: "Security checks — Gatekeeper, XProtect, certificate and signature checks"
+        case .softwareUpdate: "Software update — macOS updates, App Store apps and installer packages"
         }
     }
 
@@ -27,6 +31,9 @@ public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
         case .photosAnalysis: "Photos is analysing new images and videos for faces, objects and memories."
         case .timeMachine: "A Time Machine backup is copying changed files."
         case .windowServer: "macOS composites every window and display; many windows, external displays or animations raise its load."
+        case .cloudSync: "macOS is syncing iCloud Drive and other cloud storage, often after big downloads, a new sign-in or many changed files."
+        case .securityChecks: "macOS is vetting downloaded or freshly built software and checking certificates, which builds, downloads and new installs trigger."
+        case .softwareUpdate: "macOS is downloading, verifying or installing software, which keeps it busy for a while."
         }
     }
 
@@ -42,6 +49,12 @@ public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
             "Let the backup finish, or skip it from the Time Machine menu if you need the performance right now."
         case .windowServer:
             "Close unused windows, turn on Reduce Motion or Reduce Transparency, or disconnect an unused display, then compare the next readings."
+        case .cloudSync:
+            "Let the sync finish, especially after big downloads or a new sign-in. If it keeps running, check System Settings › Apple Account › iCloud for what is syncing."
+        case .securityChecks:
+            "This usually settles once the build or download ends, so let it finish. If your own builds keep triggering it, adding your terminal under System Settings › Privacy & Security › Developer Tools skips these checks for software you build yourself."
+        case .softwareUpdate:
+            "Let the installation finish; it runs best while the Mac is plugged in and idle."
         }
     }
 
@@ -49,6 +62,9 @@ public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
         let file = String(PathText.lastComponent(executablePath[...]))
         for candidate in [file, name] where !candidate.isEmpty {
             if let source = exactNames[candidate] { return source }
+            // An unread path (the read has a deadline) is no evidence against a daemon's name.
+            if let source = systemDaemonNames[candidate],
+               executablePath.isEmpty || ThermalWorkloadResolver.isOperatingSystemPath(executablePath) { return source }
             // proc_name truncates long names; only accept a prefix long enough to be unambiguous.
             if candidate.count >= 30,
                candidate != virtualMachineName, virtualMachineName.hasPrefix(candidate) { return .virtualMachine }
@@ -63,6 +79,14 @@ public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
         "photoanalysisd": .photosAnalysis, "mediaanalysisd": .photosAnalysis,
         "backupd": .timeMachine,
         "WindowServer": .windowServer
+    ]
+    /// Names other software shares: the iOS Simulator runs its own cloudd, trustd and installd,
+    /// and people build tools called bird. Only a macOS folder makes these the system's.
+    private static let systemDaemonNames: [String: Self] = [
+        "bird": .cloudSync, "cloudd": .cloudSync, "fileproviderd": .cloudSync,
+        "syspolicyd": .securityChecks, "XprotectService": .securityChecks, "amfid": .securityChecks,
+        "trustd": .securityChecks,
+        "softwareupdated": .softwareUpdate, "installd": .softwareUpdate
     ]
 }
 
@@ -125,42 +149,106 @@ struct ThermalWorkloadResolver {
             return ThermalWorkloadAssignment(groupKey: "known:\(source.rawValue)", displayName: source.displayName,
                                              applicationPath: nil, hostAppName: nil, kind: .knownSource(source))
         }
-        if let app = Self.applicationPath(process.executablePath) { return appAssignment(app) }
+        // With Xcode selected, the xcrun shims for swift, clang, git, make and python3 run
+        // programs from inside Xcode.app. Those are the app's own only when Xcode started
+        // them; when a shell did, the shell's job owns the work. Everything else in a
+        // bundle is the app's, and the path alone says so.
+        let bundle = Self.applicationPath(process.executablePath)
+        if let bundle, !Self.isDeveloperTool(process.executablePath, in: bundle) { return appAssignment(bundle) }
         var visited: Set<Int32> = [process.pid]
         var hops = 0
         var root = process
+        // The script's own shell is part of its job, so it is named like the tools it runs.
+        var script: ProcessMetrics? = isScript(process) ? process : nil
         while let parent = parent(of: root, visited: &visited, hops: &hops) {
-            // make and ninja run each recipe through `sh -c`: the build, not the shell, is the job.
-            if ShellRole.isRecipeShell(parent, launcher: processesByPID[parent.parentPID]) {
+            if isRecipeShell(parent) {
                 root = parent
                 continue
             }
             if Self.isShell(parent.name) {
-                let host = terminalHost(above: parent, visited: &visited, hops: &hops)
-                return Self.job(root: root, host: host, kind: .job)
+                // A script run from a prompt is the job its tools belong to, however many it runs one
+                // after another; nested scripts climb to the outermost. Named after each tool, every
+                // step would be a new job that never builds up history.
+                if isScript(parent) {
+                    script = parent
+                    root = parent
+                    continue
+                }
+                let enclosing = enclosingApp(above: parent, visited: &visited, hops: &hops)
+                // An Xcode run-script phase goes through a shell of its own, and stays Xcode's.
+                if let bundle, enclosing == bundle { return appAssignment(bundle) }
+                return Self.job(root: root, host: enclosing.flatMap(Self.terminalName), kind: .job, script: script)
             }
             if let app = Self.applicationPath(parent.executablePath) {
+                // Xcode's tools (xcodebuild, swift-build, make) start more of them, so the climb
+                // goes on through a tool to the shell that ran the first.
+                if Self.isDeveloperTool(parent.executablePath, in: app) {
+                    root = parent
+                    continue
+                }
+                if let bundle, app == bundle {
+                    // Xcode's own main process owns what it runs. Its build service is between a
+                    // terminal's xcodebuild and the compilers, so the climb goes on through it.
+                    if parent.executablePath.hasPrefix(bundle + "/Contents/MacOS/") { return appAssignment(bundle) }
+                    root = parent
+                    continue
+                }
                 if let terminal = Self.terminalName(app) { return Self.job(root: root, host: terminal, kind: .job) }
                 return appAssignment(app)
             }
             root = parent
         }
+        if let bundle { return appAssignment(bundle) }
         // An XPC service or helper launchd started for an app, such as a
         // Safari tab's WebContent process, belongs to that app.
-        if let responsible = responsiblePIDs[root.identity] ?? responsiblePIDs[process.identity],
-           let owner = processesByPID[responsible],
-           let app = Self.applicationPath(owner.executablePath) {
+        if let app = responsibleApp(for: root) ?? responsibleApp(for: process) {
+            // macOS keeps a terminal responsible for what it started even after the job is
+            // orphaned to launchd (nohup, a daemonized server), and that is a job started in
+            // it, not the terminal's own work. Platform helpers a terminal is responsible for
+            // (an open panel's view bridge) still count with it.
+            if let terminal = Self.terminalName(app), !Self.isPlatformHelper(root.executablePath) {
+                return Self.job(root: root, host: terminal, kind: .job)
+            }
             return appAssignment(app)
         }
-        return Self.job(root: root, host: nil, kind: root.identity == process.identity ? .process : .job)
+        return Self.job(root: root, host: nil, kind: root.identity == process.identity ? .process : .job, script: script)
     }
 
-    /// Names the terminal a shell runs in; an editor's integrated terminal is not a host.
-    private mutating func terminalHost(above shell: ProcessMetrics, visited: inout Set<Int32>,
+    /// A shell running a script that someone started from a prompt: its parent is an interactive
+    /// shell or session host (a recycled pid is not one).
+    private func isScript(_ shell: ProcessMetrics) -> Bool {
+        guard ShellRole.scriptOperand(shell) != nil, let outer = processesByPID[shell.parentPID],
+              ShellRole.isShell(outer.name) || ShellRole.isSessionHost(outer.name) else { return false }
+        return Self.startedNoLater(outer.identity, than: shell.identity)
+    }
+
+    /// The app macOS holds responsible for a launchd-started process, unless its pid was
+    /// reused: a recycled owner starts after the process it is said to be responsible for.
+    private func responsibleApp(for process: ProcessMetrics) -> String? {
+        guard let responsible = responsiblePIDs[process.identity], let owner = processesByPID[responsible],
+              Self.startedNoLater(owner.identity, than: process.identity) else { return nil }
+        return Self.applicationPath(owner.executablePath)
+    }
+
+    /// make and ninja run each recipe through `sh -c`: the build, not the shell, is the job.
+    /// ShellRole reads a launcher inside an app bundle as the app opening a shell, but with
+    /// Xcode selected make and ninja are themselves Xcode's command-line tools.
+    private func isRecipeShell(_ shell: ProcessMetrics) -> Bool {
+        let launcher = processesByPID[shell.parentPID]
+        if ShellRole.isRecipeShell(shell, launcher: launcher) { return true }
+        guard let launcher, ShellRole.isShell(shell.name), ShellRole.runsCommand(shell), shell.parentPID > 1,
+              let app = Self.applicationPath(launcher.executablePath),
+              Self.isDeveloperTool(launcher.executablePath, in: app) else { return false }
+        return !ShellRole.isShell(launcher.name) && !ShellRole.isSessionHost(launcher.name)
+    }
+
+    /// The app a shell runs in, when there is one; an editor's integrated terminal is an app
+    /// but not a terminal host.
+    private mutating func enclosingApp(above shell: ProcessMetrics, visited: inout Set<Int32>,
                                        hops: inout Int) -> String? {
         var current = shell
         while let parent = parent(of: current, visited: &visited, hops: &hops) {
-            if let app = Self.applicationPath(parent.executablePath) { return Self.terminalName(app) }
+            if let app = Self.applicationPath(parent.executablePath) { return app }
             current = parent
         }
         return nil
@@ -186,11 +274,18 @@ struct ThermalWorkloadResolver {
         return assignment
     }
 
-    private static func job(root: ProcessMetrics, host: String?, kind: ThermalWorkloadKind) -> ThermalWorkloadAssignment {
+    /// A job is named after the process that started it, or after the script when that is the root.
+    private static func job(root: ProcessMetrics, host: String?, kind: ThermalWorkloadKind,
+                            script: ProcessMetrics? = nil) -> ThermalWorkloadAssignment {
         let identity = root.identity
+        var name = root.name
+        if let script, script.identity == identity, let operand = ShellRole.scriptOperand(script) {
+            let file = PathText.lastComponent(operand[...])
+            if !file.isEmpty { name = String(file) }
+        }
         return ThermalWorkloadAssignment(
             groupKey: "job:\(identity.pid):\(identity.startTimeSeconds).\(identity.startTimeMicroseconds)",
-            displayName: root.name, applicationPath: nil, hostAppName: host, kind: kind)
+            displayName: name, applicationPath: nil, hostAppName: host, kind: kind)
     }
 
     /// A parent that started after its child is a recycled PID, not the real parent.
@@ -213,6 +308,34 @@ struct ThermalWorkloadResolver {
     private static func terminalName(_ appPath: String) -> String? {
         let name = PathText.displayName(appPath)
         return terminals.contains(name.lowercased()) ? name : nil
+    }
+
+    /// Where macOS keeps its daemons and agents; command-line tools in
+    /// /usr/bin and /bin are things people run, so they are not listed.
+    static let operatingSystemPrefixes = ["/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/Apple/"]
+
+    static func isOperatingSystemPath(_ path: String) -> Bool {
+        operatingSystemPrefixes.contains { path.hasPrefix($0) }
+    }
+
+    /// A lone process running from macOS's own folders is a service, whoever owns it:
+    /// the kernel's system flag marks only kernel_task, so cloudd or sharingd running as
+    /// the user would read as apps. Apps, jobs someone started and known sources are never services.
+    static func isMacOSService(executablePath: String, kind: ThermalWorkloadKind) -> Bool {
+        kind == .process && isOperatingSystemPath(executablePath)
+    }
+
+    /// A command-line tool shipped in an Xcode bundle, not one of the apps beside them
+    /// (Simulator, Instruments) or Xcode's own services.
+    private static func isDeveloperTool(_ executablePath: String, in bundle: String) -> Bool {
+        executablePath.hasPrefix(bundle + "/Contents/Developer/")
+            && !executablePath.hasPrefix(bundle + "/Contents/Developer/Applications/")
+    }
+
+    /// An XPC service or a program from macOS's own folders, which launchd starts for an app
+    /// rather than a person starting it.
+    private static func isPlatformHelper(_ executablePath: String) -> Bool {
+        executablePath.contains(".xpc/") || isOperatingSystemPath(executablePath)
     }
 
     /// Whether the executable is a terminal app: what it starts is a job, never a helper of the app.

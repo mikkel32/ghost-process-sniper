@@ -10,10 +10,6 @@ struct EnergyReportBuilder {
     /// Keep-awake utilities do this on purpose; they are listed, never flagged.
     static let keepAwakeApps: Set<String> = ["amphetamine", "keepingyouawake", "lungo", "theine", "caffeine",
                                              "caffeinated", "owly", "jolt of caffeine", "one switch"]
-    /// Where macOS keeps its daemons and agents; command-line tools in
-    /// /usr/bin and /bin are things people run, so they are not listed.
-    private static let systemPrefixes = ["/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/Apple/"]
-
     let ledger: EnergyLedger
     let battery: BatteryOutlook?
     let processes: [ProcessMetrics]
@@ -152,7 +148,7 @@ struct EnergyReportBuilder {
         // Accounts below 500 are macOS's own (root, _coreaudiod, _windowserver…).
         if !members.isEmpty, members.allSatisfy({ $0.userID < 500 }) { return true }
         let paths = members.map(\.executablePath).filter { !$0.isEmpty }
-        return !paths.isEmpty && paths.allSatisfy { path in Self.systemPrefixes.contains { path.hasPrefix($0) } }
+        return !paths.isEmpty && paths.allSatisfy(ThermalWorkloadResolver.isOperatingSystemPath)
     }
 
     static func isIntentional(name: String, process: ProcessMetrics?) -> Bool {
