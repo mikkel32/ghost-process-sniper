@@ -62,8 +62,7 @@ public struct SentinelAlertGate: Sendable {
         var alerts = Alerts()
         var present = Set<String>()
         for finding in report.findings {
-            // Per severity, so a finding that turns dangerous is news again.
-            let id = "finding:\(finding.id)|\(finding.severity.rawValue)"
+            let id = Self.id(for: finding)
             present.insert(id)
             guard finding.isRunning || finding.severity == .dangerous, finding.severity >= .suspicious,
                   admit(id, key: Self.key(for: finding), dangerous: finding.severity == .dangerous, now: now)
@@ -71,14 +70,43 @@ public struct SentinelAlertGate: Sendable {
             alerts.findings.append(finding)
         }
         for item in report.launchItems {
-            let id = "startup:" + item.id
+            let (id, key) = Self.ids(for: item)
             present.insert(id)
-            guard item.isNew, admit(id, key: "startup|" + item.plistPath, dangerous: item.severity == .dangerous, now: now)
+            guard item.isNew, admit(id, key: key, dangerous: item.severity == .dangerous, now: now)
             else { continue }
             alerts.startupItems.append(item)
         }
         seenIDs.formIntersection(present)
         return alerts
+    }
+
+    /// Per severity, so a finding that turns dangerous is news again.
+    static func id(for finding: SentinelFinding) -> String {
+        "finding:\(finding.id)|\(finding.severity.rawValue)"
+    }
+
+    /// A startup item is news again when it turns worse: a new plist is first
+    /// Notable, then its signature is read or it is rewritten with a worse command.
+    static func ids(for item: LaunchItem) -> (id: String, key: String) {
+        ("startup:\(item.id)|\(item.severity.rawValue)", "startup|\(item.plistPath)|\(item.severity.rawValue)")
+    }
+
+    /// Takes back an alert the notifier could not post (notifications not yet
+    /// allowed, or the post failed), so the next report offers it again
+    /// instead of holding it for a day, in this run and after a relaunch.
+    public mutating func retract(_ finding: SentinelFinding) {
+        release(Self.id(for: finding), key: Self.key(for: finding), dangerous: finding.severity == .dangerous)
+    }
+
+    public mutating func retract(_ item: LaunchItem) {
+        let (id, key) = Self.ids(for: item)
+        release(id, key: key, dangerous: item.severity == .dangerous)
+    }
+
+    private mutating func release(_ id: String, key: String, dangerous: Bool) {
+        seenIDs.remove(id)
+        let key = AlertMemory.hash(key)
+        if dangerous { lastDangerAlerted[key] = nil } else { lastAlerted[key] = nil }
     }
 
     /// The program, what matched and how bad it is: the same program flagged

@@ -234,4 +234,61 @@ final class SentinelAlertGateTests: XCTestCase {
         let promoted = gate.alerts(for: worse, now: now.addingTimeInterval(120)).filtered(by: .dangerousOnly)
         XCTAssertEqual(promoted.findings.count, 1, "dangerous always notifies")
     }
+
+    // MARK: An alert that could not be posted is not spent
+
+    /// Notifications not yet allowed, or a failed post: the gate had counted the alert, so a Dangerous
+    /// finding stayed silent for a day even after the user allowed notifications a minute later.
+    func testAnAlertThatCouldNotBePostedIsOfferedAgain() {
+        var gate = SentinelAlertGate()
+        let dangerous = finding(pid: 100, path: "/tmp/.z/sh", kind: .reverseShell, severity: .dangerous)
+        let report = SentinelReport(findings: [dangerous])
+        XCTAssertEqual(gate.alerts(for: report, now: now).findings.count, 1)
+        XCTAssertTrue(gate.alerts(for: report, now: now.addingTimeInterval(1)).findings.isEmpty, "spent while it seems posted")
+
+        gate.retract(dangerous)
+
+        XCTAssertEqual(gate.alerts(for: report, now: now.addingTimeInterval(2)).findings.count, 1, "offered again")
+        XCTAssertTrue(gate.alerts(for: report, now: now.addingTimeInterval(3)).findings.isEmpty, "and spent once posted")
+    }
+
+    func testARetractedSuspiciousAlertLeavesNoCooldownInTheSavedMemory() {
+        var gate = SentinelAlertGate()
+        let suspicious = finding(pid: 110)
+        XCTAssertEqual(gate.alerts(for: SentinelReport(findings: [suspicious]), now: now).findings.count, 1)
+        XCTAssertFalse(gate.memory.lastAlerted.isEmpty)
+
+        gate.retract(suspicious)
+
+        XCTAssertTrue(gate.memory.lastAlerted.isEmpty, "a relaunch must not hold back what was never posted")
+        var relaunched = SentinelAlertGate(memory: gate.memory, now: now.addingTimeInterval(60))
+        XCTAssertEqual(relaunched.alerts(for: SentinelReport(findings: [suspicious]), now: now.addingTimeInterval(60)).findings.count, 1)
+    }
+
+    func testARetractedStartupItemIsOfferedAgain() {
+        var gate = SentinelAlertGate()
+        let bad = dangerousItem("com.example.retract")
+        let report = SentinelReport(launchItems: [bad])
+        XCTAssertEqual(gate.alerts(for: report, now: now).startupItems.count, 1)
+        gate.retract(bad)
+        XCTAssertEqual(gate.alerts(for: report, now: now.addingTimeInterval(5)).startupItems.count, 1)
+    }
+
+    // MARK: A startup item that turns worse is news again
+
+    /// A new plist is first seen unsigned-but-unread (Notable), then its signature is read (Suspicious), or
+    /// it is rewritten with a reverse shell (Dangerous): the first alert must not swallow the later ones.
+    func testAStartupItemThatTurnsWorseAlertsAgain() {
+        var gate = SentinelAlertGate()
+        let path = "/Users/me/Library/LaunchAgents/com.example.grows.plist"
+        func item(_ severity: SentinelSeverity) -> LaunchItem {
+            LaunchItem(id: path, plistPath: path, label: "com.example.grows", scope: .userAgent, programPath: "/tmp/.x/agent",
+                       arguments: ["/tmp/.x/agent"], runsAtLoad: true, keepsAlive: false, modified: nil, isNew: true,
+                       signals: [SentinelSignal(.reverseShell, severity, "evidence")], signing: nil)
+        }
+        XCTAssertEqual(gate.alerts(for: SentinelReport(launchItems: [item(.suspicious)]), now: now).startupItems.count, 1)
+        XCTAssertTrue(gate.alerts(for: SentinelReport(launchItems: [item(.suspicious)]), now: now.addingTimeInterval(5)).startupItems.isEmpty)
+        XCTAssertEqual(gate.alerts(for: SentinelReport(launchItems: [item(.dangerous)]), now: now.addingTimeInterval(10)).startupItems.count, 1,
+                       "the same item, now dangerous")
+    }
 }

@@ -39,8 +39,13 @@ actor UserNotificationRadarNotifier: RadarNotifying {
     }
 
     /// One alert per Sentinel finding; clicking it opens the Security page.
-    func notify(sentinel finding: SentinelFinding) async {
-        guard notificationCenterAvailable, await mayDeliver() else { return }
+    /// Whether the alert is settled: posted, or notifications are off by the
+    /// user's own choice. False (permission not answered yet, or the post
+    /// failed) means the gate should offer it again.
+    @discardableResult
+    func notify(sentinel finding: SentinelFinding) async -> Bool {
+        guard notificationCenterAvailable else { return true }
+        guard await mayDeliver() else { return await notificationsRefusedByUser() }
         let content = UNMutableNotificationContent()
         // Only a dangerous finding alerts after its process exited (a one-shot command caught in the act).
         content.title = !finding.isRunning ? "Security: a dangerous command ran"
@@ -56,8 +61,10 @@ actor UserNotificationRadarNotifier: RadarNotifying {
         let request = UNNotificationRequest(identifier: "ghost.sentinel.\(finding.id)", content: content, trigger: nil)
         do {
             try await UNUserNotificationCenter.current().add(request)
+            return true
         } catch {
             RadarLogger.notifications.error("Sentinel notification failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -83,12 +90,13 @@ actor UserNotificationRadarNotifier: RadarNotifying {
         }
     }
 
-    /// A startup item appeared while Ghost was running.
-    func notify(startupItem item: LaunchItem) async {
-        guard notificationCenterAvailable else { return }
+    /// A startup item appeared while Ghost was running. Whether it is settled, as for a finding.
+    @discardableResult
+    func notify(startupItem item: LaunchItem) async -> Bool {
+        guard notificationCenterAvailable else { return true }
         switch await currentStatus() {
         case .authorized, .provisional, .ephemeral: break
-        default: return
+        default: return await notificationsRefusedByUser()
         }
         let content = UNMutableNotificationContent()
         content.title = item.severity >= .suspicious ? "Security: suspicious startup item" : "New startup item"
@@ -99,7 +107,20 @@ actor UserNotificationRadarNotifier: RadarNotifying {
         content.userInfo = ["sentinelFinding": item.id]
         content.threadIdentifier = "ghost.sentinel"
         let request = UNNotificationRequest(identifier: "ghost.startup.\(item.id)", content: content, trigger: nil)
-        try? await UNUserNotificationCenter.current().add(request)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            return true
+        } catch {
+            RadarLogger.notifications.error("Startup item notification failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    /// True once the user has turned notifications off: that is an answer, so
+    /// an alert is not kept back for a permission that will not come. False
+    /// while the answer is still open.
+    private func notificationsRefusedByUser() async -> Bool {
+        await currentStatus() == .denied
     }
 
     func requestAuthorization() async -> Bool {

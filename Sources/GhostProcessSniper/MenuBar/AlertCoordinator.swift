@@ -13,6 +13,10 @@ final class AlertCoordinator {
     private var sentinelAlerts: SentinelAlertGate
     private var energyAlerts: EnergyAlertGate
     private var lastSentinelRevision: UInt64 = 0
+    /// After an alert could not be posted, the same report is offered again,
+    /// but not on every scan.
+    private var sentinelRetryAt = Date.distantPast
+    private static let retryInterval: TimeInterval = 20
     private var lastEnergyGlance = EnergyGlance.empty
 
     init(monitor: ProcessMonitor, notifier: UserNotificationRadarNotifier, memory: AlertMemoryStore = .standard) {
@@ -47,21 +51,46 @@ final class AlertCoordinator {
     /// the menu-bar icon (which follows the report, not the choice).
     func handleSentinelChange() -> Bool? {
         let report = monitor.sentinel
-        guard report.revision != lastSentinelRevision else { return nil }
+        let now = Date()
+        guard report.revision != lastSentinelRevision, now >= sentinelRetryAt else { return nil }
         lastSentinelRevision = report.revision
-        let alerts = sentinelAlerts.alerts(for: report, now: Date())
+        let alerts = sentinelAlerts.alerts(for: report, now: now)
         if !alerts.findings.isEmpty || !alerts.startupItems.isEmpty {
             memory.save(sentinelAlerts.memory, for: .sentinel)
         }
         let allowed = alerts.filtered(by: monitor.settings.notifications.security)
         for finding in allowed.findings {
             let notifier = notifier
-            Task { await notifier.notify(sentinel: finding) }
+            Task { [weak self] in
+                if await !notifier.notify(sentinel: finding) { self?.retract(finding) }
+            }
         }
         for item in allowed.startupItems {
             let notifier = notifier
-            Task { await notifier.notify(startupItem: item) }
+            Task { [weak self] in
+                if await !notifier.notify(startupItem: item) { self?.retract(item) }
+            }
         }
         return alerts.findings.contains { $0.severity == .dangerous }
+    }
+
+    /// The notifier could not post it (permission not answered yet, or a
+    /// failed post): the gate offers it again with the next report, so an
+    /// alert consumed before the user allowed notifications is not lost.
+    private func retract(_ finding: SentinelFinding) {
+        sentinelAlerts.retract(finding)
+        memory.save(sentinelAlerts.memory, for: .sentinel)
+        retryUnsettledAlerts()
+    }
+
+    private func retract(_ item: LaunchItem) {
+        sentinelAlerts.retract(item)
+        memory.save(sentinelAlerts.memory, for: .sentinel)
+        retryUnsettledAlerts()
+    }
+
+    private func retryUnsettledAlerts() {
+        lastSentinelRevision = 0
+        sentinelRetryAt = Date().addingTimeInterval(Self.retryInterval)
     }
 }
