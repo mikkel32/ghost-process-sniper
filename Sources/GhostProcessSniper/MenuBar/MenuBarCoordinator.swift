@@ -233,14 +233,21 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
-        case #selector(refreshCommand), #selector(openConsoleCommand), #selector(openSettingsCommand), #selector(toggleInspectorCommand), #selector(copyReportCommand), #selector(copyDiagnosticsCommand), #selector(findCommand):
+        case #selector(refreshCommand), #selector(openConsoleCommand), #selector(openSettingsCommand), #selector(copyReportCommand), #selector(copyDiagnosticsCommand), #selector(findCommand):
             return true
         case #selector(nextFamilyCommand), #selector(previousFamilyCommand):
-            return monitor.commandAvailability(menuItem.action == #selector(nextFamilyCommand) ? .nextFamily : .previousFamily, selection: .overview).isEnabled
-        case #selector(snoozeCommand), #selector(ignoreCommand):
-            return consoleController.canActOnSelection(stop: false)
+            // With the console open its filtered list decides; closed, the
+            // shortcut opens it, so any family to move through will do.
+            let command: RadarCommand = menuItem.action == #selector(nextFamilyCommand) ? .nextFamily : .previousFamily
+            return (consoleController.availability(command) ?? monitor.commandAvailability(command, selection: .overview)).isEnabled
+        case #selector(toggleInspectorCommand):
+            return consoleController.availability(.toggleInspector)?.isEnabled ?? false
+        case #selector(snoozeCommand):
+            return consoleController.availability(.snooze)?.isEnabled ?? false
+        case #selector(ignoreCommand):
+            return consoleController.availability(.ignore)?.isEnabled ?? false
         case #selector(killPreviewCommand):
-            return consoleController.canActOnSelection(stop: true)
+            return consoleController.availability(.killPreview)?.isEnabled ?? false
         case #selector(goBackCommand):
             return consoleController.canGoBack
         case #selector(goForwardCommand):

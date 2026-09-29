@@ -307,6 +307,9 @@ final class RadarConsoleSession {
     }
 
     func toggleInspector() {
+        // Off a family page there is no inspector to show, and flipping the
+        // saved choice there would change what the next family page opens with.
+        guard state.focusedSelection.familyKey != nil else { return }
         state.showInspector.toggle()
         // Remembered for the next family page, including after relaunch.
         ConsolePreferences.showInspector = state.showInspector
