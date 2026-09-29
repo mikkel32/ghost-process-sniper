@@ -396,7 +396,7 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         }
         let menu = NSMenu()
         let presentation = MenuBarStatusPresentation(state: monitor.publishedState)
-        let statusLine = NSMenuItem(title: presentation.tooltip, action: nil, keyEquivalent: "")
+        let statusLine = NSMenuItem(title: presentation.menuTitle, action: nil, keyEquivalent: "")
         statusLine.isEnabled = false
         menu.addItem(statusLine)
         menu.addItem(.separator())

@@ -5,6 +5,10 @@ public struct MenuBarStatusPresentation: Equatable, Sendable {
     public let compactStateText: String
     public let accessibilityLabel: String
     public let tooltip: String
+    /// The right-click menu's first line: short, so it does not set the menu's width.
+    public let menuTitle: String
+    /// "4 to review", the console's own wording; nil when nothing needs review.
+    public let reviewText: String?
     public let level: GhostLevel
     public let renderKey: String
 
@@ -28,6 +32,7 @@ public struct MenuBarStatusPresentation: Equatable, Sendable {
         level = summary.level
         compactStateText = Self.compactStateText(summary: summary, normalizedStatus: status)
         accessibilityLabel = Self.accessibilityLabel(summary: summary, normalizedStatus: status)
+        reviewText = Self.reviewText(summary: summary)
         tooltip = Self.tooltip(
             summary: summary,
             normalizedStatus: status,
@@ -35,6 +40,7 @@ public struct MenuBarStatusPresentation: Equatable, Sendable {
             metrics: metrics,
             storeError: storeError
         )
+        menuTitle = Self.menuTitle(summary: summary, normalizedStatus: status, storeError: storeError)
         renderKey = [
             title,
             compactStateText,
@@ -69,7 +75,7 @@ public struct MenuBarStatusPresentation: Equatable, Sendable {
         if summary.level >= .critical {
             state = "Critical"
         } else if summary.hotCount > 0 {
-            state = "\(summary.hotCount) hot famil\(summary.hotCount == 1 ? "y" : "ies")"
+            state = summary.hotCount == 1 ? "1 needs review" : "\(summary.hotCount) need review"
         } else if summary.leakingCount > 0 || normalizedStatus.lowercased().contains("leak") {
             state = "Leak detected"
         } else if normalizedStatus.lowercased().contains("warming") {
@@ -99,6 +105,24 @@ public struct MenuBarStatusPresentation: Equatable, Sendable {
         return capped(normalizedStatus, limit: 8)
     }
 
+    private static func reviewText(summary: RadarSummary) -> String? {
+        summary.hotCount > 0 ? "\(summary.hotCount) to review" : nil
+    }
+
+    /// What the tooltip and the menu title open with, each fact once: what
+    /// needs review, the status only when it says more than that count (the
+    /// summary's own status is often "N hot"), and the leaks.
+    private static func headlineFacts(summary: RadarSummary, normalizedStatus: String) -> [String] {
+        var facts = [reviewText(summary: summary)].compactMap { $0 }
+        if normalizedStatus.lowercased() != "\(summary.hotCount) hot" {
+            facts.append(normalizedStatus)
+        }
+        if summary.leakingCount > 0 {
+            facts.append(counted(summary.leakingCount, "leak", "leaks"))
+        }
+        return facts
+    }
+
     private static func tooltip(
         summary: RadarSummary,
         normalizedStatus: String,
@@ -110,23 +134,34 @@ public struct MenuBarStatusPresentation: Equatable, Sendable {
             return capped("Ghost Process Sniper: \(storeError)", limit: 160)
         }
 
-        var parts = [
-            "Ghost Process Sniper: \(normalizedStatus)",
-            "\(summary.familyCount) families",
-            "\(summary.hotCount) hot",
-            "\(summary.leakingCount) leaks"
-        ]
+        var parts = headlineFacts(summary: summary, normalizedStatus: normalizedStatus)
+        parts.append(counted(summary.familyCount, "family", "families"))
         if metrics.duplicateClusterCount > 0 {
-            parts.append("\(metrics.duplicateClusterCount) duplicate clusters")
+            parts.append(counted(metrics.duplicateClusterCount, "duplicate cluster", "duplicate clusters"))
         }
-        return capped(parts.joined(separator: " - "), limit: 180)
+        return capped("Ghost Process Sniper: " + parts.joined(separator: " - "), limit: 180)
     }
 
+    // A long store error stays in the hover text; the menu says only that
+    // history is not being saved, as the popover's warning does.
+    private static func menuTitle(summary: RadarSummary, normalizedStatus: String, storeError: String?) -> String {
+        if let storeError, !storeError.isEmpty {
+            return "Ghost Process Sniper: History not saved"
+        }
+        let facts = headlineFacts(summary: summary, normalizedStatus: normalizedStatus)
+        return capped("Ghost Process Sniper: " + facts.joined(separator: " - "), limit: 60)
+    }
+
+    private static func counted(_ count: Int, _ singular: String, _ plural: String) -> String {
+        "\(count) \(count == 1 ? singular : plural)"
+    }
+
+    /// At most `limit` characters, the ellipsis included.
     private static func capped(_ text: String, limit: Int) -> String {
         guard text.count > limit else {
             return text
         }
-        let end = text.index(text.startIndex, offsetBy: max(1, limit - 1))
+        let end = text.index(text.startIndex, offsetBy: max(1, limit - 3))
         return String(text[..<end]).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
     }
 }
