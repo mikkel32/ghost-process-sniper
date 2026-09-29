@@ -9,6 +9,9 @@ struct KillResultPanel: View {
     let canForceSurvivors: Bool
     let isBusy: Bool
     let forceSurvivors: () -> Void
+    /// Looks again at what is still running, for an app that quit after the
+    /// wait ended; it never stops anything.
+    let checkAgain: () -> Void
     /// Stops what restarted the family, when the advisor found it.
     let stopRestarter: (title: String, action: () -> Void)?
     /// Whether the radar knows the process still holding a port, so it can
@@ -95,18 +98,29 @@ struct KillResultPanel: View {
                 }
                 .disabled(!canForceSurvivors || isBusy)
                 .help("Sends SIGKILL now to the \(survivors == 1 ? "process" : "\(survivors) processes") still running.")
+                checkAgainButton
                 if !canForceSurvivors {
                     Text("Open a new preview to force-stop.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
+        } else if survivors > 0 {
+            checkAgainButton
         } else if !report.respawnedPIDs.isEmpty, let stopRestarter {
             Button(action: stopRestarter.action) {
                 Label(stopRestarter.title, systemImage: "arrow.uturn.up")
             }
             .disabled(isBusy)
         }
+    }
+
+    private var checkAgainButton: some View {
+        Button(action: checkAgain) {
+            Label("Check Again", systemImage: "arrow.clockwise")
+        }
+        .disabled(isBusy)
+        .help("Looks again at what is still running, such as after you answered a save prompt. Nothing is stopped.")
     }
 
     private var ports: some View {

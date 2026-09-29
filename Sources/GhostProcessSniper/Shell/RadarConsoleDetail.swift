@@ -33,7 +33,10 @@ struct RadarConsoleDetail: View {
                         forensicsFreshness: family.forensicsFreshness,
                         monitor: session.monitor
                     )
-                } else if let report = session.recentStops[familyKey] {
+                } else if let remembered = session.recentStops[familyKey] {
+                    // The family has left the scan, so whatever the stop
+                    // listed as still running is not: no stale "still open".
+                    let report = remembered.settlingSurvivors()
                     RecentStopView(
                         report: report,
                         browse: { session.browseFamilies() },
