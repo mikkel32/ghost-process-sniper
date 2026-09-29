@@ -137,7 +137,24 @@ public enum SentinelCatalog {
         guard commandRunners.contains(program) else { return false }
         // A runner inside an app bundle is the app's own copy (Electron's
         // node, a bundled python), part of the app rather than a new program.
-        return !path.contains(".app/Contents/")
+        // Python's own framework app is the exception: the interpreter.
+        return !path.contains(".app/Contents/") || isFrameworkInterpreter(path)
+    }
+
+    /// python3 from Xcode, the Command Line Tools, python.org and Homebrew execs
+    /// `…/Python.framework/Versions/x/Resources/Python.app/Contents/MacOS/Python`,
+    /// so that bundle path is what the kernel reports for the interpreter. Judged
+    /// by shape and owner (Python's own bundle, or Xcode's), not by a bundle named
+    /// "Python": Xcode's copy sits inside Xcode.app. An app's embedded Python
+    /// framework stays the app's own runner.
+    static func isFrameworkInterpreter(_ path: String) -> Bool {
+        let lower = path.lowercased()
+        guard lower.hasSuffix("/resources/python.app/contents/macos/python"), lower.contains(".framework/versions/") else {
+            return false
+        }
+        // Xcode.app, Xcode-beta.app, Xcode_26.1.app …
+        let outer = appName(forPath: path)?.lowercased() ?? ""
+        return outer == "python" || outer.hasPrefix("xcode")
     }
 
     static func isSystemLocation(_ path: String) -> Bool {
