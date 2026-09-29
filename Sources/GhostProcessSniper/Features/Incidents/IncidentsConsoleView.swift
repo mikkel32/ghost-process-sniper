@@ -217,7 +217,7 @@ struct IncidentsConsoleView: View {
                         HStack(spacing: 8) {
                             RadarChip(title: "Memory", value: row.memoryText, systemImage: "memorychip", level: incident.level)
                             RadarChip(title: "CPU", value: row.cpuText, systemImage: "cpu", level: incident.level)
-                            RadarChip(title: "Growth", value: row.leakText, systemImage: "chart.line.uptrend.xyaxis", level: incident.leakVelocityMegabytesPerMinute >= 0.5 ? .watch : .quiet)
+                            RadarChip(title: "Growth", value: row.leakText, systemImage: "chart.line.uptrend.xyaxis", level: IncidentRowViewModel.hasGrowth(incident.leakVelocityMegabytesPerMinute) ? .watch : .quiet)
                         }
                     }
 

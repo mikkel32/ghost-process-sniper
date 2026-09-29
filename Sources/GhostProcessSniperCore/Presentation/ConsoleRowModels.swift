@@ -22,11 +22,15 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
     /// signature; nil once it has exited.
     public let liveFamilyKey: String?
 
-    /// The episode's peak growth. "none" below 1 MB/min, which also covers the
-    /// raw, possibly negative slope that rows written before peaks were
-    /// tracked still hold.
+    /// Growth that reads as at least 1 MB/min. Rows written before peaks were
+    /// tracked can still hold a raw, negative slope; it counts as none.
+    public static func hasGrowth(_ megabytesPerMinute: Double) -> Bool {
+        megabytesPerMinute >= 0.5
+    }
+
+    /// The episode's peak growth, or "none".
     public static func growthText(_ megabytesPerMinute: Double) -> String {
-        megabytesPerMinute >= 0.5 ? RadarFormat.leak(megabytesPerMinute) : "none"
+        hasGrowth(megabytesPerMinute) ? RadarFormat.leak(megabytesPerMinute) : "none"
     }
 
     public init(incident: RadarIncident) {
