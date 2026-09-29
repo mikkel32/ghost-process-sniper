@@ -206,7 +206,8 @@ public final class ProcessKiller: Sendable {
                     return await forceHeldCheck?() == true
                 },
                 eventSink: eventSink,
-                known: Set((preflight.targets + preflight.locked + preflight.stale + preflight.recycled + preflight.exited).map(\.identity)),
+                known: Set((preflight.targets + preflight.locked + preflight.stale + preflight.recycled + preflight.exited
+                            + preflight.leftBehind).map(\.identity)),
                 bornAfter: plan.approvedAt ?? preflightSnapshot.sampledAt,
                 // A quitting app may start an updater or crash reporter on
                 // purpose; what it starts is reported, never stopped.
@@ -237,7 +238,8 @@ public final class ProcessKiller: Sendable {
             report.lateTargets = zip(walk.adopted, results.suffix(walk.adopted.count)).map {
                 $0.updating(state: $1.state, reason: $0.reason)
             } + walk.reportedLate
-            report.leftRunning = await orphanedByStop(preflight.locked + walk.reportedLate)
+            report.leftRunning = await orphanedByStop(preflight.locked + walk.reportedLate + preflight.leftBehind,
+                                                      settling: !preflight.leftBehind.isEmpty)
             report.timeline = KillExecutionTimeline(
                 preflightMilliseconds: preflightSnapshot.elapsedMilliseconds,
                 signalMilliseconds: signalMilliseconds,
@@ -339,21 +341,57 @@ public final class ProcessKiller: Sendable {
         return report.settling(exited: Set(exited))
     }
 
-    /// Processes the stop left alone whose parent it took away: they now
-    /// run on under launchd. Only asked when something was left alone.
-    private func orphanedByStop(_ untouched: [KillTarget]) async -> [KillTarget] {
-        let candidates = untouched.filter { $0.parentPID.map { $0 > 1 } == true && $0.identity.startTimeSeconds > 0 }
-        guard !candidates.isEmpty,
-              let snapshot = try? await snapshotProvider.snapshot(request: KillSnapshotRequest(
+    /// Processes the stop left alone whose parent it took away: they now run
+    /// on under launchd, and so do their own children. Only asked when
+    /// something was left alone.
+    ///
+    /// - Parameter settling: the untouched processes include the children of
+    ///   a process stopped on its own. A language server or a worker quits
+    ///   when it notices its parent is gone, a moment later, so a process
+    ///   still listed is looked at again for a short while before it is
+    ///   said to be left running.
+    private func orphanedByStop(_ untouched: [KillTarget], settling: Bool = false) async -> [KillTarget] {
+        var seen = Set<ProcessIdentity>()
+        let candidates = untouched.filter {
+            $0.parentPID.map { $0 > 1 } == true && $0.identity.startTimeSeconds > 0 && seen.insert($0.identity).inserted
+        }
+        guard !candidates.isEmpty else { return [] }
+        var polls = 0
+        while true {
+            guard let snapshot = try? await snapshotProvider.snapshot(request: KillSnapshotRequest(
                 policy: .verify, targetIdentities: candidates.map(\.identity), includeHeavyMetricsForTargets: false,
                 requiresCompleteGraph: false, conversionBudget: .targetsOnly, verificationMode: .targetOnly
               )) else { return [] }
-        let index = KillProcessIndex(snapshot: snapshot)
-        return candidates.filter { target in
-            guard let process = index.liteProcess(for: target.identity) else { return false }
-            return process.parentPID == 1 && !process.isZombie
+            let running = Self.runningWithoutTheirParent(candidates, in: KillProcessIndex(snapshot: snapshot))
+            guard settling, !running.isEmpty, polls < Self.orphanSettlePolls else { return running }
+            polls += 1
+            await sleeper(Self.orphanSettleNanoseconds)
         }
-        .map { $0.updating(state: .locked, reason: "Left running (now orphaned)") }
+    }
+
+    /// Up to 0.75 s in all, and only when a stop left children running.
+    private static let orphanSettlePolls = 3
+    private static let orphanSettleNanoseconds: UInt64 = 250_000_000
+
+    /// The candidates still running under launchd, or under a candidate
+    /// that is: what a parent's stop set free.
+    private static func runningWithoutTheirParent(_ candidates: [KillTarget], in index: KillProcessIndex) -> [KillTarget] {
+        var parents: [Int32: Int32] = [:]
+        for target in candidates {
+            if let process = index.liteProcess(for: target.identity), !process.isZombie { parents[target.pid] = process.parentPID }
+        }
+        var orphaned = Set(parents.filter { $0.value == 1 }.keys)
+        var grew = true
+        while grew {
+            grew = false
+            for (pid, parent) in parents where !orphaned.contains(pid) && orphaned.contains(parent) {
+                orphaned.insert(pid)
+                grew = true
+            }
+        }
+        return candidates.filter { orphaned.contains($0.pid) }.map {
+            $0.updating(state: .locked, reason: parents[$0.pid] == 1 ? "Left running (now orphaned)" : "Left running (its parent is now orphaned)")
+        }
     }
 
     private static func inspectOnlyFailure(_ preview: KillPreview, approved: Bool) -> String {

@@ -86,6 +86,20 @@ final class FakeProcessTableTests: XCTestCase {
         XCTAssertEqual(table.listed.first?.parentPID, 1)
     }
 
+    func testALateFollowerIsListedUnderLaunchdUntilItExits() throws {
+        let table = FakeProcessTable()
+        table.add(.fake(pid: 63))
+        table.add(.fake(pid: 64, parent: 63), FakeProcessTable.Behaviour(exitsAfterParent: 2))
+
+        try table.send(signal: SIGTERM, to: 63)
+        XCTAssertEqual(table.listed.map(\.pid), [64])
+        XCTAssertEqual(table.listed.first?.parentPID, 1)
+        table.advance()
+        XCTAssertTrue(table.isListed(64))
+        table.advance()
+        XCTAssertFalse(table.isListed(64))
+    }
+
     func testQuitRequestOnlyWorksForApps() async {
         let table = FakeProcessTable()
         table.add(.fake(pid: 70), FakeProcessTable.Behaviour(quitsOnRequest: 1))

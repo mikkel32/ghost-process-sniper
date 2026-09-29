@@ -29,19 +29,25 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
         var zombieOnExit = false
         /// Exits when its parent exits, like an app's helpers.
         var exitsWithParent = false
+        /// Exits this many ticks after its parent has, like a language server
+        /// that notices its parent is gone on its next read: it is listed
+        /// under launchd until then.
+        var exitsAfterParent: Int?
 
         init(
             onSignal: [Int32: [Reaction]] = [:],
             deniesSignals: Bool = false,
             quitsOnRequest: Int? = nil,
             zombieOnExit: Bool = false,
-            exitsWithParent: Bool = false
+            exitsWithParent: Bool = false,
+            exitsAfterParent: Int? = nil
         ) {
             self.onSignal = onSignal
             self.deniesSignals = deniesSignals
             self.quitsOnRequest = quitsOnRequest
             self.zombieOnExit = zombieOnExit
             self.exitsWithParent = exitsWithParent
+            self.exitsAfterParent = exitsAfterParent
         }
 
         static let ignoresTermination = Behaviour(onSignal: [SIGINT: [.ignore], SIGTERM: [.ignore]])
@@ -348,6 +354,9 @@ final class FakeProcessTable: KillSnapshotProviding, ProcessSignaling, @unchecke
                 var adopted = child
                 adopted.lite = Self.lite(child.lite, parentPID: 1, status: child.lite.status)
                 entries[childIdentity] = adopted
+                if let ticks = child.behaviour.exitsAfterParent {
+                    schedule(.exit(childIdentity), afterTicks: ticks)
+                }
             }
         }
     }
