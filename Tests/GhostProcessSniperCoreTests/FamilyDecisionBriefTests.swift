@@ -89,6 +89,46 @@ final class FamilyDecisionBriefTests: XCTestCase {
         XCTAssertGreaterThan(evidence.count, 3, "culprit evidence follows the score components")
     }
 
+    /// A calm 300 MB app used to list "Process relevance: 85% confidence this
+    /// belongs to the selected radar scope" and "CPU activity: 3% is 0.0x the
+    /// 90% limit" as the evidence for its page: scope trivia and a ratio that
+    /// says nothing is wrong. Only what was raised explains the verdict.
+    func testEvidenceDropsScopeRelevanceAndQuietFiller() {
+        let components = [
+            GhostScoreComponent(slot: "memory", kind: .memory, title: "Memory footprint", detail: "1.7 GB is 1.4x the 1.2 GB limit",
+                                impact: 30, level: .watch),
+            GhostScoreComponent(slot: "relevance", kind: .background, title: "Process relevance",
+                                detail: "85% confidence this belongs to the selected radar scope", impact: 10, level: .watch),
+            GhostScoreComponent(slot: "cpu", kind: .cpu, title: "CPU activity", detail: "3% is 0.0x the 90% limit", impact: 1, level: .quiet)
+        ]
+        let family = makeFamily(
+            points: (0..<8).map { Double(400 + $0 * 40) * mebibyte }, fit: 0.95,
+            forecast: forecast(.leaking, confidence: 0.8), components: components
+        )
+
+        let evidence = FamilyDetailPanelModel(family: family).brief.evidence
+
+        XCTAssertEqual(evidence.first, "Memory footprint: 1.7 GB is 1.4x the 1.2 GB limit")
+        XCTAssertFalse(evidence.contains { $0.hasPrefix("Process relevance") }, "\(evidence)")
+        XCTAssertFalse(evidence.contains { $0.hasPrefix("CPU activity") }, "\(evidence)")
+    }
+
+    /// The process tree's own facts still follow when no component was raised.
+    func testEvidenceOfAQuietFamilyIsWhatTheCulpritAnalysisSaw() {
+        let components = [
+            GhostScoreComponent(slot: "cpu", kind: .cpu, title: "CPU activity", detail: "3% is 0.0x the 90% limit", impact: 1, level: .quiet),
+            GhostScoreComponent(slot: "relevance", kind: .background, title: "Process relevance", detail: "12% confidence", impact: 2, level: .quiet)
+        ]
+        let family = makeFamily(
+            points: (0..<8).map { Double(400 + $0 * 40) * mebibyte }, fit: 0.95,
+            forecast: forecast(.quiet, confidence: 0), components: components, level: .quiet
+        )
+        let panel = FamilyDetailPanelModel(family: family)
+
+        XCTAssertEqual(panel.brief.evidence, panel.culprit.evidence)
+        XCTAssertFalse(panel.brief.evidence.isEmpty)
+    }
+
     func testProcessTreeNestsChildrenAndKeepsEveryMember() {
         let root = process(pid: 100, parent: 1)
         let children = (0..<30).map { process(pid: Int32(200 + $0), parent: $0 == 0 ? 100 : 200) }

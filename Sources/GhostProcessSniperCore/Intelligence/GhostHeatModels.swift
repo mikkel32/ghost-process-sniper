@@ -55,6 +55,9 @@ public struct GhostHeat: Equatable, Sendable {
     static let sustainedCPUEvidence = "CPU stayed elevated across the sampling window"
     static let instantCPUEvidence = "CPU is high now, but persistence is not proven yet"
     static let memoryAboveLimitEvidence = "Memory footprint is above its adaptive limit"
+    /// Leads the line that says a big family was held at Watch for being at
+    /// its usual size; the assessment reads it back as the reason.
+    static let usualSizeEvidence = "Large, but normal for it"
 
     public var valueText: String {
         "\(Int(value.rounded()))"
@@ -340,7 +343,7 @@ public enum GhostHeatModel {
         if level > .watch, let usual = usualSize(family: family, baseline: baseline, pressure: pressure, forecast: forecast,
                                                  sustained: sustained, contextVotes: contextVotes) {
             level = .watch
-            evidence.append("Large, but normal for it: about \(RadarFormat.bytes(UInt64(usual))) is its usual size")
+            evidence.append("\(GhostHeat.usualSizeEvidence): about \(RadarFormat.bytes(UInt64(usual))) is its usual size")
         }
 
         return GhostHeat(

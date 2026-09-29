@@ -102,7 +102,7 @@ public struct CompactSidebarRowModel: Identifiable, Equatable, Sendable {
         statusText = item.assessment.status
         signature = item.signature
         title = item.displayName
-        subtitle = item.assessment.cause
+        subtitle = item.assessment.reason
         metricText = item.gpuPercent > 0.5 ? "\(item.memoryText) · CPU \(item.cpuText) · GPU \(item.gpuText)" : "\(item.memoryText) · CPU \(item.cpuText)"
         scoreText = item.scoreText
         scoreValue = item.score
@@ -115,7 +115,7 @@ public struct CompactSidebarRowModel: Identifiable, Equatable, Sendable {
         memoryBytes = item.memoryBytes
         radarSector = LiveRadarSector.of(kind: item.kind, path: item.signature.canonicalPath)
         let gpuHelp = item.gpuPercent > 0.5 ? ", GPU \(item.gpuText)" : ""
-        helpText = "\(item.assessment.cause). \(item.assessment.evidence)\n\(item.memoryText), \(item.cpuText)\(gpuHelp), \(item.leakText)"
+        helpText = "\(item.assessment.reason). \(item.assessment.evidence)\n\(item.memoryText), \(item.cpuText)\(gpuHelp), \(item.leakText)"
     }
 
     private static func icon(for level: GhostLevel) -> String {
@@ -284,7 +284,7 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         }
 
         let evidence = panel.heatEvidence.isEmpty
-            ? panel.scoreComponents.sorted { $0.impact > $1.impact }.prefix(3).map(\.title)
+            ? panel.scoreComponents.filter(\.explainsFlag).sorted { $0.impact > $1.impact }.prefix(3).map(\.title)
             : Array(panel.heatEvidence.prefix(3))
         let hasCredibleForecastEscalation = row.forecastState >= .leaking && row.forecastConfidence >= 0.55
         let isConfirmedUrgent = row.level >= .hot && panel.heatConfirmed
@@ -321,7 +321,7 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
 
         return RadarIntelligenceBrief(
             eyebrow: eyebrow,
-            title: "\(row.title): \(panel.assessment.cause.lowercased())",
+            title: "\(row.title): \(panel.assessment.reasonInSentence)",
             detail: panel.assessment.evidence,
             recommendation: recommendation,
             confidenceText: confidenceText,
