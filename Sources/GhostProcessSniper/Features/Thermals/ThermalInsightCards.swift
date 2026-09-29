@@ -23,11 +23,17 @@ struct ThermalTemperatureHero: View {
                 .lineLimit(1).minimumScaleFactor(0.5)
             Text(diagnosis.headline).font(.callout.weight(.medium))
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 14) {
-                Label(snapshot.temperatureText(snapshot.cpuCelsius, at: now), systemImage: "cpu")
-                    .accessibilityLabel("CPU temperature: \(snapshot.temperatureText(snapshot.cpuCelsius, at: now))")
-                Label(snapshot.temperatureText(snapshot.gpuCelsius, at: now), systemImage: "square.3.layers.3d")
-                    .accessibilityLabel("GPU temperature: \(snapshot.temperatureText(snapshot.gpuCelsius, at: now))")
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 14) {
+                    Label(snapshot.temperatureText(snapshot.cpuCelsius, at: now), systemImage: "cpu")
+                        .accessibilityLabel("CPU temperature: \(snapshot.temperatureText(snapshot.cpuCelsius, at: now))")
+                    Label(snapshot.temperatureText(snapshot.gpuCelsius, at: now), systemImage: "square.3.layers.3d")
+                        .accessibilityLabel("GPU temperature: \(snapshot.temperatureText(snapshot.gpuCelsius, at: now))")
+                }
+                // Context for the reading, never a warning; absent on a Mac without fans.
+                if let fanText = snapshot.fanText(at: now) {
+                    Label(fanText, systemImage: "fan")
+                }
             }
             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             Divider().opacity(0.5)
