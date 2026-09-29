@@ -4,7 +4,7 @@ import Foundation
 /// What kind of work a stop interrupts. It decides how politely to stop it
 /// and what could go wrong.
 public enum KillWorkloadKind: String, Codable, Sendable {
-    case app, editor, dataStore, containerRuntime, versionControl, packageManager, build, devServer, modelRunner, general
+    case app, editor, dataStore, containerRuntime, versionControl, packageManager, build, devServer, modelRunner, simulator, general
 
     public var label: String {
         switch self {
@@ -17,6 +17,7 @@ public enum KillWorkloadKind: String, Codable, Sendable {
         case .build: "Build"
         case .devServer: "Dev server"
         case .modelRunner: "Model runner"
+        case .simulator: "Simulator"
         case .general: "Process"
         }
     }
@@ -197,6 +198,11 @@ public struct KillRiskAssessor: Sendable {
             risks.append(KillRisk(kind: .unloadsModels, severity: .info, title: "Models unloaded",
                                   detail: "Loaded models leave memory; the next request reloads them, which is slow."))
             headline = "Stops \(root.name) and unloads its models; the next request reloads them."
+        case .simulator:
+            let simulator = KillSimulatorRisk.risk(commandLine: root.commandLine)
+            risks.append(simulator.card)
+            grace = KillSimulatorRisk.graceSeconds
+            headline = simulator.headline
         case .general:
             break
         }
@@ -239,6 +245,8 @@ public struct KillRiskAssessor: Sendable {
     // MARK: - Classification
 
     private func classify(root: Fingerprint, processes: [Fingerprint]) -> KillWorkloadKind {
+        // The root alone: one device's launchd, not Simulator or its services.
+        if root.isSimulatorDevice { return .simulator }
         let all = [root] + processes
         if all.contains(where: \.isContainerRuntime) { return .containerRuntime }
         if all.contains(where: \.isDataStore) { return .dataStore }
@@ -385,6 +393,10 @@ private struct Fingerprint {
 
     var isXPCService: Bool {
         path.includes(".xpc/")
+    }
+
+    var isSimulatorDevice: Bool {
+        named(["launchd_sim"])
     }
 
     var isEditorApp: Bool {
