@@ -33,6 +33,31 @@ public struct ThermalPressureReading: Equatable, Sendable {
         }
     }
 
+    /// What the menu-bar popover says when macOS itself is holding the Mac back.
+    public struct Throttling: Equatable, Sendable {
+        public let label: String
+        /// The fuller sentence, for a tooltip.
+        public let detail: String
+        public let isCritical: Bool
+    }
+
+    /// Only Serious and Critical count: Fair is common under ordinary load.
+    /// A stale or future reading says nothing about now, so it is not shown.
+    public func throttling(at now: Date) -> Throttling? {
+        switch freshState(at: now) {
+        case .serious:
+            Throttling(label: "Throttling",
+                       detail: "macOS reports serious thermal pressure and may slow the Mac down to cool it.",
+                       isCritical: false)
+        case .critical:
+            Throttling(label: "Critical heat",
+                       detail: "macOS reports critical thermal pressure. Pause optional demanding work and let the Mac cool.",
+                       isCritical: true)
+        case .normal, .warm, .checking:
+            nil
+        }
+    }
+
     func freshState(at now: Date) -> ThermalDiagnosis.State {
         (0...15).contains(now.timeIntervalSince(sampledAt)) ? state : .checking
     }

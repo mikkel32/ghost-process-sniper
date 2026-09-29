@@ -357,7 +357,7 @@ private struct PopoverVitals: View {
     let monitor: ProcessMonitor
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
             PopoverThermalReadings(monitor: monitor)
             Spacer(minLength: 4)
             PopoverPressureReading(monitor: monitor)
@@ -374,11 +374,24 @@ private struct PopoverThermalReadings: View {
 
     var body: some View {
         let thermals = monitor.thermals
-        HStack(spacing: 12) {
-            Label("CPU \(thermals.temperatureText(thermals.cpuCelsius))", systemImage: "cpu")
-            Label("GPU \(thermals.temperatureText(thermals.gpuCelsius))", systemImage: "thermometer.medium")
+        // macOS's own verdict, read with the temperatures so it is as current
+        // as they are (each sample); it needs no timer.
+        let now = Date()
+        let throttling = ThermalPressureReading.current(at: now).throttling(at: now)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Label("CPU \(thermals.temperatureText(thermals.cpuCelsius))", systemImage: "cpu")
+                Label("GPU \(thermals.temperatureText(thermals.gpuCelsius))", systemImage: "thermometer.medium")
+            }
+            .lineLimit(1)
+            // A second line, so the row cannot overflow the popover's width.
+            if let throttling {
+                Label(throttling.label, systemImage: "thermometer.high")
+                    .foregroundStyle(throttling.isCritical ? Color.red : Color.orange)
+                    .lineLimit(1)
+                    .help(throttling.detail)
+            }
         }
-        .lineLimit(1)
     }
 }
 
