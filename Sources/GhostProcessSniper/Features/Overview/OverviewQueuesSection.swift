@@ -6,16 +6,28 @@ import SwiftUI
 /// context menu, because an early warning is not yet a reason to stop.
 struct OverviewQueuesSection: View {
     let session: RadarConsoleSession
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // Both queues empty: one slim strip, and no "Needs your attention"
+        // header over nothing. The layout changes only after thirty calm
+        // seconds, so a family hovering around Hot does not move the page.
+        let layout = session.overviewQueueLayout
         VStack(alignment: .leading, spacing: 20) {
-            OverviewSectionLabel(eyebrow: "Triage", title: "Needs your attention",
-                                 detail: "Review current issues first, then keep an eye on emerging changes.")
-            AdaptivePairLayout(breakpoint: 680, spacing: 14) {
-                riskQueue
-                warmingQueue
+            switch layout {
+            case .allClear:
+                OverviewAllClearStrip(familyCount: session.compactSnapshot.allRows.count,
+                                      hasSampled: session.compactSnapshot.hasSampled)
+            case .pair:
+                OverviewSectionLabel(eyebrow: "Triage", title: "Needs your attention",
+                                     detail: "Review current issues first, then keep an eye on emerging changes.")
+                AdaptivePairLayout(breakpoint: 680, spacing: 14) {
+                    riskQueue
+                    warmingQueue
+                }
             }
         }
+        .animation(RadarMotion.response(reduceMotion), value: layout)
     }
 
     private var riskQueue: some View {
@@ -204,6 +216,47 @@ private struct CompactFamilyQueueRow: View {
                 .opacity(isHovering && quickStop == nil ? 1 : 0)
         }
         .contentShape(Rectangle())
+    }
+}
+
+/// Stands in for both queues while neither has a row.
+private struct OverviewAllClearStrip: View {
+    let familyCount: Int
+    let hasSampled: Bool
+
+    private var detail: String {
+        familyCount == 0
+            ? "Nothing in the radar's scope is running"
+            : "\(familyCount) \(familyCount == 1 ? "family" : "families") watched"
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // No green seal before the first scan: nothing is known to be clear yet.
+            if hasSampled {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.title3)
+                    .foregroundStyle(.green.gradient)
+                    .accessibilityHidden(true)
+                Text("Nothing needs your attention")
+                    .font(.subheadline.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                RadarWaitLabel("Scanning your processes…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .radarSurface(tint: hasSampled ? .green : RadarTheme.brand, cornerRadius: 14)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(hasSampled ? "Risk Queue and Warming Up: nothing to review. \(detail)"
+                                       : "Risk Queue and Warming Up: scanning your processes")
     }
 }
 
