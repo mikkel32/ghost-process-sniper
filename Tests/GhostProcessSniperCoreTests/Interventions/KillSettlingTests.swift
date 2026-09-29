@@ -127,20 +127,37 @@ final class KillSettlingTests: XCTestCase {
                        "never more than the stop estimated")
     }
 
-    func testAFamilyThatLeftTheScanHasNothingStillRunning() {
+    func testAFamilyThatLeftTheScanAndTookEverythingWithItHasNothingStillRunning() {
         let app = target(300, "Pages", root: true)
         let helper = target(301, "Pages Helper")
         var report = openApp(app, helpers: [helper])
         report.stuckExitingPIDs = [301]
 
-        let settled = report.settlingSurvivors()
+        let settled = report.settlingSurvivors(stillRunning: [])
 
         XCTAssertTrue(settled.survivorPIDs.isEmpty)
         XCTAssertTrue(settled.stuckExitingPIDs.isEmpty)
         XCTAssertFalse(settled.appStillOpen)
         XCTAssertEqual(Set(settled.exitedAfterStopPIDs), [300, 301])
         XCTAssertTrue(settled.narrative.headline.hasPrefix("Stopped Pages and 1 helper"), settled.narrative.headline)
-        XCTAssertEqual(settled.settlingSurvivors(), settled, "settling twice changes nothing")
+        XCTAssertEqual(settled.settlingSurvivors(stillRunning: []), settled, "settling twice changes nothing")
+    }
+
+    /// A family's key holds its root's start, so it leaves the scan the moment
+    /// the root exits, whether or not its workers went with it. A database
+    /// whose backends ignore SIGTERM must not read "Stopped" and "Freed".
+    func testAFamilyThatLeftTheScanWithWorkersStillRunningStillListsThem() {
+        let app = target(300, "postgres", root: true, memory: 400)
+        let worker = target(301, "postgres: writer", memory: 200)
+        let report = openApp(app, helpers: [worker])
+
+        let settled = report.settlingSurvivors(stillRunning: [worker.identity])
+
+        XCTAssertEqual(settled.survivorPIDs, [301], "the worker is still running")
+        XCTAssertFalse(settled.succeeded)
+        XCTAssertFalse(settled.narrative.headline.hasPrefix("Stopped"), settled.narrative.headline)
+        XCTAssertEqual(settled.realizedMemoryReclaimBytes, report.settling(exited: [app.identity]).realizedMemoryReclaimBytes,
+                       "only what really went is counted as freed")
     }
 
     // MARK: - Looking again

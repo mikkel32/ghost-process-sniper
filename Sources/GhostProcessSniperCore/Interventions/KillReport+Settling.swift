@@ -34,10 +34,12 @@ public extension KillReport {
         return settled
     }
 
-    /// This report for a family that has left the scan: none of its
-    /// processes is running any more, whatever the report listed.
-    func settlingSurvivors() -> KillReport {
-        settling(exited: Set(survivingTargets.map(\.identity)))
+    /// This report for a family that has left the scan, given the processes
+    /// running now. A family's key holds its root's start, so it leaves the
+    /// scan as soon as the root exits, while workers that ignored the request
+    /// may run on: only survivors that are really gone settle.
+    func settlingSurvivors(stillRunning live: Set<ProcessIdentity>) -> KillReport {
+        settling(exited: Set(survivingTargets.map(\.identity)).subtracting(live))
     }
 }
 
