@@ -26,7 +26,7 @@ public struct FamilyCPUActivity: Equatable, Sendable {
     public let buckets: [CPUMinuteBucket]
     public let lastActiveAt: Date?
     /// Since when the ledger has measured any member's CPU, from its first
-    /// of two fresh reads; idleness is only claimed for time measured, never
+    /// of two usage reads; idleness is only claimed for time measured, never
     /// for a member outside the rich-read budget.
     public let measuredSince: Date?
 
@@ -113,8 +113,16 @@ public struct ActivityLedger: Sendable {
         for process in current {
             let freshAt: Date? = process.cpuMeasurementStatus == .fresh ? process.sampledAt : nil
             guard var entry = processes[process.identity] else {
+                // The sampler's CPU tracker has nothing to compare a new
+                // process with, so its first scan reads usage but reports no
+                // rate. That read is still a real baseline: counting from it
+                // credits the second scan's interval, as the sampler's own
+                // percent does, instead of the third's. A denied read has no
+                // total to count from.
+                let baselineAt = freshAt ?? (process.measurementStatus == .fresh
+                    && process.cpuMeasurementStatus == .unavailable ? process.sampledAt : nil)
                 processes[process.identity] = ProcessEntry(
-                    cpuSeconds: process.totalProcessorSeconds, measuredAt: freshAt, firstSeen: now,
+                    cpuSeconds: process.totalProcessorSeconds, measuredAt: baselineAt, firstSeen: now,
                     measuredSince: nil, lastActiveAt: nil, lastSeen: now, tickDelta: 0, tickSpan: 0, deltaTick: 0
                 )
                 continue
