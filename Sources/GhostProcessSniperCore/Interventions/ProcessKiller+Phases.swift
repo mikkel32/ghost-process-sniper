@@ -66,7 +66,11 @@ extension ProcessKiller {
             }
             // An app that accepted the quit request may be showing a save
             // prompt, and SIGTERM would close it past that; only force may.
-            var recipients = phase.isForce ? live : live.filter { $0.pid != quitAccepted }
+            // Its renderers and helpers hold what that prompt is about, so
+            // while the app is still open they are left alone too: SIGTERM is
+            // for what an app left behind once it had gone.
+            let appIsOpen = quitAccepted.map { app in live.contains { $0.pid == app } } ?? false
+            var recipients = phase.isForce || !appIsOpen ? live : []
             if phase.reach == .rootOnly, !phase.isForce {
                 recipients = Self.rootAndOutsiders(of: recipients, tree: targets)
             }
@@ -155,6 +159,19 @@ extension ProcessKiller {
         }
         return KillPhaseWalk(remaining: remaining, quitAcceptedPID: quitAccepted, adopted: adopted,
                              reportedLate: reportedLate, firstSignalAt: firstSignalAt)
+    }
+
+    /// Once the stop is over, says why an app still open has helpers running:
+    /// they were spared while it answers, and are the user's to force. Said at
+    /// the end, since only then is it known whether force was held back; an
+    /// app that stayed open through the grace wait is forced with its helpers.
+    func noteHelpersLeftAlone(context: KillPhaseContext, report: inout KillReport) {
+        let note = KillReport.helpersLeftAloneNote(app: report.displayName)
+        guard report.appStillOpen, report.survivorPIDs.count > 1,
+              !report.attempts.contains(where: { $0.stage == "forced" }),
+              !report.notes.contains(note) else { return }
+        report.notes.append(note)
+        appendEvent(.targetUpdated, operationID: context.operationID, message: note, report: &report, eventSink: context.eventSink)
     }
 
     /// Sends one phase's action and returns the targets it can never reach:

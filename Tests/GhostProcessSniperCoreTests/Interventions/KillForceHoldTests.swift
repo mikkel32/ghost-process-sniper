@@ -40,6 +40,7 @@ final class KillForceHoldTests: XCTestCase {
         XCTAssertTrue(table.log.isEmpty, "the app is never signalled while force is held")
         XCTAssertEqual(report.survivorPIDs, [300])
         XCTAssertTrue(report.appStillOpen)
+        XCTAssertTrue(report.notes.isEmpty, "an app on its own has no helpers to leave alone: \(report.notes)")
     }
 
     func testStopWaitingEndsTheGraceAndHoldsForce() async {
@@ -117,12 +118,64 @@ final class KillForceHoldTests: XCTestCase {
         XCTAssertEqual(report.survivorPIDs, [510])
     }
 
-    func testHeldQuitTerminatesLeftoverHelpersButNeverTheApp() async {
+    func testHelpersOfAnAppStillAnsweringItsQuitAreLeftAlone() async {
         let table = FakeProcessTable()
         let app = KillProcessLite.fake(pid: 300, name: "Pages")
         let helper = KillProcessLite.fake(pid: 301, parent: 300, name: "Pages Helper")
         table.add(app, FakeProcessTable.Behaviour(quitsOnRequest: 100_000))
         table.add(helper)
+        let events = EventLog()
+
+        let report = await table.killer().kill(
+            plan: .fixture(app, members: [app, helper], paths: [300: KillFixture.pagesPath, 301: KillFixture.pagesHelperPath]),
+            forceKillDelay: 2,
+            skipForce: true,
+            eventSink: { events.append($0) }
+        )
+
+        XCTAssertEqual(table.signals(to: 300), [], "SIGTERM would close the app past its save prompt")
+        XCTAssertEqual(table.signals(to: 301), [], "the helpers hold what the prompt is about")
+        XCTAssertEqual(table.elapsedSeconds, 10, accuracy: 0.1, "no second wait for signals that were never sent")
+        XCTAssertEqual(Set(report.survivorPIDs), [300, 301])
+        XCTAssertTrue(report.appStillOpen)
+        XCTAssertTrue(report.notes.contains("Left the helpers of Pages running while it answers the quit request."), "\(report.notes)")
+        XCTAssertTrue(report.summary.contains("Left the helpers of Pages running"), report.summary)
+        XCTAssertEqual(events.all.filter { $0.kind == .targetUpdated }.map(\.message),
+                       ["Left the helpers of Pages running while it answers the quit request."])
+    }
+
+    func testHoldingForceWhileTheAppAnswersLeavesItsHelpersAndSaysSo() async {
+        let table = FakeProcessTable()
+        let control = KillOperationControl()
+        let app = KillProcessLite.fake(pid: 300, name: "Pages")
+        let helper = KillProcessLite.fake(pid: 301, parent: 300, name: "Pages Helper")
+        table.add(app, FakeProcessTable.Behaviour(quitsOnRequest: 100_000))
+        table.add(helper, .ignoresTermination)
+        let killer = table.killer(sleeper: { nanoseconds in
+            table.advance(seconds: Double(nanoseconds) / 1_000_000_000)
+            if table.tick == 2 { await control.holdForce() }
+        })
+
+        let report = await KillOperationRunner().runReport(
+            plan: .fixture(app, members: [app, helper], paths: [300: KillFixture.pagesPath, 301: KillFixture.pagesHelperPath]),
+            killer: killer,
+            forceKillDelay: 2,
+            control: control
+        )
+
+        XCTAssertTrue(report.skipForceRequested)
+        XCTAssertTrue(table.log.isEmpty, "held before force: nobody was signalled")
+        XCTAssertEqual(Set(report.survivorPIDs), [300, 301])
+        XCTAssertTrue(report.appStillOpen)
+        XCTAssertEqual(report.notes, ["Left the helpers of Pages running while it answers the quit request."])
+    }
+
+    func testHelpersAnAppLeftBehindOnceItHasQuitStillGetSigterm() async {
+        let table = FakeProcessTable()
+        let app = KillProcessLite.fake(pid: 300, name: "Pages")
+        let helper = KillProcessLite.fake(pid: 301, parent: 300, name: "Pages Helper")
+        table.add(app, FakeProcessTable.Behaviour(quitsOnRequest: 3))
+        table.add(helper, .ignoresTermination)
 
         let report = await table.killer().kill(
             plan: .fixture(app, members: [app, helper], paths: [300: KillFixture.pagesPath, 301: KillFixture.pagesHelperPath]),
@@ -130,29 +183,36 @@ final class KillForceHoldTests: XCTestCase {
             skipForce: true
         )
 
-        XCTAssertEqual(table.signals(to: 301), [SIGTERM])
-        XCTAssertEqual(table.signals(to: 300), [], "SIGTERM would close the app past its save prompt")
-        XCTAssertEqual(report.survivorPIDs, [300])
-        XCTAssertTrue(report.appStillOpen)
+        XCTAssertEqual(table.signals(to: 301), [SIGTERM], "the app has gone, so this really is a leftover")
+        XCTAssertEqual(table.signals(to: 300), [])
+        XCTAssertEqual(report.survivorPIDs, [301])
+        XCTAssertFalse(report.appStillOpen)
+        XCTAssertTrue(report.notes.isEmpty, "\(report.notes)")
     }
 
-    func testQuitWithoutHoldOnlyForcesTheApp() async {
+    func testQuitWithoutHoldForcesTheAppAndItsHelpersTogether() async {
         let table = FakeProcessTable()
         let app = KillProcessLite.fake(pid: 300, name: "Pages")
         let helper = KillProcessLite.fake(pid: 301, parent: 300, name: "Pages Helper")
         table.add(app, FakeProcessTable.Behaviour(quitsOnRequest: 100_000))
         table.add(helper, .ignoresTermination)
+        let events = EventLog()
 
         let report = await table.killer().kill(
             plan: .fixture(app, members: [app, helper], paths: [300: KillFixture.pagesPath, 301: KillFixture.pagesHelperPath]),
-            forceKillDelay: 2
+            forceKillDelay: 2,
+            eventSink: { events.append($0) }
         )
 
         XCTAssertEqual(table.signals(to: 300), [SIGSTOP, SIGKILL])
-        XCTAssertEqual(table.signals(to: 301), [SIGTERM, SIGSTOP, SIGKILL])
+        XCTAssertEqual(table.signals(to: 301), [SIGSTOP, SIGKILL], "force still reaches everything, without a polite step in between")
         XCTAssertEqual(report.attempts.filter { $0.pid == 300 && $0.signalName == "SIGKILL" }.map(\.stage), ["forced"])
         XCTAssertTrue(report.survivorPIDs.isEmpty)
         XCTAssertFalse(report.appStillOpen)
+        // The helpers were forced along with the app, not left alone.
+        XCTAssertTrue(report.notes.isEmpty, "\(report.notes)")
+        XCTAssertFalse(report.narrative.details.contains { $0.contains("Left the helpers") }, "\(report.narrative.details)")
+        XCTAssertTrue(events.all.filter { $0.kind == .targetUpdated }.isEmpty, "nothing says the helpers were spared")
     }
 
     func testConfirmRunsTheApprovedProfile() async {
@@ -201,18 +261,19 @@ final class KillForceHoldTests: XCTestCase {
         table.add(helper)
         let plan = KillPlan.fixture(app, members: [app, helper], paths: [300: KillFixture.pagesPath, 301: KillFixture.pagesHelperPath])
         let held = await table.killer().kill(plan: plan, forceKillDelay: 2, skipForce: true)
-        XCTAssertEqual(held.survivorPIDs, [300])
+        XCTAssertEqual(Set(held.survivorPIDs), [300, 301], "the helpers were left alone with the app")
         let waitedBefore = table.elapsedSeconds
 
         let followUp = try XCTUnwrap(plan.forcingSurvivors(of: held))
         let forced = await table.killer().kill(plan: followUp, forceKillDelay: 2)
 
-        XCTAssertEqual(followUp.targetIdentities, [app.identity])
+        XCTAssertEqual(Set(followUp.targetIdentities), [app.identity, helper.identity])
         XCTAssertEqual(table.quitRequests.count, 1, "the quit request is not repeated")
         XCTAssertEqual(table.signals(to: 300), [SIGSTOP, SIGKILL], "frozen, then forced; nothing polite")
+        XCTAssertEqual(table.signals(to: 301), [SIGSTOP, SIGKILL], "frozen, then forced; nothing polite")
         XCTAssertEqual(table.elapsedSeconds, waitedBefore, accuracy: 0.001, "no grace period the second time")
         XCTAssertTrue(forced.isForceFollowUp)
-        XCTAssertEqual(forced.forcedPIDs, [300])
+        XCTAssertEqual(Set(forced.forcedPIDs), [300, 301])
         XCTAssertTrue(forced.survivorPIDs.isEmpty)
         XCTAssertNil(plan.forcingSurvivors(of: forced), "nothing is left to force")
     }

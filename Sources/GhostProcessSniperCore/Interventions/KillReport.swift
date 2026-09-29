@@ -71,6 +71,9 @@ public struct KillReport: Equatable, Sendable {
     public var launchdJob: LaunchdJob?
     /// Whether the ports the workload listened on are really free now.
     public var portOutcomes: [KillPortOutcome] = []
+    /// Survivors a later look found gone, such as an app whose save prompt
+    /// was answered after the stop ended; see `settling(exited:)`.
+    public var exitedAfterStopPIDs: [Int32] = []
 
     public var partiallySucceeded: Bool {
         !gracefulPIDs.isEmpty || !forcedPIDs.isEmpty
@@ -124,6 +127,7 @@ public struct KillReport: Equatable, Sendable {
             "Graceful: \(gracefulPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Forced: \(forcedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Survivors: \(survivorPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
+            "Exited after the stop: \(exitedAfterStopPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Locked: \(deniedPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Stale: \(stalePIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))",
             "Recycled: \(recycledPIDs.sorted().map(String.init).joined(separator: ", ").ifEmpty("none"))"
@@ -215,6 +219,14 @@ public struct KillReport: Equatable, Sendable {
         self.verificationSnapshotCount = verificationSnapshotCount
         self.calibratedReclaimBytes = calibratedReclaimBytes
         self.reactorReport = reactorReport
+    }
+}
+
+extension KillReport {
+    /// What a quit says when the app was still answering it and its helpers
+    /// were therefore left running; the settled report drops it again.
+    static func helpersLeftAloneNote(app: String) -> String {
+        "Left the helpers of \(app) running while it answers the quit request."
     }
 }
 

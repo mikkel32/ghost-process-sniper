@@ -12,6 +12,8 @@ struct KillPreviewSheet: View {
     @Environment(\.appearsActive) private var appearsActive
 
     @State private var isKilling = false
+    /// One look at the result's survivors is under way.
+    @State private var isRechecking = false
     @State private var report: KillReport?
     @State private var reportedAt: Date?
     @State private var canForceSurvivors = false
@@ -84,6 +86,8 @@ struct KillPreviewSheet: View {
             if active, report == nil, !isKilling, Date().timeIntervalSince(pending.preparedAt) > 20 {
                 offersUpdate = true
             }
+            // Back from answering a save prompt in the app: it may have quit.
+            if active { recheckSurvivors() }
         }
         .onChange(of: preview.riskAssessment.forceNeedsConfirmation) { _, needs in
             if needs { skipForce = true }
@@ -216,8 +220,9 @@ struct KillPreviewSheet: View {
         return KillResultPanel(
             report: report,
             canForceSurvivors: canForceSurvivors,
-            isBusy: isKilling || session.isPreparingIntervention,
+            isBusy: isKilling || isRechecking || session.isPreparingIntervention,
             forceSurvivors: { forceSurvivors(of: report) },
+            checkAgain: recheckSurvivors,
             stopRestarter: restarter.map { alternative in
                 (title: "\(alternative.title)\u{2026}", action: { session.prepareKill(pending.family, plan: alternative.plan) })
             },
@@ -315,6 +320,24 @@ struct KillPreviewSheet: View {
         let session = session
         run(from: KillOutcomeRows.make(report: finished)) { sink in
             await session.forceSurvivors(pending, report: finished, eventSink: sink) ?? finished
+        }
+    }
+
+    /// One look at what the result lists as still running: after the wait
+    /// the user may have answered the save prompt and the app quit. It only
+    /// looks, once per return to Ghost or click, and never signals.
+    private func recheckSurvivors() {
+        guard !isKilling, !isRechecking, let finished = report, !finished.survivorPIDs.isEmpty else { return }
+        isRechecking = true
+        let killer = session.killer
+        Task {
+            let settled = await killer.recheck(finished)
+            isRechecking = false
+            // A force follow-up may have replaced the result meanwhile.
+            guard !isKilling, report?.operationID == finished.operationID, settled != finished else { return }
+            report = settled
+            session.settleStopResult(settled, of: pending)
+            AccessibilityNotification.Announcement(settled.narrative.headline).post()
         }
     }
 

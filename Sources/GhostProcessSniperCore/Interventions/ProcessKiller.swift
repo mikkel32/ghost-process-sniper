@@ -227,6 +227,7 @@ public final class ProcessKiller: Sendable {
                 exitedIdentities = Set(finalVerification.exited.map(\.identity))
             }
             report.appStillOpen = walk.quitAcceptedPID.map(report.survivorPIDs.contains) ?? false
+            noteHelpersLeftAlone(context: context, report: &report)
             let finished = report
             let results = (targets + walk.adopted).map {
                 outcomeClassifier.classify(target: $0, report: finished, exitedIdentities: exitedIdentities)
@@ -315,6 +316,27 @@ public final class ProcessKiller: Sendable {
                 scopeUsed: plan.scope
             )
         }
+    }
+
+    /// A finished stop's report, looked at again: what it lists as still
+    /// running may have exited since, such as an app whose save prompt was
+    /// answered after the wait ended. One targets-only look at those
+    /// processes, never a signal. A failed look, or one that finds them all
+    /// still there, returns the report as it was.
+    public func recheck(_ report: KillReport) async -> KillReport {
+        let survivors = report.survivingTargets
+        guard !survivors.isEmpty,
+              let snapshot = try? await snapshotProvider.snapshot(request: KillSnapshotRequest(
+                policy: .verify, targetIdentities: survivors.map(\.identity), includeHeavyMetricsForTargets: false,
+                requiresCompleteGraph: false, conversionBudget: .targetsOnly, verificationMode: .targetOnly
+              )) else { return report }
+        let index = KillProcessIndex(snapshot: snapshot)
+        // As verification reads it: a reused PID or a zombie is a process gone.
+        let exited = survivors.map(\.identity).filter { identity in
+            guard !index.hasRecycledPID(for: identity), let process = index.liteProcess(for: identity) else { return true }
+            return process.isZombie || !signaler.exists(pid: identity.pid)
+        }
+        return report.settling(exited: Set(exited))
     }
 
     /// Processes the stop left alone whose parent it took away: they now
