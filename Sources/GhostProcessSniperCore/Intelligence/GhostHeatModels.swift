@@ -106,7 +106,8 @@ public enum GhostHeatModel {
         leakRatio: Double,
         trend: TrendMetrics,
         hardwareLevel: GhostLevel,
-        cpuBehavior: CPUBehavior = .none
+        cpuBehavior: CPUBehavior = .none,
+        isStarting: Bool = false
     ) -> GhostHeat {
         // The real limit, never one inferred from the last trend sample: that
         // sample is stale whenever a cached reading skipped the append.
@@ -118,7 +119,10 @@ public enum GhostHeatModel {
             sustainedCPUFraction = 0
         }
 
-        let trendTrust = trend.hasSustainedHistory
+        // A launch allocates fast while it warms its caches: however clean the
+        // ramp, it proves no leak until the startup grace is over.
+        let trendProven = trend.hasSustainedHistory && !isStarting
+        let trendTrust = trendProven
             ? min(1, max(0.25, trend.memoryFitQuality))
             : min(0.45, Double(trend.sampleCount) / 8)
         let cpuPersistence = cpuSamples.count >= 4 ? (0.45 + sustainedCPUFraction * 0.55) : 0.42
@@ -148,7 +152,7 @@ public enum GhostHeatModel {
             trend.observedSeconds >= 90
         let sustainedCPU = isBurst ? cpuBehavior.isSustained : (windowSustained || cpuBehavior.isSustained)
         let pattern = trend.resolvedPattern
-        let sustainedLeak = trend.hasSustainedHistory && leakRatio >= 1 && pattern.indicatesAccumulation &&
+        let sustainedLeak = trendProven && leakRatio >= 1 && pattern.indicatesAccumulation &&
             (trend.memoryFitQuality >= 0.5 || pattern.pattern == .risingFloor)
         let corroboratingAxes = axes.filter { $0 >= 55 }.count
         let instantCorroboration = [memoryRatio >= 1, cpuRatio >= 0.8, gpuRatio >= 0.55, leakRatio >= 0.8]
@@ -175,7 +179,10 @@ public enum GhostHeatModel {
         }
         else if cpuRatio >= 1 { evidence.append(isBurst ? "Build or test work is using CPU as expected" : GhostHeat.instantCPUEvidence) }
         if sustainedLeak { evidence.append("Memory growth is sustained with a trusted trend") }
-        else if leakRatio >= 1 { evidence.append("Memory is rising, but the trend still needs confirmation") }
+        else if leakRatio >= 1 {
+            evidence.append(isStarting ? "Memory is rising, but the process only just started"
+                                       : "Memory is rising, but the trend still needs confirmation")
+        }
         if memoryRatio >= 1 { evidence.append(GhostHeat.memoryAboveLimitEvidence) }
         if gpuRatio >= 0.55 { evidence.append("GPU load is materially elevated") }
         if hardwareLevel >= .hot { evidence.append("Hardware-offender detection also flags this process") }
@@ -349,18 +356,27 @@ public enum GhostHeatModel {
 
 extension ProcessFamily {
     /// Big, perhaps, and nothing else: no sustained signal, no CPU, GPU or
-    /// leak component, no growth, a quiet or warming forecast, and not above
-    /// a trusted learned normal. Such a family is neither an incident nor a
+    /// leak component, no growth beyond a refill to its usual size, a quiet
+    /// or warming forecast, and not above a trusted learned normal. Such a family is neither an incident nor a
     /// reason to skip learning its normal: before, an app that was Hot only
     /// for its size was never learned, so it stayed Hot for good.
     var hasOnlySizeAgainstIt: Bool {
-        guard score.heat.sustainedSignalCount == 0, forecast.state <= .warming,
-              trend.credibleMemoryVelocity < 1, longTermTrend.persistentSlopeMegabytesPerMinute < 1,
+        guard score.heat.sustainedSignalCount == 0, forecast.state <= .warming, growthIsUsual(baseline: baseline),
               Self.componentsShowOnlySize(score.components)
         else { return false }
         guard let baseline, baseline.isMeasurementTrusted else { return true }
         let footprint = totalPhysicalFootprintBytes
         return !(baseline.memoryZScore(for: footprint) >= 3 && baseline.memoryMultiple(for: footprint) >= 1.3)
+    }
+
+    /// No proven growth, or only growth that takes a trusted family back to
+    /// a size that is usual for it. An app restarted or purged of its caches
+    /// refills for many minutes; before, any growth at all switched "large,
+    /// but normal for it" off, so it read as a problem until it was full.
+    func growthIsUsual(baseline: FamilyBaseline?) -> Bool {
+        let growth = max(trend.credibleMemoryVelocity, longTermTrend.persistentSlopeMegabytesPerMinute)
+        if growth < 1 { return true }
+        return baseline?.staysWithinUsualSize(footprint: totalPhysicalFootprintBytes, growthMegabytesPerMinute: growth) ?? false
     }
 
     /// Memory at or over its limit, and nothing else raised that is a
@@ -391,8 +407,7 @@ extension GhostHeatModel {
                           forecast: RiskForecast, sustained: Int, contextVotes: Int) -> Double? {
         guard let baseline, baseline.isMeasurementTrusted, sustained == 0, contextVotes == 0,
               forecast.state <= .warming, !(pressure.isKnown && pressure.level >= .warning),
-              family.trend.credibleMemoryVelocity < 1, family.longTermTrend.persistentSlopeMegabytesPerMinute < 1,
-              ProcessFamily.componentsShowOnlySize(family.score.components)
+              family.growthIsUsual(baseline: baseline), ProcessFamily.componentsShowOnlySize(family.score.components)
         else { return nil }
         let footprint = family.totalPhysicalFootprintBytes
         guard baseline.memoryZScore(for: footprint) < 2, baseline.memoryMultiple(for: footprint) < 1.3 else { return nil }
@@ -423,5 +438,14 @@ struct BaselineCPUAnomaly {
             reason = "\(RadarFormat.fixed1(multiple))x usual CPU"
             evidence = "CPU is \(RadarFormat.fixed1(multiple))x this family's learned normal"
         }
+    }
+
+    /// Hot only when the burst is heavy for this Mac as well as for the family:
+    /// at least half the core-aware family CPU limit. 61% of one core is 20x a
+    /// chat app's usual 3%, but on a ten-core Mac it is a seventh of the limit.
+    /// A Hot component of its own kind stops a big app at its usual size being
+    /// read as normal, so a small burst is a Watch, with the same text and heat.
+    func level(cpuPercent: Double, familyLimit: Double) -> GhostLevel {
+        multiple >= 5 && cpuPercent >= familyLimit * 0.5 ? .hot : .watch
     }
 }

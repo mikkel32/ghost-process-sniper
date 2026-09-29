@@ -171,8 +171,7 @@ public struct FamilyBaseline: Codable, Equatable, Sendable {
     /// a few megabytes into a huge score.
     public func memoryZScore(for bytes: UInt64) -> Double {
         guard isMeasurementTrusted else { return 0 }
-        let scale = max(memoryStandardDeviation, meanMemoryBytes * 0.05, 32 * 1_048_576)
-        return (Double(bytes) - meanMemoryBytes) / scale
+        return (Double(bytes) - meanMemoryBytes) / memoryScale
     }
 
     /// A normally idle family's ratio is as meaningful as a busy one's; the

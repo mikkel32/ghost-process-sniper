@@ -1,7 +1,7 @@
 import Foundation
 
 public struct FamilyRiskForecaster: Sendable {
-    private let processorCount: Int
+    let processorCount: Int
     private let physicalMemoryBytes: UInt64
 
     /// Tests pass a fixed core count and RAM; the Mac's own are the default.
@@ -60,7 +60,12 @@ public struct FamilyRiskForecaster: Sendable {
         let projectedMemory = projectedMemoryBytes(family: family, velocity: memoryVelocity, horizonMinutes: 10)
         let projectedCPU = min(999, family.totalCPUPercent + cpuSlope * 10)
         let cpuEvidence = cpuEvidence(family: family, settings: settings)
-        let inStartupGrace = startupGrace(family: family, now: now)
+        let inStartupGrace = StartupGrace.isStarting(root: family.root, now: now)
+        // Climbing back to a learned usual size is a refill, not a leak, unless
+        // twenty minutes of it are proven. A custom profile is the user's
+        // exact word, so only the automatic ones make this exception.
+        let refilling = settings.detectionMode == .automatic && !slowLeak && (family.baseline?.staysWithinUsualSize(
+            footprint: family.totalPhysicalFootprintBytes, growthMegabytesPerMinute: memoryVelocity) ?? false)
         let state = state(
             family: family,
             horizon: horizon,
@@ -71,6 +76,7 @@ public struct FamilyRiskForecaster: Sendable {
             cpuEvidence: cpuEvidence,
             inStartupGrace: inStartupGrace,
             slowLeak: slowLeak,
+            refilling: refilling,
             settings: settings
         )
         let confidence = confidence(
@@ -98,6 +104,7 @@ public struct FamilyRiskForecaster: Sendable {
             cpuEvidence: cpuEvidence,
             inStartupGrace: inStartupGrace,
             slowLeak: slowLeak,
+            refilling: refilling,
             settings: settings
         )
 
@@ -180,13 +187,6 @@ public struct FamilyRiskForecaster: Sendable {
         )
     }
 
-    // Freshly launched tools allocate fast while warming caches; give them a
-    // short grace window before calling that behavior a leak.
-    private func startupGrace(family: ProcessFamily, now: Date) -> Bool {
-        let start = Date(timeIntervalSince1970: TimeInterval(family.root.identity.startTimeSeconds))
-        return now.timeIntervalSince(start) < 150
-    }
-
     private func state(
         family: ProcessFamily,
         horizon: ForecastHorizon,
@@ -197,6 +197,7 @@ public struct FamilyRiskForecaster: Sendable {
         cpuEvidence: CPUEvidence,
         inStartupGrace: Bool,
         slowLeak: Bool,
+        refilling: Bool,
         settings: ThresholdSettings
     ) -> ForecastState {
         if family.score.level >= .critical {
@@ -206,16 +207,19 @@ public struct FamilyRiskForecaster: Sendable {
             return .runaway
         }
         // Being above the memory limit is not a leak; growth is. Near the
-        // limit a slower but real, sustained climb is enough.
+        // limit a slower but real, sustained climb is enough, unless it only
+        // refills the family to its usual size: a big app is over its limit
+        // by design. Growth past the leak limit itself is a leak either way.
         let nearLimit = horizon == .imminent || horizon == .breached
-        let leakEntry = memoryVelocity >= settings.leakVelocityMegabytesPerMinute ||
+        let fastGrowth = memoryVelocity >= settings.leakVelocityMegabytesPerMinute
+        let leakEntry = fastGrowth ||
             (nearLimit && family.trend.hasSustainedHistory &&
                 memoryVelocity >= max(5, settings.leakVelocityMegabytesPerMinute * 0.1))
         if leakEntry {
             // Positive net velocity with a reclaiming shape (sawtooth) or a
             // single allocation step is not an accumulating leak. Startup
             // allocation bursts get the same benefit of the doubt.
-            if pattern.indicatesAccumulation, !inStartupGrace {
+            if pattern.indicatesAccumulation, !inStartupGrace, fastGrowth || !refilling {
                 return .leaking
             }
             return .warming
@@ -421,6 +425,7 @@ public struct FamilyRiskForecaster: Sendable {
         cpuEvidence: CPUEvidence,
         inStartupGrace: Bool,
         slowLeak: Bool,
+        refilling: Bool,
         settings: ThresholdSettings
     ) -> String {
         var parts: [String] = []
@@ -444,7 +449,8 @@ public struct FamilyRiskForecaster: Sendable {
                 parts.append("mostly \(culprit.name) (\(Int((culprit.share * 100).rounded()))% of the growth)")
             }
         } else if memoryVelocity > 0 {
-            parts.append("memory is rising \(Int(memoryVelocity.rounded())) MB/min")
+            let backToUsual = refilling && state <= .warming ? ", back toward its usual size" : ""
+            parts.append("memory is rising \(Int(memoryVelocity.rounded())) MB/min" + backToUsual)
         }
         if inStartupGrace, memoryVelocity > 0 {
             parts.append("inside startup grace window")

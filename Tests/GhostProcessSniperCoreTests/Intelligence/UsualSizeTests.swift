@@ -12,7 +12,7 @@ final class UsualSizeTests: XCTestCase {
     }
 
     private func score(_ process: ProcessMetrics, usual megabytes: Double?, pressure: SystemMemoryPressure = .unknown,
-                       incidents: Int = 0, spread: Double = 150) -> ProcessFamily? {
+                       incidents: Int = 0, spread: Double = 150, cores: Int? = nil) -> ProcessFamily? {
         var window = TrendWindow()
         let probe = Fixture.scored([process], window: &window)
         guard let signature = probe.first?.signature else { return nil }
@@ -29,7 +29,7 @@ final class UsualSizeTests: XCTestCase {
         let context = RadarContext(baselines: baselines, recentIncidentCounts: incidents > 0 ? [signature.id: incidents] : [:],
                                    rules: [], systemPressure: pressure)
         var fresh = TrendWindow()
-        return Fixture.scored([process], context: context, window: &fresh).first
+        return Fixture.scored([process], context: context, processorCount: cores, window: &fresh).first
     }
 
     func testABigAppAtItsUsualSizeIsWatchedNotHot() throws {
@@ -72,6 +72,32 @@ final class UsualSizeTests: XCTestCase {
         XCTAssertFalse(ProcessFamily.componentsShowOnlySize(big + [component("hardware.cpuPressure.0", .cpu, .hot)]))
         XCTAssertFalse(ProcessFamily.componentsShowOnlySize(big + [component("cpu", .cpu, .watch)]))
         XCTAssertFalse(ProcessFamily.componentsShowOnlySize(big + [component("hardware.gpuPressure.0", .gpu, .hot)]))
+    }
+
+    /// 61% of one core is twenty times a chat app's usual 3%, but on a ten-core
+    /// Mac it is a seventh of the CPU limit. Its Hot "baseline.cpu" component
+    /// stopped a big app at its usual size from being read as normal, and made
+    /// the sample an incident that was never learned.
+    func testABurstOnABigMacDoesNotMakeAUsualSizeHot() throws {
+        let burst = try XCTUnwrap(score(chat(cpu: 61), usual: 2_450, cores: 10))
+        let anomaly = try XCTUnwrap(burst.score.components.first { $0.slot == "baseline.cpu" })
+        XCTAssertEqual(anomaly.level, .watch, "still shown, at Watch")
+        XCTAssertEqual(anomaly.title, "61% CPU vs about 3.0% normally", "and still honest about it")
+        XCTAssertEqual(burst.score.level, .watch)
+        XCTAssertTrue(burst.hasOnlySizeAgainstIt, "learned, and not recorded as an incident")
+        XCTAssertTrue(burst.score.heat.evidence.contains { $0.hasPrefix("Large, but normal for it") }, "\(burst.score.heat.evidence)")
+    }
+
+    /// Half the core-aware family limit is where a baseline CPU burst counts as Hot.
+    func testABaselineCPUBurstIsHotOnlyFromHalfTheFamilyLimit() throws {
+        let twoCores = try XCTUnwrap(score(chat(cpu: 61), usual: 2_450, cores: 2))
+        XCTAssertEqual(twoCores.score.components.first { $0.slot == "baseline.cpu" }?.level, .hot, "61 of a 90% limit")
+        XCTAssertGreaterThanOrEqual(twoCores.score.level, .hot)
+
+        let tenCores = try XCTUnwrap(score(chat(cpu: 300), usual: 2_450, cores: 10))
+        XCTAssertEqual(tenCores.score.components.first { $0.slot == "baseline.cpu" }?.level, .hot, "300 of a 450% limit")
+        XCTAssertGreaterThanOrEqual(tenCores.score.level, .hot)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(score(chat(cpu: 900), usual: 2_450, cores: 10)).score.level, .hot)
     }
 
     func testTwiceItsUsualSizeBusyOrUnderPressureStaysHot() throws {
