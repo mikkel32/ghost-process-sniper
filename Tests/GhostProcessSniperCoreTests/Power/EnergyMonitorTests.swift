@@ -213,6 +213,39 @@ final class EnergyMonitorTests: XCTestCase {
         XCTAssertEqual(report.unexpectedBlockers.map(\.displayName), ["Safari"])
     }
 
+    func testAnAppHoldingBothTheMacAndItsDisplayAwakeIsCountedOnce() {
+        let started = EnergyFixture.start.addingTimeInterval(-3 * 3_600)
+        func held(_ pid: Int32, _ name: String, _ effect: SleepAssertionEffect) -> SleepAssertion {
+            SleepAssertion(pid: pid, processName: name,
+                           type: effect == .systemSleep ? "PreventUserIdleSystemSleep" : "PreventUserIdleDisplaySleep",
+                           effect: effect, name: "Electron", startedAt: started)
+        }
+        let assertions = ScriptedAssertions([
+            held(600, "Zoom", .systemSleep), held(600, "Zoom", .displaySleep),
+            held(610, "Notes", .systemSleep),
+            held(620, "Amphetamine", .systemSleep), held(620, "Amphetamine", .displaySleep),
+            held(90, "powerd", .systemSleep), held(90, "powerd", .displaySleep)
+        ])
+        var driver = EnergyDriver(assertions: assertions)
+        let report = driver.run(ticks: 2) { _, date in
+            [
+                EnergyFixture.process(pid: 600, name: "Zoom", path: "/Applications/Zoom.app/Contents/MacOS/Zoom",
+                                      counters: .init(), at: date),
+                EnergyFixture.process(pid: 610, name: "Notes", path: "/Applications/Notes.app/Contents/MacOS/Notes",
+                                      counters: .init(), at: date),
+                EnergyFixture.process(pid: 620, name: "Amphetamine",
+                                      path: "/Applications/Amphetamine.app/Contents/MacOS/Amphetamine",
+                                      counters: .init(), at: date),
+                EnergyFixture.process(pid: 90, name: "powerd", path: "/usr/libexec/powerd", counters: .init(), at: date)
+            ]
+        }
+        XCTAssertEqual(report.blockers.count, 7, "the awake list keeps one row per holder and effect")
+        XCTAssertEqual(report.unexpectedBlockers.count, 3)
+        XCTAssertEqual(report.unexpectedHolderCount, 2, "Zoom and Notes: the apps, not the assertions")
+        XCTAssertEqual(EnergyGlance(report).unexpectedHolderCount, 2)
+        XCTAssertEqual(report.blockers.filter(\.isSystem).holderCount, 1, "and one macOS service holds two")
+    }
+
     func testKeepAwakeUtilitiesAndBoundedCaffeinateAreIntentional() {
         func process(_ name: String, _ command: String) -> ProcessMetrics {
             EnergyFixture.process(pid: 7, name: name, path: "/usr/bin/\(name)", command: command, counters: .init(),

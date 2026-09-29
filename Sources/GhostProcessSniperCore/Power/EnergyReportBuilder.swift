@@ -108,7 +108,7 @@ struct EnergyReportBuilder {
             let intentional = Self.isIntentional(name: name, process: process)
             let system = group.map(isSystem) ?? true
             let idle = groupKey.map(isIdle) ?? false
-            let id = "\(groupKey ?? "pid:\(responsible)")|\(assertion.effect.rawValue)"
+            let id = "\(SleepBlocker.holderID(consumerID: groupKey, pid: responsible))|\(assertion.effect.rawValue)"
             let blocker = SleepBlocker(
                 id: id, displayName: name, viaProcessName: via, pid: responsible, consumerID: groupKey,
                 familyKey: group?.familyKey, effect: assertion.effect, reason: Self.reason(for: assertion),

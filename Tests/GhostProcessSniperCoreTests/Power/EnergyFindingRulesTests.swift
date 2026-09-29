@@ -76,6 +76,67 @@ final class EnergyFindingRulesTests: XCTestCase {
         XCTAssertEqual(display.first?.headline, "Safari has kept your display on for 45 min")
     }
 
+    // MARK: - One finding per holder
+
+    private func display(_ name: String, heldFor: TimeInterval) -> SleepBlocker {
+        blocker(name, heldFor: heldFor, effect: .displaySleep, reason: "Asked macOS to keep the display on")
+    }
+
+    func testAnAppKeepingBothTheMacAndItsDisplayAwakeIsOneFinding() {
+        var rules = EnergyFindingRules()
+        let both = [blocker("Zoom", heldFor: 3 * 3_600), display("Zoom", heldFor: 45 * 60)]
+        let findings = evaluate(&rules, blockers: both)
+        XCTAssertEqual(findings.map(\.kind), [.keepsMacAwake], "one app, one card, one notification")
+        XCTAssertEqual(findings.first?.headline, "Zoom has kept your Mac awake for 3 h", "the longest-held assertion leads")
+        XCTAssertEqual(findings.first?.severity, .attention)
+        XCTAssertTrue(findings.first?.detail.hasSuffix(" Zoom also keeps the display on.") ?? false)
+
+        var other = EnergyFindingRules()
+        let flipped = evaluate(&other, blockers: [blocker("Zoom", heldFor: 45 * 60), display("Zoom", heldFor: 3 * 3_600)])
+        XCTAssertEqual(flipped.first?.headline, "Zoom has kept your display on for 3 h")
+        XCTAssertTrue(flipped.first?.detail.hasSuffix(" Zoom also keeps the Mac awake.") ?? false)
+
+        var apart = EnergyFindingRules()
+        XCTAssertEqual(evaluate(&apart, blockers: both + [blocker("Teams", heldFor: 3_600)]).count, 2,
+                       "another app is another finding")
+    }
+
+    func testTheOtherAssertionIsOnlyMentionedWhenItHasHeldLongEnoughToo() {
+        var rules = EnergyFindingRules()
+        let findings = evaluate(&rules, blockers: [blocker("Zoom", heldFor: 3 * 3_600), display("Zoom", heldFor: 10 * 60)])
+        XCTAssertEqual(findings.count, 1)
+        XCTAssertFalse(findings.first?.detail.contains("also") ?? true, "10 minutes is not yet worth a finding")
+
+        var tied = EnergyFindingRules()
+        let same = evaluate(&tied, blockers: [display("Zoom", heldFor: 3_600), blocker("Zoom", heldFor: 3_600)])
+        XCTAssertEqual(same.first?.headline, "Zoom has kept your Mac awake for 1 h", "a tie goes to the whole Mac")
+        XCTAssertTrue(same.first?.detail.hasSuffix(" Zoom also keeps the display on.") ?? false)
+    }
+
+    func testAHolderNoGroupOwnsIsStillOneFindingPerProcess() {
+        func loose(_ pid: Int32, _ effect: SleepAssertionEffect) -> SleepBlocker {
+            SleepBlocker(id: "pid:\(pid)|\(effect.rawValue)", displayName: "worker", viaProcessName: nil, pid: pid,
+                         consumerID: nil, familyKey: nil, effect: effect, reason: "caffeinate is running", rawName: "",
+                         heldSince: now.addingTimeInterval(-3_600), isSystem: false, isIntentional: false, isIdle: true)
+        }
+        var rules = EnergyFindingRules()
+        let findings = evaluate(&rules, blockers: [loose(700, .systemSleep), loose(700, .displaySleep), loose(701, .systemSleep)])
+        XCTAssertEqual(findings.map(\.consumerID).sorted(), ["pid:700", "pid:701"])
+    }
+
+    func testTheFindingKeepsItsIdAndStartWhileEitherAssertionHoldsOn() {
+        var rules = EnergyFindingRules()
+        let first = evaluate(&rules, blockers: [blocker("Zoom", heldFor: 3_600), display("Zoom", heldFor: 3_600)])
+        // The display assertion is let go, and the Mac assertion is now the only one.
+        let later = evaluate(&rules, blockers: [blocker("Zoom", heldFor: 3_600 + 60)], at: now.addingTimeInterval(60))
+        XCTAssertEqual(later.map(\.id), first.map(\.id))
+        XCTAssertEqual(later.first?.since, now)
+        XCTAssertFalse(later.first?.detail.contains("also") ?? true)
+        // Held only by the display, at 80% of the half hour, a showing finding holds on.
+        let easing = evaluate(&rules, blockers: [display("Zoom", heldFor: 25 * 60)], at: now.addingTimeInterval(120))
+        XCTAssertEqual(easing.map(\.id), first.map(\.id))
+    }
+
     func testBlockersThatAreBusyBriefIntentionalOrMacOSAreNotFindings() {
         var rules = EnergyFindingRules()
         XCTAssertTrue(evaluate(&rules, blockers: [blocker(idle: false)]).isEmpty, "a video call is work in progress")

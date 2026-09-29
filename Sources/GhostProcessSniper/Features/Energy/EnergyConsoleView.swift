@@ -118,7 +118,9 @@ struct EnergyConsoleView: View {
                             SleepBlockerRow(blocker: blocker, actions: actions)
                         }
                     } label: {
-                        Text(system.count == 1 ? "1 macOS service" : "\(system.count) macOS services")
+                        // Services, not rows: one that holds both the Mac and the display awake is one service.
+                        let services = system.holderCount
+                        Text(services == 1 ? "1 macOS service" : "\(services) macOS services")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
                     }
@@ -174,7 +176,7 @@ struct EnergyHero: View {
         var parts: [String] = []
         if let draw = headline.drawSentence { parts.append(draw) }
         if let share = headline.attributionSentence { parts.append(share) }
-        let awake = report.unexpectedBlockers.count
+        let awake = report.unexpectedHolderCount
         if awake > 0 { parts.append(awake == 1 ? "1 app is keeping it awake" : "\(awake) apps are keeping it awake") }
         return parts.isEmpty ? "Measuring energy for every process" : parts.joined(separator: " · ")
     }

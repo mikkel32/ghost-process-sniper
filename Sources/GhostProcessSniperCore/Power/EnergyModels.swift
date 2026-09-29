@@ -94,6 +94,17 @@ public struct SleepBlocker: Identifiable, Equatable, Sendable {
     public func heldFor(at now: Date) -> TimeInterval? {
         heldSince.map { max(0, now.timeIntervalSince($0)) }
     }
+
+    /// The app or job that holds it, whatever the effect: an app that keeps both the Mac and its display
+    /// awake is one thing to count and one finding, not two.
+    public var holderID: String { Self.holderID(consumerID: consumerID, pid: pid) }
+
+    static func holderID(consumerID: String?, pid: Int32) -> String { consumerID ?? "pid:\(pid)" }
+}
+
+extension Sequence where Element == SleepBlocker {
+    /// How many apps or jobs hold them.
+    public var holderCount: Int { Set(map(\.holderID)).count }
 }
 
 public enum EnergyFindingKind: String, Equatable, Sendable {
@@ -237,4 +248,7 @@ public struct EnergyReport: Equatable, Sendable {
     public var unexpectedBlockers: [SleepBlocker] {
         blockers.filter { !$0.isSystem && !$0.isIntentional }
     }
+
+    /// How many apps or jobs those are; one holding both the Mac and its display awake counts once.
+    public var unexpectedHolderCount: Int { unexpectedBlockers.holderCount }
 }

@@ -31,8 +31,9 @@ struct EnergyFindingRules: Sendable {
     ) -> [EnergyFinding] {
         var findings: [EnergyFinding] = []
         let byID = Dictionary(consumers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for blocker in blockers {
-            if let finding = keepsAwake(blocker, consumer: blocker.consumerID.flatMap { byID[$0] },
+        // One finding per app or job: keeping the Mac and its display awake is one problem, not two.
+        for held in Dictionary(grouping: blockers, by: \.holderID).values {
+            if let finding = keepsAwake(held, consumer: held[0].consumerID.flatMap { byID[$0] },
                                         battery: battery, now: now) {
                 findings.append(finding)
             }
@@ -83,10 +84,9 @@ struct EnergyFindingRules: Sendable {
 
     private mutating func finding(
         _ kind: EnergyFindingKind, consumerID: String, name: String, familyKey: String?,
-        severity: EnergyFindingSeverity, headline: String, detail: String, advice: String, now: Date,
-        key: String? = nil
+        severity: EnergyFindingSeverity, headline: String, detail: String, advice: String, now: Date
     ) -> EnergyFinding {
-        let id = "\(kind.rawValue)|\(key ?? consumerID)"
+        let id = "\(kind.rawValue)|\(consumerID)"
         let start = since[id] ?? now
         since[id] = start
         return EnergyFinding(id: id, kind: kind, severity: severity, consumerID: consumerID, displayName: name,
@@ -95,20 +95,32 @@ struct EnergyFindingRules: Sendable {
 
     // MARK: - Rules
 
-    private mutating func keepsAwake(_ blocker: SleepBlocker, consumer: EnergyConsumer?, battery: BatteryOutlook?,
+    /// `held` is everything one app or job holds, at most one assertion per effect. The one held longest
+    /// leads the finding, and the other only adds a sentence, once it too has held long enough.
+    private mutating func keepsAwake(_ held: [SleepBlocker], consumer: EnergyConsumer?, battery: BatteryOutlook?,
                                      now: Date) -> EnergyFinding? {
-        guard !blocker.isSystem, !blocker.isIntentional, blocker.isIdle,
-              let held = blocker.heldFor(at: now) else { return nil }
-        // The blocker's id names its holder and effect, so a display and a
-        // system assertion from one app are two findings.
-        guard held >= threshold(Self.keepAwakeSeconds, "\(EnergyFindingKind.keepsMacAwake.rawValue)|\(blocker.id)") else {
-            return nil
+        guard let holder = held.first?.holderID else { return nil }
+        let limit = threshold(Self.keepAwakeSeconds, "\(EnergyFindingKind.keepsMacAwake.rawValue)|\(holder)")
+        let long: [(blocker: SleepBlocker, seconds: TimeInterval)] = held.compactMap { blocker in
+            guard !blocker.isSystem, !blocker.isIntentional, blocker.isIdle,
+                  let seconds = blocker.heldFor(at: now), seconds >= limit else { return nil }
+            return (blocker, seconds)
         }
+        // On a tie the one that keeps the whole Mac awake leads.
+        guard let lead = long.max(by: { lhs, rhs in
+            lhs.seconds != rhs.seconds ? lhs.seconds < rhs.seconds
+                : lhs.blocker.effect == .displaySleep && rhs.blocker.effect == .systemSleep
+        }) else { return nil }
+        let blocker = lead.blocker
         let name = blocker.displayName
         let what = blocker.effect == .displaySleep ? "kept your display on" : "kept your Mac awake"
-        let duration = EnergyFormat.duration(held)
+        let duration = EnergyFormat.duration(lead.seconds)
         var detail = "\(blocker.reason), and \(name) has used almost no CPU for the last 10 minutes."
         if let via = blocker.viaProcessName { detail += " macOS (\(via)) holds it on \(name)\u{2019}s behalf." }
+        if let other = long.first(where: { $0.blocker.effect != blocker.effect }) {
+            detail += other.blocker.effect == .displaySleep ? " \(name) also keeps the display on."
+                : " \(name) also keeps the Mac awake."
+        }
         let advice: String = if blocker.reason.hasPrefix("An audio") {
             "Close the tab or window that played sound, or quit \(name). Your Mac can sleep again as soon as the stream closes."
         } else if consumer?.kind == .job {
@@ -116,12 +128,11 @@ struct EnergyFindingRules: Sendable {
         } else {
             "Quit \(name) if you\u{2019}re not using it. Your Mac can sleep again once it lets go."
         }
-        let severity: EnergyFindingSeverity = held >= Self.longKeepAwakeSeconds || battery?.isDischarging == true
+        let severity: EnergyFindingSeverity = lead.seconds >= Self.longKeepAwakeSeconds || battery?.isDischarging == true
             ? .attention : .notable
-        return finding(.keepsMacAwake, consumerID: blocker.consumerID ?? blocker.id, name: name,
-                       familyKey: blocker.familyKey, severity: severity,
-                       headline: "\(name) has \(what) for \(duration)", detail: detail, advice: advice, now: now,
-                       key: blocker.id)
+        return finding(.keepsMacAwake, consumerID: holder, name: name, familyKey: blocker.familyKey,
+                       severity: severity, headline: "\(name) has \(what) for \(duration)", detail: detail,
+                       advice: advice, now: now)
     }
 
     private mutating func wakeups(_ consumer: EnergyConsumer, battery: BatteryOutlook?, now: Date) -> EnergyFinding? {
