@@ -5,9 +5,12 @@ import XCTest
 final class DuplicateScoringTests: XCTestCase {
     private typealias Fixture = IntelligenceFixture
 
-    private func node(_ pid: Int32, parent: Int32 = 1, _ script: String, startedAgo: TimeInterval = 3_600, ports: [Int] = []) -> ProcessMetrics {
+    private func node(
+        _ pid: Int32, parent: Int32 = 1, _ script: String, startedAgo: TimeInterval = 3_600,
+        ports: [Int] = [], megabytes: Double = 200, cpu: Double = 1
+    ) -> ProcessMetrics {
         let base = Fixture.process(pid: pid, parent: parent, name: "node", path: "/usr/local/bin/node",
-                                   command: "node \(script)", megabytes: 200, cpu: 1,
+                                   command: "node \(script)", megabytes: megabytes, cpu: cpu,
                                    started: Fixture.now.addingTimeInterval(-startedAgo))
         guard !ports.isEmpty else { return base }
         return ProcessMetrics(
@@ -256,5 +259,129 @@ final class DuplicateScoringTests: XCTestCase {
         }
         let result = build(mains + tools)
         XCTAssertEqual(result.duplicateClusters.map(\.displayName), ["com.docker.cli"])
+    }
+
+    // MARK: Copies that give almost nothing back
+
+    private let script = "/Users/dev/api/server.js"
+
+    /// The kept copy's family and the older copy's family, in that order.
+    private func families(of result: ProcessFamilyBuildResult, kept: ProcessMetrics, older: ProcessMetrics) throws -> [ProcessFamily] {
+        [
+            try XCTUnwrap(result.families.first { $0.root.identity == kept.identity }, "kept family"),
+            try XCTUnwrap(result.families.first { $0.root.identity == older.identity }, "older family"),
+        ]
+    }
+
+    private func assertNotRaisedByCopies(_ family: ProcessFamily, _ label: String, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(family.score.level, .quiet, "\(label): \(family.score.reasons)", file: file, line: line)
+        XCTAssertFalse(family.score.reasons.contains { $0.contains("independent copies") }, label, file: file, line: line)
+        XCTAssertFalse(family.score.components.contains { $0.slot == "duplicate" }, label, file: file, line: line)
+        XCTAssertFalse(family.score.heat.evidence.contains { $0.contains("independent copies") }, label, file: file, line: line)
+    }
+
+    private func assertRaisedByCopies(_ family: ProcessFamily, _ label: String, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(family.score.level, .watch, "\(label): \(family.score.reasons)", file: file, line: line)
+        XCTAssertTrue(family.score.reasons.contains("2 independent copies"), label, file: file, line: line)
+        XCTAssertTrue(family.score.heat.evidence.contains("2 independent copies need review"), label, file: file, line: line)
+    }
+
+    /// Two idle 2 MB leftovers of one tool are still a cluster, listed and
+    /// stoppable, but stopping them gives back nothing worth a Watch row.
+    func testTinyIdleCopiesDoNotRaiseTheirFamilies() throws {
+        let older = node(1_400, script, startedAgo: 7_200, megabytes: 2)
+        let kept = node(1_401, script, startedAgo: 60, megabytes: 2)
+        let result = build([older, kept])
+        let cluster = try XCTUnwrap(result.duplicateClusters.first)
+        XCTAssertTrue(cluster.countsAsIndependentCopies)
+        XCTAssertEqual(cluster.redundantFootprintBytes, 2 * Fixture.mib)
+
+        let pair = try families(of: result, kept: kept, older: older)
+        assertNotRaisedByCopies(pair[0], "kept")
+        assertNotRaisedByCopies(pair[1], "older")
+
+        // The cluster and the way to stop the extra copy are untouched.
+        let enriched = RadarIntelligence().enrich(
+            family: pair[0], context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []),
+            settings: .smart, now: Fixture.now)
+        let stop = try XCTUnwrap(enriched.suggestions.first { $0.targetIdentities != nil })
+        XCTAssertEqual(stop.title, "Stop 1 older copy")
+        XCTAssertEqual(stop.targetIdentities ?? [], [older.identity])
+    }
+
+    func testLargeCopiesStillRaiseTheirFamilies() throws {
+        let older = node(1_410, script, startedAgo: 7_200)
+        let kept = node(1_411, script, startedAgo: 60)
+        let pair = try families(of: build([older, kept]), kept: kept, older: older)
+        assertRaisedByCopies(pair[0], "kept")
+        assertRaisedByCopies(pair[1], "older")
+    }
+
+    /// The floor is what stopping the extra copies gives back, so it is the
+    /// older copy's size that counts, not the pair's total or the kept copy's.
+    func testTheSizeOfTheCopiesToStopDecidesNotTheKeptOne() throws {
+        let orphan = node(1_420, script, startedAgo: 7_200, megabytes: 2)
+        let bigKept = node(1_421, script, startedAgo: 60, megabytes: 300)
+        let result = build([orphan, bigKept])
+        let cluster = try XCTUnwrap(result.duplicateClusters.first)
+        XCTAssertEqual(cluster.totalPhysicalFootprintBytes, 302 * Fixture.mib)
+        XCTAssertEqual(cluster.redundantFootprintBytes, 2 * Fixture.mib)
+        let pair = try families(of: result, kept: bigKept, older: orphan)
+        assertNotRaisedByCopies(pair[1], "the 2 MB orphan")
+        XCTAssertFalse(pair[0].score.reasons.contains { $0.contains("independent copies") }, "the big kept copy")
+
+        let bigOlder = node(1_422, script, startedAgo: 7_200, megabytes: 300)
+        let tinyKept = node(1_423, script, startedAgo: 60, megabytes: 2)
+        let reverse = try families(of: build([bigOlder, tinyKept]), kept: tinyKept, older: bigOlder)
+        assertRaisedByCopies(reverse[0], "tiny kept copy")
+        assertRaisedByCopies(reverse[1], "the 300 MB older copy")
+    }
+
+    /// A copy that serves a port is worth a look at any size, and only the
+    /// ports of the copies to stop count: the kept copy is meant to serve.
+    func testAPortOnACopyToStopRaisesTinyCopies() throws {
+        let older = node(1_430, script, startedAgo: 7_200, ports: [3000], megabytes: 2)
+        let kept = node(1_431, script, startedAgo: 60, megabytes: 2)
+        let served = build([older, kept])
+        XCTAssertEqual(served.duplicateClusters.first?.redundantPorts, [3000])
+        let pair = try families(of: served, kept: kept, older: older)
+        assertRaisedByCopies(pair[0], "kept")
+        assertRaisedByCopies(pair[1], "older")
+
+        let quietOlder = node(1_432, script, startedAgo: 7_200, megabytes: 2)
+        let servingKept = node(1_433, script, startedAgo: 60, ports: [5175], megabytes: 2)
+        let result = build([quietOlder, servingKept])
+        XCTAssertEqual(result.duplicateClusters.first?.redundantPorts, [])
+        let keptPair = try families(of: result, kept: servingKept, older: quietOlder)
+        assertNotRaisedByCopies(keptPair[0], "kept, serving")
+        assertNotRaisedByCopies(keptPair[1], "older")
+    }
+
+    /// A copy's matching descendants are stopped with it, so they count too;
+    /// the kept copy and its own descendants never do.
+    func testRedundantFootprintCountsTheStoppedCopiesWithTheirDescendants() throws {
+        let older = node(1_440, script, startedAgo: 7_200, megabytes: 10)
+        let olderChild = node(1_441, parent: 1_440, script, startedAgo: 7_190, megabytes: 6)
+        let kept = node(1_442, script, startedAgo: 60, megabytes: 50)
+        let keptChild = node(1_443, parent: 1_442, script, startedAgo: 55, megabytes: 30)
+        let cluster = try XCTUnwrap(build([older, olderChild, kept, keptChild]).duplicateClusters.first)
+        XCTAssertEqual(cluster.keepIdentity, kept.identity)
+        XCTAssertEqual(cluster.redundantRootIdentities, [older.identity])
+        XCTAssertEqual(cluster.redundantFootprintBytes, 16 * Fixture.mib)
+    }
+
+    /// The scoring cache reuses a family's score while its fingerprint holds;
+    /// the copy to stop lives in another family, so the fingerprint must
+    /// notice that it grew past the floor.
+    func testTheScoringCacheNoticesTheStoppedCopyGrowingPastTheFloor() throws {
+        func fingerprint(olderMegabytes: Double) throws -> UInt64 {
+            let older = node(1_450, script, startedAgo: 7_200, megabytes: olderMegabytes)
+            let kept = node(1_451, script, startedAgo: 60, megabytes: 2)
+            let family = try XCTUnwrap(build([older, kept]).families.first { $0.root.identity == kept.identity })
+            return FamilyScoringCache.fingerprint(
+                family: family, context: RadarContext(baselines: [:], recentIncidentCounts: [:], rules: []))
+        }
+        XCTAssertEqual(try fingerprint(olderMegabytes: 2), try fingerprint(olderMegabytes: 3), "both below the floor")
+        XCTAssertNotEqual(try fingerprint(olderMegabytes: 2), try fingerprint(olderMegabytes: 60), "60 MB is worth a Watch")
     }
 }

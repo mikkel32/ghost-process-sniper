@@ -266,7 +266,7 @@ private func duplicateDetectorCapturesSmallSameUserProcesses() throws {
         name: "miniwatch",
         executablePath: "/Users/dev/.local/bin/miniwatch",
         commandLine: "miniwatch --repo api --port 4010",
-        memory: 22_000_000,
+        memory: 40_000_000, // the older copy must free 32 MB to raise its family
         cpu: 1
     )
     let second = sample(
@@ -276,7 +276,7 @@ private func duplicateDetectorCapturesSmallSameUserProcesses() throws {
         name: "miniwatch",
         executablePath: "/Users/dev/.local/bin/miniwatch",
         commandLine: "miniwatch --repo web --port 4011",
-        memory: 24_000_000,
+        memory: 44_000_000,
         cpu: 2
     )
 

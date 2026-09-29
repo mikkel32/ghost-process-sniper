@@ -61,14 +61,32 @@ public struct DuplicateProcessCluster: Identifiable, Equatable, Sendable {
     /// Listening ports of the redundant copies, when forensics knows them.
     public let redundantPorts: [Int]
 
+    /// Memory of the redundant copies and their matching descendants: what
+    /// stopping the extras gives back, not what the whole cluster holds.
+    public let redundantFootprintBytes: UInt64
+
     /// The copies worth stopping; stop the family that owns each one.
     public let redundantRootIdentities: [ProcessIdentity]
-    /// Changes whenever the keep, the redundant copies or their ports do.
+    /// Changes whenever the keep, the redundant copies, their ports or
+    /// whether they clear `minimumGiveBackBytes` do.
     let copyPlanHash: Int
 
     /// Two or more copies started independently, not one tool's worker pool.
     public var countsAsIndependentCopies: Bool {
         independentRootCount >= 2 && !isInternalToSingleFamily
+    }
+
+    /// Stopping the extras must give back at least this much, or free a
+    /// port, before the copies raise their families: a pair of idle 2 MB
+    /// helpers is listed and stoppable but is not worth a Watch row.
+    public static let minimumGiveBackBytes: UInt64 = 32 * 1_048_576
+
+    /// Whether the copies are worth a flag on their families. It reads the
+    /// copies to stop, not the cluster: a small orphan beside one big kept
+    /// copy frees almost nothing, and the kept copy's own port is meant to
+    /// be served.
+    public var copiesMatter: Bool {
+        redundantFootprintBytes >= Self.minimumGiveBackBytes || !redundantPorts.isEmpty
     }
 
     public init(
@@ -112,20 +130,27 @@ public struct DuplicateProcessCluster: Identifiable, Equatable, Sendable {
         self.keepReason = keepReason
         let redundant = keepIdentity == nil ? [] : copyRootIdentities.filter { $0 != keepIdentity }
         self.redundantRootIdentities = redundant
-        self.redundantPorts = Self.ports(of: redundant, in: sorted)
+        let stopped = Self.members(ofCopies: redundant, in: sorted)
+        let footprint = stopped.reduce(UInt64(0)) { $0 + $1.memoryForScoringBytes }
+        self.redundantFootprintBytes = footprint
+        self.redundantPorts = Array(Set(stopped.flatMap(\.forensics.listeningPorts))).sorted()
         var hasher = Hasher()
         hasher.combine(keepIdentity)
         hasher.combine(redundant)
         hasher.combine(redundantPorts)
+        // The score reads the floor, so the copy to stop growing past it
+        // must reach the kept family's cached score too.
+        hasher.combine(footprint >= Self.minimumGiveBackBytes)
         self.copyPlanHash = hasher.finalize()
     }
 
-    private static func ports(of copies: [ProcessIdentity], in members: [ProcessMetrics]) -> [Int] {
+    /// The members that stop with `copies`: each copy and its matching
+    /// descendants, which serve its ports and hold its memory too.
+    private static func members(ofCopies copies: [ProcessIdentity], in members: [ProcessMetrics]) -> [ProcessMetrics] {
         guard !copies.isEmpty else { return [] }
         let wanted = Set(copies)
         let memberPIDs = Set(members.map(\.pid))
         let byPID = Dictionary(members.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
-        // A copy's matching descendants serve its ports too.
         func copyRoot(of member: ProcessMetrics) -> ProcessIdentity {
             var current = member
             var steps = 0
@@ -135,7 +160,7 @@ public struct DuplicateProcessCluster: Identifiable, Equatable, Sendable {
             }
             return current.identity
         }
-        return Array(Set(members.filter { wanted.contains(copyRoot(of: $0)) }.flatMap(\.forensics.listeningPorts))).sorted()
+        return members.filter { wanted.contains(copyRoot(of: $0)) }
     }
 
     public func resolving(relatedFamilyKeys: [String], isInternalToSingleFamily: Bool) -> DuplicateProcessCluster {

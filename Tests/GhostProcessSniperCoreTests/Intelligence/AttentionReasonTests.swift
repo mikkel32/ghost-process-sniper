@@ -90,6 +90,29 @@ final class AttentionReasonTests: XCTestCase {
         XCTAssertEqual(row(family).subtitle, "2 copies running")
     }
 
+    /// Two 2 MB leftovers are not scored as copies, so when something else
+    /// puts one of them on the radar, "2 copies running" would name the wrong
+    /// cause.
+    func testTinyCopiesAreNotTheReasonSomethingElseRaisedTheFamily() throws {
+        var window = TrendWindow()
+        let vite = "/Users/dev/web/node_modules/.bin/vite"
+        let tiny = [901, 902].map {
+            Fixture.process(pid: Int32($0), name: "node", path: "/usr/local/bin/node",
+                            command: "node \(vite) --port \($0)", megabytes: 2, cpu: 0)
+        }
+        let built = ProcessFamilyBuilder(currentUserID: 501).buildFamiliesWithDuplicates(
+            from: tiny, settings: .smart, trendWindow: &window, now: Fixture.now).families
+        let quiet = try XCTUnwrap(built.first)
+        XCTAssertEqual(quiet.duplicateCluster?.countsAsIndependentCopies, true)
+        XCTAssertEqual(quiet.score.level, .quiet)
+
+        let forgotten = GhostScoreComponent(slot: "forgotten", kind: .background, title: "likely forgotten",
+                                            detail: "No CPU use for 3 h", impact: 8, level: .watch)
+        let score = GhostScore(value: 30, level: .watch, reasons: [], components: [forgotten],
+                               heat: GhostHeat(value: 32, level: .watch, confidence: 0.5, evidence: [], sustainedSignalCount: 0))
+        XCTAssertEqual(ProcessAssessment(family: quiet.enriched(score: score)).reason, "Probably forgotten")
+    }
+
     func testAForgottenFamilySaysSo() {
         let root = Fixture.process(pid: 5_100, megabytes: 300, cpu: 0)
         let forgotten = GhostScoreComponent(slot: "forgotten", kind: .background, title: "likely forgotten",
