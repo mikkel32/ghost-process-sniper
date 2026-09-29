@@ -171,12 +171,25 @@ struct ThermalWorkloadResolver {
         }
         // An XPC service or helper launchd started for an app, such as a
         // Safari tab's WebContent process, belongs to that app.
-        if let responsible = responsiblePIDs[root.identity] ?? responsiblePIDs[process.identity],
-           let owner = processesByPID[responsible],
-           let app = Self.applicationPath(owner.executablePath) {
+        if let app = responsibleApp(for: root) ?? responsibleApp(for: process) {
+            // macOS keeps a terminal responsible for what it started even after the job is
+            // orphaned to launchd (nohup, a daemonized server), and that is a job started in
+            // it, not the terminal's own work. Platform helpers a terminal is responsible for
+            // (an open panel's view bridge) still count with it.
+            if let terminal = Self.terminalName(app), !Self.isPlatformHelper(root.executablePath) {
+                return Self.job(root: root, host: terminal, kind: .job)
+            }
             return appAssignment(app)
         }
         return Self.job(root: root, host: nil, kind: root.identity == process.identity ? .process : .job)
+    }
+
+    /// The app macOS holds responsible for a launchd-started process, unless its pid was
+    /// reused: a recycled owner starts after the process it is said to be responsible for.
+    private func responsibleApp(for process: ProcessMetrics) -> String? {
+        guard let responsible = responsiblePIDs[process.identity], let owner = processesByPID[responsible],
+              Self.startedNoLater(owner.identity, than: process.identity) else { return nil }
+        return Self.applicationPath(owner.executablePath)
     }
 
     /// Names the terminal a shell runs in; an editor's integrated terminal is not a host.
@@ -252,6 +265,12 @@ struct ThermalWorkloadResolver {
     /// the user would read as apps. Apps, jobs someone started and known sources are never services.
     static func isMacOSService(executablePath: String, kind: ThermalWorkloadKind) -> Bool {
         kind == .process && isOperatingSystemPath(executablePath)
+    }
+
+    /// An XPC service or a program from macOS's own folders, which launchd starts for an app
+    /// rather than a person starting it.
+    private static func isPlatformHelper(_ executablePath: String) -> Bool {
+        executablePath.contains(".xpc/") || isOperatingSystemPath(executablePath)
     }
 
     /// Whether the executable is a terminal app: what it starts is a job, never a helper of the app.

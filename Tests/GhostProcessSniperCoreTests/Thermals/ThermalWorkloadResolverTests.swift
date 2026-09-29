@@ -261,6 +261,50 @@ final class ThermalWorkloadResolverTests: XCTestCase {
         XCTAssertNil(ThermalStopTarget.resolve(for: contributor, family: family, ownPID: 1))
     }
 
+    /// macOS keeps a terminal responsible for what it started, even once the job
+    /// is orphaned to launchd (nohup, a daemonized server, colima). That is a job
+    /// started in the terminal, not the terminal's own work.
+    func testAnOrphanedJobResponsibleToATerminalIsAJobInIt() throws {
+        let node = process(610, parent: 1, name: "node", path: "/opt/homebrew/bin/node", cpu: 80)
+        let child = process(611, parent: 610, name: "esbuild", path: "/opt/homebrew/bin/esbuild", cpu: 40)
+        let result = ThermalActivityAnalyzer.project(
+            processes: terminalShell() + [node, child], families: [], now: now, processorCount: 10,
+            responsiblePIDs: [node.identity: 600])
+        let job = try XCTUnwrap(result.contributors.first)
+        XCTAssertEqual(result.contributors.count, 1)
+        XCTAssertEqual(job.id, "job:610:2000199000.0")
+        XCTAssertEqual(job.displayName, "node")
+        XCTAssertEqual(job.kind, .job)
+        XCTAssertEqual(job.hostAppName, "Terminal")
+        XCTAssertEqual(job.processCount, 2)
+    }
+
+    /// A platform helper the terminal is responsible for (an open panel, a view
+    /// bridge) is still counted with the terminal, as before.
+    func testPlatformHelpersResponsibleToATerminalStayWithIt() {
+        let viewBridge = "/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/ViewBridgeAuxiliary.xpc/Contents/MacOS/ViewBridgeAuxiliary"
+        let bridge = process(620, parent: 1, name: "ViewBridgeAuxiliary", path: viewBridge, cpu: 60)
+        let service = process(621, parent: 1, name: "diagnosticd", path: "/usr/libexec/diagnosticd", cpu: 60)
+        var resolver = ThermalWorkloadResolver(processes: terminalShell() + [bridge, service],
+                                               responsiblePIDs: [bridge.identity: 600, service.identity: 600])
+        for helper in [bridge, service] {
+            let assignment = resolver.assignment(for: helper)
+            XCTAssertTrue(assignment.kind == .app, "\(helper.name) is \(assignment.kind)")
+            XCTAssertEqual(assignment.groupKey, "/System/Applications/Utilities/Terminal.app")
+        }
+    }
+
+    /// A pid reused after the responsible app quit would name a stranger.
+    func testAResponsibleAppThatStartedAfterTheJobIsARecycledPID() {
+        let editor = process(630, parent: 1, name: "Editor", path: "/Applications/Editor.app/Contents/MacOS/Editor",
+                             cpu: 0, start: 2_000_199_500)
+        let orphan = process(631, parent: 1, name: "worker", path: "/usr/local/bin/worker", cpu: 50)
+        var resolver = ThermalWorkloadResolver(processes: [editor, orphan], responsiblePIDs: [orphan.identity: 630])
+        let assignment = resolver.assignment(for: orphan)
+        XCTAssertEqual(assignment.kind, .process)
+        XCTAssertEqual(assignment.groupKey, "job:631:2000199000.0")
+    }
+
     func testProjectionDoesNotDependOnInputOrder() {
         let processes = terminalShell() + editor() + [
             process(603, parent: 602, name: "make", path: "/usr/bin/make", cpu: 3),
