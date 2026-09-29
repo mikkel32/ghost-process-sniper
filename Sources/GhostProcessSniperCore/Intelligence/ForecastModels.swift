@@ -256,6 +256,14 @@ public extension ProcessFamily {
         forecast.isCredibleEscalation && forecastHasEscalationHistory
     }
 
+    /// What the Overview asks you to review: Hot or worse, or a credible
+    /// escalation. The hero's count, the Needs review card, the Risk Queue and
+    /// the Review filter all read this one definition, so each number is the
+    /// size of the list it opens.
+    var needsReview: Bool {
+        score.level >= .hot || forecastIsCredibleEscalation
+    }
+
     /// The level the product should present and sort by. Raw model output is
     /// still retained for diagnostics, but immature predictions do not get
     /// the same visual authority as measured or corroborated Heat.

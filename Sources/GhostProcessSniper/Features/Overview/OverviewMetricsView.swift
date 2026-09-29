@@ -103,11 +103,9 @@ private extension RadarConsoleSession {
     func openMetric(_ destination: OverviewMetricDestination?) {
         guard let destination else { return }
         switch destination {
-        case .families: browseFamilies()
-        case .attention: browseFamilies(filter: .attention)
-        case .leaking: browseFamilies(filter: .leaking)
         case .duplicates: focus(.duplicates)
         case .memory: browseFamilies(sort: .memory)
+        case .families, .review, .leaking: browseFamilies(filter: destination.filter ?? .all)
         }
     }
 }

@@ -2,6 +2,7 @@ import Foundation
 
 public enum RadarFilter: String, CaseIterable, Sendable {
     case all
+    case review
     case attention
     case leaking
     case killable
@@ -10,6 +11,7 @@ public enum RadarFilter: String, CaseIterable, Sendable {
     public var label: String {
         switch self {
         case .all: "All"
+        case .review: "Review"
         case .attention: "Attention"
         case .leaking: "Leaks"
         case .killable: "Killable"
@@ -84,6 +86,7 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
     public let forecastPriority: Int
     public let hasCredibleLeak: Bool
     public let isWatchedForSizeOnly: Bool
+    public let needsReview: Bool
     public let etaText: String
     public let confidenceText: String
 
@@ -121,6 +124,7 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
         forecastPriority = family.forecastPresentationPriority
         hasCredibleLeak = family.hasCredibleLeak
         isWatchedForSizeOnly = family.isWatchedForSizeOnly
+        needsReview = family.needsReview
         etaText = family.forecast.etaText
         confidenceText = "\(Int((family.forecast.confidence * 100).rounded()))%"
     }
@@ -134,6 +138,7 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
     public func matches(_ filter: RadarFilter) -> Bool {
         switch filter {
         case .all: true
+        case .review: needsReview
         case .attention: needsAttention
         // Credible leaks only: any positive memory slope is mostly noise.
         case .leaking: hasCredibleLeak

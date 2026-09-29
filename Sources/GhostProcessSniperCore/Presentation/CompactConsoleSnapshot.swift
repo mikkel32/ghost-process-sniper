@@ -97,6 +97,7 @@ public struct CompactSidebarRowModel: Identifiable, Equatable, Sendable {
     public let memoryBytes: UInt64
     public let radarSector: LiveRadarSector
     public let isWatchedForSizeOnly: Bool
+    public let needsReview: Bool
 
     public init(item: FamilyTriageViewModel) {
         familyKey = item.familyKey
@@ -115,6 +116,7 @@ public struct CompactSidebarRowModel: Identifiable, Equatable, Sendable {
         forecastConfidence = item.forecastConfidence
         memoryBytes = item.memoryBytes
         isWatchedForSizeOnly = item.isWatchedForSizeOnly
+        needsReview = item.needsReview
         radarSector = LiveRadarSector.of(kind: item.kind, path: item.signature.canonicalPath)
         let gpuHelp = item.gpuPercent > 0.5 ? ", GPU \(item.gpuText)" : ""
         helpText = "\(item.assessment.reason). \(item.assessment.evidence)\n\(item.memoryText), \(item.cpuText)\(gpuHelp), \(item.leakText)"
@@ -181,7 +183,7 @@ public struct OverviewCommandCenterModel: Equatable, Sendable {
                              destination: .families, actionTitle: "Browse all"),
             FamilyMetricCard(title: "Needs review", value: "\(summary.hotCount)", systemImage: "flame",
                              level: summary.hotCount > 0 ? .hot : .quiet,
-                             destination: .attention, actionTitle: "Review activity"),
+                             destination: .review, actionTitle: "Review activity"),
             FamilyMetricCard(title: "Leaks", value: "\(summary.leakingCount)", systemImage: "chart.line.uptrend.xyaxis",
                              level: summary.leakingCount > 0 ? .watch : .quiet,
                              destination: .leaking, actionTitle: "Inspect growth"),
@@ -360,6 +362,9 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
     /// False only before the first sample. Empty rows after it mean nothing
     /// in scope, which views must show as quiet rather than as a scan.
     public let hasSampled: Bool
+    /// Every family that needs review; `topRiskRows` keeps the first eight.
+    /// It is the number the hero and the Needs review card give.
+    public let riskCount: Int
 
     public static let empty = CompactConsoleSnapshot(
         commandCenter: .empty,
@@ -380,7 +385,8 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
         warmingRows: [CompactSidebarRowModel],
         duplicateCount: Int = 0,
         intelligenceBrief: RadarIntelligenceBrief = .empty,
-        hasSampled: Bool = true
+        hasSampled: Bool = true,
+        riskCount: Int? = nil
     ) {
         self.commandCenter = commandCenter
         self.engineStatus = engineStatus
@@ -390,6 +396,7 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
         self.duplicateCount = duplicateCount
         self.intelligenceBrief = intelligenceBrief
         self.hasSampled = hasSampled
+        self.riskCount = riskCount ?? topRiskRows.count
     }
 
     public static func build(
@@ -434,7 +441,8 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
             topRiskRows: Array(topRiskRows.prefix(8)),
             warmingRows: Array(warmingRows.prefix(6)),
             duplicateCount: duplicateCount,
-            intelligenceBrief: intelligenceBrief
+            intelligenceBrief: intelligenceBrief,
+            riskCount: topRiskRows.count
         )
     }
 
@@ -442,9 +450,7 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
     /// must always have a prepared panel, even when most panels are deferred.
     static func priorityRows(from rows: [CompactSidebarRowModel]) -> (risk: [CompactSidebarRowModel], warming: [CompactSidebarRowModel]) {
         let topRiskRows = rows
-            .filter { row in
-                row.level >= .hot || (row.forecastState >= .leaking && row.forecastConfidence >= 0.55)
-            }
+            .filter(\.needsReview)
             .sorted { lhs, rhs in
                 if lhs.level != rhs.level { return lhs.level > rhs.level }
                 if lhs.heatValue != rhs.heatValue { return lhs.heatValue > rhs.heatValue }
@@ -474,7 +480,8 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
             warmingRows: warmingRows,
             duplicateCount: duplicateCount,
             intelligenceBrief: intelligenceBrief,
-            hasSampled: hasSampled
+            hasSampled: hasSampled,
+            riskCount: riskCount
         )
     }
 

@@ -19,10 +19,12 @@ struct OverviewQueuesSection: View {
     }
 
     private var riskQueue: some View {
-        let rows = Array(session.compactSnapshot.topRiskRows.prefix(6))
+        let compact = session.compactSnapshot
+        let rows = Array(compact.topRiskRows.prefix(6))
         return CompactRadarSection(
             title: "Risk Queue",
-            subtitle: "\(session.compactSnapshot.topRiskRows.count) priority",
+            // The whole count, as the hero and the Needs review card give it.
+            subtitle: "\(compact.riskCount) priority",
             systemImage: "flame",
             tip: RadarTip(
                 title: "Risk Queue",
@@ -37,6 +39,13 @@ struct OverviewQueuesSection: View {
                     .frame(maxWidth: .infinity, minHeight: 130)
             } else {
                 queueRows(rows, showsStopButton: true)
+                if compact.riskCount > rows.count {
+                    Button("Show all \(compact.riskCount)") { session.browseFamilies(filter: .review) }
+                        .buttonStyle(.link)
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .help("Open every family that needs review in Processes")
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)

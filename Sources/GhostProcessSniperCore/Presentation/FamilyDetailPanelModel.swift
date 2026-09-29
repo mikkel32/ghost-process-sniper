@@ -29,7 +29,19 @@ public struct FamilyMetricCard: Identifiable, Equatable, Sendable {
 }
 
 public enum OverviewMetricDestination: Sendable, Equatable {
-    case families, attention, leaking, duplicates, memory
+    case families, review, leaking, duplicates, memory
+
+    /// The family list a card opens, so its count can be the list's length.
+    /// Nil for the cards that go elsewhere: Duplicates has its own page and
+    /// Memory sorts the list rather than filtering it.
+    public var filter: RadarFilter? {
+        switch self {
+        case .families: .all
+        case .review: .review
+        case .leaking: .leaking
+        case .duplicates, .memory: nil
+        }
+    }
 }
 
 public struct FamilyForensicsSummary: Equatable, Sendable {
