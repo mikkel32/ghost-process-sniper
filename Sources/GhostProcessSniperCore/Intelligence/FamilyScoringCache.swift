@@ -51,6 +51,8 @@ public struct FamilyScoringCache: Sendable {
         if context.systemPressure.level >= .warning {
             let share = context.pressureShare(for: family)
             hasher.combine(Int((share.contribution * 20).rounded()))
+            // A trickle's boost follows its rate, not only its share.
+            hasher.combine(Int((share.boostScale * 5).rounded()))
             hasher.combine(share.corroboratesPressure)
         }
         // The host-wide ETA moves nearly every tick under pressure; only this
