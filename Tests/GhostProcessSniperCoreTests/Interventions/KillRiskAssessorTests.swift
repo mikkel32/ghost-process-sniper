@@ -13,6 +13,18 @@ final class KillRiskAssessorTests: XCTestCase {
         XCTAssertTrue(risk.headline?.contains("\u{2318}Q") == true)
     }
 
+    /// A beta or versioned Xcode beside the release has the same unsaved
+    /// documents to protect.
+    func testEveryXcodeIsAnEditorButItsNeighboursAreNot() {
+        for bundle in ["Xcode-beta", "Xcode_26.1", "Xcode 26", "Xcode-26.1.0"] {
+            let risk = assess(root: process(13, "Xcode", path: "/Applications/\(bundle).app/Contents/MacOS/Xcode"))
+            XCTAssertEqual(risk.kind, .editor, bundle)
+            XCTAssertEqual(risk.graceSeconds, 10, bundle)
+            XCTAssertEqual(risk.highestSeverity, .danger, bundle)
+        }
+        XCTAssertEqual(assess(root: process(14, "Xcodes", path: "/Applications/Xcodes.app/Contents/MacOS/Xcodes")).kind, .app)
+    }
+
     func testRegularAppsKeepTheirNameAndQuitFirst() {
         let risk = assess(root: process(11, "iTerm2", path: "/Applications/iTerm.app/Contents/MacOS/iTerm2"))
         XCTAssertEqual(risk.kind, .app)

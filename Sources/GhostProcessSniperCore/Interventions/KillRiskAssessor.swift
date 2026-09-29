@@ -378,7 +378,7 @@ private struct Fingerprint {
     }
 
     var isEditorApp: Bool {
-        let editors = ["xcode", "visual studio code", "code", "cursor", "windsurf", "zed", "sublime text", "textedit",
+        let editors = ["visual studio code", "code", "cursor", "windsurf", "zed", "sublime text", "textedit",
                        "pages", "numbers", "keynote", "microsoft word", "microsoft excel", "microsoft powerpoint",
                        "bbedit", "nova", "coteditor", "intellij idea", "pycharm", "webstorm", "goland", "rider",
                        "clion", "phpstorm", "rubymine", "android studio", "fleet", "photoshop", "illustrator",
@@ -386,7 +386,8 @@ private struct Fingerprint {
                        "garageband", "blender", "davinci resolve", "obsidian", "scrivener", "ulysses", "notes",
                        "notion", "script editor", "libreoffice"]
         guard let app = appBundleName?.lowercased() else { return false }
-        return editors.contains { app == $0 || app.hasPrefix($0 + " ") }
+        // Xcode's beta and versioned copies go by other names.
+        return WorkloadCatalog.isXcodeBundle(app) || editors.contains { app == $0 || app.hasPrefix($0 + " ") }
     }
 
     // Workloads: the radar's catalog names them, so a VM the radar calls a
