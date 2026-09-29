@@ -89,6 +89,29 @@ public struct DuplicateProcessCluster: Identifiable, Equatable, Sendable {
         redundantFootprintBytes >= Self.minimumGiveBackBytes || !redundantPorts.isEmpty
     }
 
+    /// What a cluster must reach to be listed: the Duplicates page is for
+    /// small tools that add up, and a leftover pair of idle 2 MB helpers does
+    /// not. Any one of these is enough.
+    public static let listingMinimumFootprintBytes: UInt64 = 32 * 1_048_576
+    /// Of one core, summed over the cluster: idle noise stays below it.
+    public static let listingMinimumCPUPercent = 5.0
+    public static let listingMinimumCopies = 4
+
+    /// Whether the cluster adds up to something worth a row: real memory or
+    /// CPU in all, many copies, or a copy to stop that serves a port. Tiny
+    /// clusters are still detected, scored by `copiesMatter` and stoppable
+    /// from their families; they are only not listed.
+    public var addsUp: Bool {
+        totalPhysicalFootprintBytes >= Self.listingMinimumFootprintBytes
+            || totalCPUPercent >= Self.listingMinimumCPUPercent
+            || independentRootCount >= Self.listingMinimumCopies
+            || !redundantPorts.isEmpty
+    }
+
+    /// Shown on the Duplicates page and counted by its badge, the Overview
+    /// card and the menu bar: one predicate, so they cannot disagree.
+    public var isListed: Bool { !isInternalToSingleFamily && addsUp }
+
     public init(
         key: DuplicateClusterKey,
         displayName: String,
@@ -213,8 +236,9 @@ public struct DuplicateClusterSet: Equatable, Sendable {
         self.detectorMilliseconds = detectorMilliseconds
     }
 
+    /// The clusters the Duplicates page lists.
     public var visibleClusters: [DuplicateProcessCluster] {
-        clusters.filter { !$0.isInternalToSingleFamily }
+        clusters.filter(\.isListed)
     }
 }
 
@@ -240,14 +264,16 @@ public struct DuplicateClusterViewModel: Identifiable, Equatable, Sendable {
         rootCountText = "\(cluster.independentRootCount)"
         memoryText = RadarFormat.bytes(cluster.totalPhysicalFootprintBytes)
         cpuText = RadarFormat.percent(cluster.totalCPUPercent)
-        kindText = cluster.likelyKind.label
+        // "Heavy process" is the classifier's fallback for a binary it does not
+        // know; on a pair of 2 MB helpers it would read as an alarm.
+        kindText = cluster.likelyKind == .unknownHeavy ? "Repeated tool" : cluster.likelyKind.label
         reasonText = cluster.reason
         pidText = cluster.representativePIDs.map(String.init).joined(separator: ", ")
     }
 
     public static func rows(from clusters: [DuplicateProcessCluster]) -> [DuplicateClusterViewModel] {
         clusters
-            .filter { !$0.isInternalToSingleFamily }
+            .filter(\.isListed)
             .map(DuplicateClusterViewModel.init(cluster:))
             .sorted { lhs, rhs in
                 if lhs.cluster.memberCount != rhs.cluster.memberCount {

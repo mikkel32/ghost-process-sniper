@@ -2262,7 +2262,7 @@ private func radarSnapshotSurfacesDuplicateRowsAndStableRevision() throws {
         name: "tiny-agent",
         executablePath: "/Users/dev/.local/bin/tiny-agent",
         commandLine: "tiny-agent a",
-        memory: 12_000_000,
+        memory: 20_000_000, // the pair needs 32 MB in all to be a row
         cpu: 1
     )
     let smallerB = sample(
@@ -2272,7 +2272,7 @@ private func radarSnapshotSurfacesDuplicateRowsAndStableRevision() throws {
         name: "tiny-agent",
         executablePath: "/Users/dev/.local/bin/tiny-agent",
         commandLine: "tiny-agent b",
-        memory: 10_000_000,
+        memory: 18_000_000,
         cpu: 1
     )
     let detector = DuplicateClusterDetector(currentUserID: 501)

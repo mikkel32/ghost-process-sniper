@@ -313,7 +313,7 @@ public actor RadarRefreshWorker {
             storeHealth: currentStoreHealth,
             nextInterval: nextInterval,
             scannerHealth: batch.scannerHealth,
-            duplicateClusterCount: build.duplicateClusters.filter { !$0.isInternalToSingleFamily }.count,
+            duplicateClusterCount: build.duplicateClusters.filter(\.isListed).count,
             promotedDuplicateCandidateCount: build.promotedDuplicateCandidateCount,
             duplicateDetectorMilliseconds: build.duplicateDetectorMilliseconds,
             hardwareOffenderCount: build.hardwareOffenderCount,

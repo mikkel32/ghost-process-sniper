@@ -18,16 +18,23 @@ struct DuplicatesConsoleView: View {
         return rows.first { $0.id == selectedID }
     }
 
+    private var searchText: String {
+        session.state.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Clusters only the toolbar search keeps off the page. The sidebar badge
+    /// counts them, so an empty page has to say why.
+    private var hiddenBySearch: Int {
+        guard !searchText.isEmpty else { return 0 }
+        return max(0, session.monitor.consoleSnapshot.duplicateRows.count - rows.count)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
             if rows.isEmpty {
-                ContentUnavailableView(
-                    "No Duplicate Clusters",
-                    systemImage: "doc.on.doc",
-                    description: Text("Matching small tools appear here when two or more of your copies run at once.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                emptyState
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 HSplitView {
                     DuplicateClusterTable(
@@ -66,6 +73,26 @@ struct DuplicatesConsoleView: View {
         }
     }
 
+    @ViewBuilder
+    private var emptyState: some View {
+        if hiddenBySearch > 0 {
+            ContentUnavailableView {
+                Label("No Matching Clusters", systemImage: "magnifyingglass")
+            } description: {
+                Text("Nothing repeated matches \u{201c}\(searchText)\u{201d}.")
+            } actions: {
+                Button("Clear Search") { session.clearFamilyFilters() }
+                    .buttonStyle(.borderedProminent)
+            }
+        } else {
+            ContentUnavailableView(
+                "No Duplicate Clusters",
+                systemImage: "doc.on.doc",
+                description: Text("Copies of one tool appear here when together they use real memory or CPU, hold a port, or number four or more.")
+            )
+        }
+    }
+
     private var header: some View {
         RadarPageHeader(
             eyebrow: "Cluster Analysis",
@@ -76,8 +103,8 @@ struct DuplicatesConsoleView: View {
         ) {
             InfoTip(tip: RadarTip(
                 title: "Duplicates",
-                message: "Catches death by a thousand cuts: many small copies of the same tool (language servers, watchers, helpers) that each sit below the heavy-process thresholds but add up. Stop the extras keeps every copy that is in use and stops only idle copies whose app is gone, each through its own stop preview.",
-                shortcut: "\u{2318}3"
+                message: "Catches death by a thousand cuts: many small copies of the same tool (language servers, watchers, helpers) that each sit below the heavy-process thresholds but add up. A tiny idle pair is not listed. Stop the extras keeps every copy that is in use and stops only idle copies whose app is gone, each through its own stop preview.",
+                shortcut: "\u{2318}5"
             ))
         }
         .padding([.top, .horizontal], 20)
@@ -85,10 +112,14 @@ struct DuplicatesConsoleView: View {
     }
 
     private var headerSubtitle: String {
-        guard !rows.isEmpty else { return "No repeated tools right now." }
+        guard !rows.isEmpty else {
+            return hiddenBySearch > 0 ? "No clusters match the search" : "No repeated tools right now."
+        }
         let extras = rows.reduce(0) { $0 + (plans[$1.id]?.stopCount ?? 0) }
-        let clusters = "\(rows.count) \(rows.count == 1 ? "cluster" : "clusters")"
-        return extras > 0 ? "\(clusters) \u{00b7} \(extras) orphaned \(extras == 1 ? "copy" : "copies") can go" : clusters
+        var parts = ["\(rows.count) \(rows.count == 1 ? "cluster" : "clusters")"]
+        if extras > 0 { parts.append("\(extras) orphaned \(extras == 1 ? "copy" : "copies") can go") }
+        if hiddenBySearch > 0 { parts.append("\(hiddenBySearch) hidden by the search") }
+        return parts.joined(separator: " \u{00b7} ")
     }
 
     private func stabilizeSelection() {
