@@ -83,6 +83,7 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
     public let forecastConfidence: Double
     public let forecastPriority: Int
     public let hasCredibleLeak: Bool
+    public let isWatchedForSizeOnly: Bool
     public let etaText: String
     public let confidenceText: String
 
@@ -119,6 +120,7 @@ public struct FamilyTriageViewModel: Identifiable, Equatable, Sendable {
         forecastConfidence = family.forecast.confidence
         forecastPriority = family.forecastPresentationPriority
         hasCredibleLeak = family.hasCredibleLeak
+        isWatchedForSizeOnly = family.isWatchedForSizeOnly
         etaText = family.forecast.etaText
         confidenceText = "\(Int((family.forecast.confidence * 100).rounded()))%"
     }

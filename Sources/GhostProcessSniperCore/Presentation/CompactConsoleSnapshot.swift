@@ -96,6 +96,7 @@ public struct CompactSidebarRowModel: Identifiable, Equatable, Sendable {
     public let helpText: String
     public let memoryBytes: UInt64
     public let radarSector: LiveRadarSector
+    public let isWatchedForSizeOnly: Bool
 
     public init(item: FamilyTriageViewModel) {
         familyKey = item.familyKey
@@ -113,6 +114,7 @@ public struct CompactSidebarRowModel: Identifiable, Equatable, Sendable {
         forecastState = item.forecastState
         forecastConfidence = item.forecastConfidence
         memoryBytes = item.memoryBytes
+        isWatchedForSizeOnly = item.isWatchedForSizeOnly
         radarSector = LiveRadarSector.of(kind: item.kind, path: item.signature.canonicalPath)
         let gpuHelp = item.gpuPercent > 0.5 ? ", GPU \(item.gpuText)" : ""
         helpText = "\(item.assessment.reason). \(item.assessment.evidence)\n\(item.memoryText), \(item.cpuText)\(gpuHelp), \(item.leakText)"
@@ -256,31 +258,16 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         warmingRows: [CompactSidebarRowModel],
         detailPanels: [String: FamilyDetailPanelModel]
     ) -> RadarIntelligenceBrief {
-        // Confirmed trouble outranks a hotter spike that may still settle.
+        // Confirmed trouble outranks a hotter spike that may still settle. A
+        // family that is only watched for its size is not an early warning:
+        // with nothing else to announce, the verdict is calm.
         let confirmed = topRiskRows.first { detailPanels[$0.familyKey]?.heatConfirmed == true }
-        guard let row = confirmed ?? topRiskRows.first ?? warmingRows.first,
+        guard let row = confirmed ?? topRiskRows.first ?? warmingRows.first(where: { !$0.isWatchedForSizeOnly }),
               let panel = detailPanels[row.familyKey]
         else {
             // Built from a finished sample, so no families means nothing in
             // scope, not a scan still running (that is `.empty`).
-            let hasFamilies = summary.familyCount > 0
-            return RadarIntelligenceBrief(
-                eyebrow: "Live guidance",
-                title: hasFamilies ? "No credible problems right now" : "Nothing to watch right now",
-                detail: hasFamilies
-                    ? "Current readings and trends show no credible leak, runaway load, or forgotten process tree."
-                    : "The last scan found nothing in the radar's scope: no developer tools, and nothing heavy or duplicated.",
-                recommendation: hasFamilies
-                    ? "Keep working normally. The radar will surface a clear next step if behavior changes."
-                    : "Nothing to do. To watch more of your Mac, widen the scope to Heavy or All in Settings.",
-                confidenceText: "Continuous",
-                evidence: hasFamilies ? ["Current readings", "Trend shape", "Host pressure"] : [],
-                familyKey: nil,
-                familyName: nil,
-                actionTitle: "Review",
-                systemImage: "checkmark.seal",
-                level: .quiet
-            )
+            return calm(summary: summary, warmingRows: warmingRows)
         }
 
         let evidence = panel.heatEvidence.isEmpty
@@ -465,10 +452,14 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
                 return lhs.id < rhs.id
             }
         let riskIDs = Set(topRiskRows.map(\.id))
-        let warmingRows = rows.filter { row in
+        let warming = rows.filter { row in
             !riskIDs.contains(row.id) &&
                 (row.level == .watch || (row.forecastState >= .warming && row.forecastConfidence >= 0.42))
         }
+        // Families with something against them come first, each group in its
+        // own order: the guidance target and the first rows are early
+        // warnings, and it is always inside the prepared panels.
+        let warmingRows = warming.filter { !$0.isWatchedForSizeOnly } + warming.filter(\.isWatchedForSizeOnly)
         return (topRiskRows, warmingRows)
     }
 

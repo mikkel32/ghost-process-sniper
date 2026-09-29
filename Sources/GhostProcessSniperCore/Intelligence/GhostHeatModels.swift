@@ -364,8 +364,23 @@ extension ProcessFamily {
     /// reason to skip learning its normal: before, an app that was Hot only
     /// for its size was never learned, so it stayed Hot for good.
     var hasOnlySizeAgainstIt: Bool {
+        onlySizeIsAgainstIt(requiringHotMemory: true)
+    }
+
+    /// At Watch, and size is the whole case: the same test as
+    /// `hasOnlySizeAgainstIt`, but a memory component at Watch is enough
+    /// (a big app that never reached its Hot limit is still just big), and
+    /// any context vote (host memory pressure, a baseline anomaly) keeps it
+    /// an early warning. Such a family is worth listing, but not worth
+    /// announcing: growth, CPU, duplicates or a forgotten tree are what the
+    /// Overview calls an early warning.
+    var isWatchedForSizeOnly: Bool {
+        score.level == .watch && score.heat.corroborationCount == 0 && onlySizeIsAgainstIt(requiringHotMemory: false)
+    }
+
+    private func onlySizeIsAgainstIt(requiringHotMemory: Bool) -> Bool {
         guard score.heat.sustainedSignalCount == 0, forecast.state <= .warming, growthIsUsual(baseline: baseline),
-              Self.componentsShowOnlySize(score.components)
+              Self.componentsShowOnlySize(score.components, requiringHotMemory: requiringHotMemory)
         else { return false }
         guard let baseline, baseline.isMeasurementTrusted else { return true }
         let footprint = totalPhysicalFootprintBytes
@@ -389,9 +404,11 @@ extension ProcessFamily {
     /// incidents recorded for its size alone kept it Hot, which recorded more.
     /// Host-wide outliers ("largest CPU on this Mac") only lend visibility,
     /// so they count from Hot: an app in use at half a core flipped to Hot.
-    static func componentsShowOnlySize(_ components: [GhostScoreComponent]) -> Bool {
+    /// `requiringHotMemory: false` also accepts memory that is only at Watch.
+    static func componentsShowOnlySize(_ components: [GhostScoreComponent], requiringHotMemory: Bool = true) -> Bool {
         let raised = components.filter { $0.level >= .watch }
-        guard raised.contains(where: { $0.kind == .memory && $0.level >= .hot }) else { return false }
+        let memoryFloor: GhostLevel = requiringHotMemory ? .hot : .watch
+        guard raised.contains(where: { $0.kind == .memory && $0.level >= memoryFloor }) else { return false }
         return !raised.contains { component in
             let ownActivity = [.cpu, .gpu, .leak].contains(component.kind) && !component.slot.hasPrefix("hardware.")
             return ownActivity || ["duplicate", "forgotten"].contains(component.slot) ||

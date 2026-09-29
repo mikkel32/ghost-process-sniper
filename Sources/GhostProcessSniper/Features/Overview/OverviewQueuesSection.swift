@@ -46,11 +46,11 @@ struct OverviewQueuesSection: View {
         let rows = Array(session.compactSnapshot.warmingRows.prefix(5))
         return CompactRadarSection(
             title: "Warming Up",
-            subtitle: "predictive",
+            subtitle: "early signs first",
             systemImage: "thermometer.medium",
             tip: RadarTip(
                 title: "Warming Up",
-                message: "The predictive queue: families whose trends say trouble is coming before any hard threshold is crossed — rising leak velocity, threshold ETAs, or recurring offenders. Catch them here and you never see them go hot."
+                message: "Families with an early sign of trouble come first, before any hard threshold is crossed: rising memory, sustained CPU, duplicates or a forgotten process tree. Below them are families that are only big, at a size that is usual for them; they never headline the Overview."
             ),
             accent: .orange
         ) {
