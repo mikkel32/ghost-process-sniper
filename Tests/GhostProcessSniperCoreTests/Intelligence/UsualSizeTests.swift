@@ -11,6 +11,22 @@ final class UsualSizeTests: XCTestCase {
         Fixture.process(pid: 11_850, name: "Claude", path: app, command: app, megabytes: 2_560, cpu: cpu)
     }
 
+    /// The Mac is short of memory: about 1 GB free of 16.
+    private let squeezed = SystemMemoryPressure(level: .warning, usedFraction: 0.92, totalBytes: 16 << 30,
+                                                availableBytes: 1 << 30, compressedBytes: 4 << 30)
+    private let starved = SystemMemoryPressure(level: .critical, usedFraction: 0.97, totalBytes: 16 << 30,
+                                               availableBytes: 500 << 20, compressedBytes: 6 << 30)
+
+    private func baseline(_ signature: ProcessSignature, usual megabytes: Double, spread: Double = 150) -> FamilyBaseline {
+        let mib = Double(Fixture.mib)
+        return FamilyBaseline(
+            signature: signature, sampleCount: 2_000, meanMemoryBytes: megabytes * mib,
+            peakMemoryBytes: UInt64(megabytes * 1.2 * mib), meanCPUPercent: 3, peakCPUPercent: 40,
+            meanLeakVelocityMegabytesPerMinute: 0, incidentCount: 0,
+            firstSeenAt: Fixture.now.addingTimeInterval(-86_400), lastSeenAt: Fixture.now.addingTimeInterval(-5),
+            memoryVariance: (spread * mib) * (spread * mib), cpuVariance: 25, observedSeconds: 36_000, sessionCount: 4)
+    }
+
     private func score(_ process: ProcessMetrics, usual megabytes: Double?, pressure: SystemMemoryPressure = .unknown,
                        incidents: Int = 0, spread: Double = 150, cores: Int? = nil) -> ProcessFamily? {
         var window = TrendWindow()
@@ -18,18 +34,31 @@ final class UsualSizeTests: XCTestCase {
         guard let signature = probe.first?.signature else { return nil }
         var baselines: [String: FamilyBaseline] = [:]
         if let megabytes {
-            let mib = Double(Fixture.mib)
-            baselines[signature.id] = FamilyBaseline(
-                signature: signature, sampleCount: 2_000, meanMemoryBytes: megabytes * mib,
-                peakMemoryBytes: UInt64(megabytes * 1.2 * mib), meanCPUPercent: 3, peakCPUPercent: 40,
-                meanLeakVelocityMegabytesPerMinute: 0, incidentCount: 0,
-                firstSeenAt: Fixture.now.addingTimeInterval(-86_400), lastSeenAt: Fixture.now.addingTimeInterval(-5),
-                memoryVariance: (spread * mib) * (spread * mib), cpuVariance: 25, observedSeconds: 36_000, sessionCount: 4)
+            baselines[signature.id] = baseline(signature, usual: megabytes, spread: spread)
         }
         let context = RadarContext(baselines: baselines, recentIncidentCounts: incidents > 0 ? [signature.id: incidents] : [:],
                                    rules: [], systemPressure: pressure)
         var fresh = TrendWindow()
         return Fixture.scored([process], context: context, processorCount: cores, window: &fresh).first
+    }
+
+    /// The app at 2,560 MB against a usual 2,450, still climbing `rate` MB/min
+    /// in a steady line over the last 160 s: a refill, or the start of a leak.
+    private func climbing(rate: Double, pressure: SystemMemoryPressure) -> ProcessFamily? {
+        var window = TrendWindow()
+        var probeWindow = TrendWindow()
+        guard let signature = Fixture.scored([chat()], window: &probeWindow).first?.signature else { return nil }
+        let context = RadarContext(baselines: [signature.id: baseline(signature, usual: 2_450)], recentIncidentCounts: [:],
+                                   rules: [], systemPressure: pressure)
+        var last: ProcessFamily?
+        for step in 0..<17 {
+            let behind = Double(16 - step) * 10
+            let date = Fixture.now.addingTimeInterval(-behind)
+            let process = Fixture.process(pid: 11_850, name: "Claude", path: app, command: app,
+                                          megabytes: 2_560 - behind * rate / 60, cpu: 3, date: date)
+            last = Fixture.scored([process], context: context, window: &window, at: date).first
+        }
+        return last
     }
 
     func testABigAppAtItsUsualSizeIsWatchedNotHot() throws {
@@ -100,13 +129,73 @@ final class UsualSizeTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(score(chat(cpu: 900), usual: 2_450, cores: 10)).score.level, .hot)
     }
 
-    func testTwiceItsUsualSizeBusyOrUnderPressureStaysHot() throws {
+    func testTwiceItsUsualSizeOrBusyStaysHotWhateverTheMacIsShortOf() throws {
         XCTAssertEqual(try XCTUnwrap(score(chat(), usual: 1_200)).score.level, .hot)
         let busy = try XCTUnwrap(score(chat(cpu: 900), usual: 2_450))
         XCTAssertGreaterThanOrEqual(busy.score.level, .hot)
-        let squeezed = SystemMemoryPressure(level: .warning, usedFraction: 0.92, totalBytes: 16 << 30,
-                                            availableBytes: 1 << 30, compressedBytes: 4 << 30)
-        XCTAssertGreaterThanOrEqual(try XCTUnwrap(score(chat(), usual: 2_450, pressure: squeezed)).score.level, .hot)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(score(chat(), usual: 1_200, pressure: squeezed)).score.level, .hot,
+                                    "twice its usual size is its own doing, whatever the Mac is short of")
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(score(chat(cpu: 900), usual: 2_450, pressure: squeezed)).score.level, .hot)
+    }
+
+    /// The Mac being short of memory is a fact about the Mac: a big app at
+    /// its usual size is not the problem for being big, and is not an
+    /// incident, unlearnable or a reason to scan faster.
+    func testAUsualSizeIsWatchedWhileTheMacIsShortOfMemory() throws {
+        let family = try XCTUnwrap(score(chat(), usual: 2_450, pressure: squeezed))
+        XCTAssertEqual(family.score.level, .watch)
+        XCTAssertTrue(family.hasOnlySizeAgainstIt, "learned, and not recorded as an incident")
+        XCTAssertEqual(RadarScheduler.schedulingLevel([family]), .quiet, "and no reason to scan faster")
+        XCTAssertTrue(family.isWatchedForSizeOnly)
+
+        let evidence = family.score.heat.evidence
+        XCTAssertTrue(evidence.contains { $0.hasPrefix("Large, but normal for it") && $0.contains("the Mac is short of memory") }, "\(evidence)")
+        XCTAssertTrue(evidence.contains { $0.hasPrefix("Host memory pressure is warning") }, "the pressure is still said: \(evidence)")
+        XCTAssertTrue(family.score.components.contains { $0.slot == "pressure" }, "and still shown")
+
+        let calm = try XCTUnwrap(score(chat(), usual: 2_450))
+        XCTAssertFalse(calm.score.heat.evidence.contains { $0.contains("short of memory") }, "no note when the Mac is fine")
+    }
+
+    /// Only at or near its usual size: a family 1.16x its usual is within its
+    /// spread, and Watch on a Mac with memory to spare, but under Warning the
+    /// extra is its own and it stays Hot, an incident and worth scanning for.
+    func testUnderWarningOnlyAtOrNearItsUsualSizeIsWatched() throws {
+        let nearUsual = try XCTUnwrap(score(chat(), usual: 2_330, pressure: squeezed, spread: 600))
+        XCTAssertEqual(nearUsual.score.level, .watch, "1.10x its usual")
+
+        let bigger = try XCTUnwrap(score(chat(), usual: 2_200, pressure: squeezed, spread: 600))
+        XCTAssertGreaterThanOrEqual(bigger.score.level, .hot, "1.16x its usual")
+        XCTAssertFalse(bigger.hasOnlySizeAgainstIt, "the Mac's memory still counts against it")
+        XCTAssertFalse(bigger.score.heat.evidence.contains { $0.hasPrefix("Large, but normal for it") }, "\(bigger.score.heat.evidence)")
+        XCTAssertGreaterThanOrEqual(RadarScheduler.schedulingLevel([bigger]), .hot)
+        XCTAssertEqual(try XCTUnwrap(score(chat(), usual: 2_200, spread: 600)).score.level, .watch, "Watch when the Mac has memory to spare")
+
+        let smaller = try XCTUnwrap(score(chat(), usual: 3_100, pressure: squeezed, spread: 600))
+        XCTAssertEqual(smaller.score.level, .watch, "smaller than usual, as Claude at 1.7 GB against 2.5 GB")
+    }
+
+    /// Critical pressure keeps a big family Hot, an incident and worth
+    /// scanning for, however usual its size.
+    func testCriticalPressureStillKeepsAUsualSizeHot() throws {
+        let family = try XCTUnwrap(score(chat(), usual: 2_450, pressure: starved))
+        XCTAssertGreaterThanOrEqual(family.score.level, .hot)
+        XCTAssertFalse(family.hasOnlySizeAgainstIt, "the critical pressure counts against it, so it is an incident")
+        XCTAssertGreaterThanOrEqual(RadarScheduler.schedulingLevel([family]), .hot)
+        XCTAssertFalse(family.score.heat.evidence.contains { $0.hasPrefix("Large, but normal for it") }, "\(family.score.heat.evidence)")
+    }
+
+    /// A slow refill is not the family driving the pressure; real growth is,
+    /// and stays Hot.
+    func testUnderWarningASlowRefillIsWatchedAndRealGrowthIsNot() throws {
+        let refill = try XCTUnwrap(climbing(rate: 12, pressure: squeezed))
+        XCTAssertGreaterThan(refill.trend.credibleMemoryVelocity, 5, "a trusted climb")
+        XCTAssertEqual(refill.score.level, .watch)
+        XCTAssertEqual(refill.score.heat.corroborationCount, 0, "a trickle does not vote")
+
+        let leak = try XCTUnwrap(climbing(rate: 60, pressure: squeezed))
+        XCTAssertGreaterThanOrEqual(leak.score.level, .hot)
+        XCTAssertFalse(leak.hasOnlySizeAgainstIt)
     }
 
     /// Hot for its size alone, with heat at the top of the scale.

@@ -10,6 +10,8 @@ final class UsualSizeReasonTests: XCTestCase {
     private let app = "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"
     private let squeezed = SystemMemoryPressure(level: .warning, usedFraction: 0.92, totalBytes: 16 << 30,
                                                 availableBytes: 1 << 30, compressedBytes: 4 << 30)
+    private let starved = SystemMemoryPressure(level: .critical, usedFraction: 0.97, totalBytes: 16 << 30,
+                                               availableBytes: 500 << 20, compressedBytes: 6 << 30)
 
     private func chat(megabytes: Double) -> ProcessMetrics {
         Fixture.process(pid: 11_850, name: "ChatGPT", path: app, command: app, megabytes: megabytes, cpu: 3)
@@ -54,9 +56,9 @@ final class UsualSizeReasonTests: XCTestCase {
     }
 
     /// Claude at 1.7 GB against a usual 2.4 GB is Review because the Mac is
-    /// short of memory, and the page must not say it is big for itself.
+    /// critically short of memory, and the page must not say it is big for itself.
     func testBelowItsUsualSizeItIsThePressureNotTheSize() throws {
-        let family = try score(chat(megabytes: 1_700), usual: 2_450, pressure: squeezed)
+        let family = try score(chat(megabytes: 1_700), usual: 2_450, pressure: starved)
         XCTAssertGreaterThanOrEqual(family.score.level, .hot)
 
         XCTAssertEqual(ProcessAssessment(family: family).reason, "Memory is tight on this Mac")
@@ -91,10 +93,25 @@ final class UsualSizeReasonTests: XCTestCase {
         XCTAssertEqual(assessment.status, "Observe")
     }
 
-    /// Never a reassurance next to a Hot badge: with the Mac short of memory
-    /// the family is not held at Watch, and does not say it is normal.
-    func testANormalSizeIsNotClaimedForAHotFamily() throws {
+    /// A Mac that is short of memory does not make a big app's usual size a
+    /// problem: it is Watch with the reason it was before, and Claude at 1.7
+    /// GB against a usual 2.4 GB is not blamed for the Mac's memory.
+    func testItStaysNormalForItWhileTheMacIsShortOfMemory() throws {
         let family = try score(chat(megabytes: 2_560), usual: 2_450, spread: 150, pressure: squeezed)
+        XCTAssertEqual(family.score.level, .watch)
+        let assessment = ProcessAssessment(family: family)
+        XCTAssertEqual(assessment.reason, "Large, but normal for it")
+        XCTAssertEqual(assessment.status, "Observe")
+
+        let smaller = try score(chat(megabytes: 1_700), usual: 2_450, pressure: squeezed)
+        XCTAssertEqual(smaller.score.level, .watch)
+        XCTAssertEqual(ProcessAssessment(family: smaller).reason, "Large, but normal for it")
+    }
+
+    /// Never a reassurance next to a Hot badge: with the Mac critically short
+    /// of memory the family is not held at Watch, and does not say it is normal.
+    func testANormalSizeIsNotClaimedForAHotFamily() throws {
+        let family = try score(chat(megabytes: 2_560), usual: 2_450, spread: 150, pressure: starved)
         XCTAssertGreaterThanOrEqual(family.score.level, .hot)
         XCTAssertNotEqual(ProcessAssessment(family: family).reason, "Large, but normal for it")
 

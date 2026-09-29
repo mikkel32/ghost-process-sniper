@@ -343,7 +343,11 @@ public enum GhostHeatModel {
         if level > .watch, let usual = usualSize(family: family, baseline: baseline, pressure: pressure, forecast: forecast,
                                                  sustained: sustained, contextVotes: contextVotes) {
             level = .watch
-            evidence.append("\(GhostHeat.usualSizeEvidence): about \(RadarFormat.bytes(UInt64(usual))) is its usual size")
+            var line = "\(GhostHeat.usualSizeEvidence): about \(RadarFormat.bytes(UInt64(usual))) is its usual size"
+            // Held at Watch on a Mac that is short of memory: say why it is
+            // not the Hot the pressure line above might suggest.
+            if pressure.isKnown, pressure.level >= .warning { line += " (the Mac is short of memory, so it stays on watch)" }
+            evidence.append(line)
         }
 
         return GhostHeat(
@@ -380,7 +384,8 @@ extension ProcessFamily {
 
     private func onlySizeIsAgainstIt(requiringHotMemory: Bool) -> Bool {
         guard score.heat.sustainedSignalCount == 0, forecast.state <= .warming, growthIsUsual(baseline: baseline),
-              Self.componentsShowOnlySize(score.components, requiringHotMemory: requiringHotMemory)
+              Self.componentsShowOnlySize(score.components, requiringHotMemory: requiringHotMemory,
+                                          hostPressureIsContext: isNearUsualSize)
         else { return false }
         guard let baseline, baseline.isMeasurementTrusted else { return true }
         let footprint = totalPhysicalFootprintBytes
@@ -397,6 +402,17 @@ extension ProcessFamily {
         return baseline?.staysWithinUsualSize(footprint: totalPhysicalFootprintBytes, growthMegabytesPerMinute: growth) ?? false
     }
 
+    /// At or near the size a trusted baseline calls usual: within its learned
+    /// spread and at most a tenth over its mean. The one case where a Mac that
+    /// is short of memory (Warning) says nothing against the family: a bigger
+    /// one has grown by its own doing, and the pressure keeps counting.
+    private var isNearUsualSize: Bool {
+        guard let baseline, baseline.isMeasurementTrusted else { return false }
+        let footprint = totalPhysicalFootprintBytes
+        return baseline.memoryZScore(for: footprint) < 2 &&
+            baseline.memoryMultiple(for: footprint) <= GhostHeatModel.usualSizeUnderPressureMultiple
+    }
+
     /// Memory at or over its limit, and nothing else raised that is a
     /// problem in itself: helpers, a long session or scope relevance come
     /// with big apps; CPU, GPU, growth, duplicates or being forgotten do not.
@@ -405,8 +421,14 @@ extension ProcessFamily {
     /// Host-wide outliers ("largest CPU on this Mac") only lend visibility,
     /// so they count from Hot: an app in use at half a core flipped to Hot.
     /// `requiringHotMemory: false` also accepts memory that is only at Watch.
-    static func componentsShowOnlySize(_ components: [GhostScoreComponent], requiringHotMemory: Bool = true) -> Bool {
-        let raised = components.filter { $0.level >= .watch }
+    /// `hostPressureIsContext` leaves out host memory pressure below
+    /// Critical: it is a fact about the Mac, not about the family. Critical
+    /// always counts, so incidents, learning and scan pace do not relax then.
+    static func componentsShowOnlySize(_ components: [GhostScoreComponent], requiringHotMemory: Bool = true,
+                                       hostPressureIsContext: Bool = false) -> Bool {
+        let raised = components.filter { component in
+            component.level >= .watch && !(hostPressureIsContext && component.slot == "pressure" && component.level < .critical)
+        }
         let memoryFloor: GhostLevel = requiringHotMemory ? .hot : .watch
         guard raised.contains(where: { $0.kind == .memory && $0.level >= memoryFloor }) else { return false }
         return !raised.contains { component in
@@ -418,19 +440,31 @@ extension ProcessFamily {
 }
 
 extension GhostHeatModel {
+    /// Under Warning pressure a family is held at Watch only at or near its
+    /// usual size (at most this multiple of it), not merely under 1.3x it.
+    static let usualSizeUnderPressureMultiple = 1.1
+
     /// A family that is big and nothing else is worth watching, not a
     /// problem, once its learned normal says this size is usual for it: a
     /// chat app at 2.5 GB on a 16 GB Mac, a container VM at 8 GB. The
     /// family's usual size, when that is so; nil when anything else is going
-    /// on (CPU, GPU, growth, a slow leak, pressure on the Mac, other votes).
+    /// on (CPU, GPU, growth, a slow leak, critical pressure on the Mac, other
+    /// votes). A Mac at Warning is a fact about the Mac, not about the
+    /// family, so it does not switch this off, but it leaves no slack: only
+    /// at or near its usual size, and its pressure evidence still says so.
     static func usualSize(family: ProcessFamily, baseline: FamilyBaseline?, pressure: SystemMemoryPressure,
                           forecast: RiskForecast, sustained: Int, contextVotes: Int) -> Double? {
         guard let baseline, baseline.isMeasurementTrusted, sustained == 0, contextVotes == 0,
-              forecast.state <= .warming, !(pressure.isKnown && pressure.level >= .warning),
-              family.growthIsUsual(baseline: baseline), ProcessFamily.componentsShowOnlySize(family.score.components)
+              forecast.state <= .warming, !(pressure.isKnown && pressure.level >= .critical),
+              family.growthIsUsual(baseline: baseline)
         else { return nil }
         let footprint = family.totalPhysicalFootprintBytes
-        guard baseline.memoryZScore(for: footprint) < 2, baseline.memoryMultiple(for: footprint) < 1.3 else { return nil }
+        let multiple = baseline.memoryMultiple(for: footprint)
+        guard baseline.memoryZScore(for: footprint) < 2, multiple < 1.3 else { return nil }
+        let squeezed = pressure.isKnown && pressure.level >= .warning
+        guard !squeezed || multiple <= usualSizeUnderPressureMultiple,
+              ProcessFamily.componentsShowOnlySize(family.score.components, hostPressureIsContext: squeezed)
+        else { return nil }
         return baseline.meanMemoryBytes
     }
 }
