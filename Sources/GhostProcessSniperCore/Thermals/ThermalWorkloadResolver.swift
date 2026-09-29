@@ -149,26 +149,46 @@ struct ThermalWorkloadResolver {
             return ThermalWorkloadAssignment(groupKey: "known:\(source.rawValue)", displayName: source.displayName,
                                              applicationPath: nil, hostAppName: nil, kind: .knownSource(source))
         }
-        if let app = Self.applicationPath(process.executablePath) { return appAssignment(app) }
+        // With Xcode selected, the xcrun shims for swift, clang, git, make and python3 run
+        // programs from inside Xcode.app. Those are the app's own only when Xcode started
+        // them; when a shell did, the shell's job owns the work. Everything else in a
+        // bundle is the app's, and the path alone says so.
+        let bundle = Self.applicationPath(process.executablePath)
+        if let bundle, !Self.isDeveloperTool(process.executablePath, in: bundle) { return appAssignment(bundle) }
         var visited: Set<Int32> = [process.pid]
         var hops = 0
         var root = process
         while let parent = parent(of: root, visited: &visited, hops: &hops) {
-            // make and ninja run each recipe through `sh -c`: the build, not the shell, is the job.
-            if ShellRole.isRecipeShell(parent, launcher: processesByPID[parent.parentPID]) {
+            if isRecipeShell(parent) {
                 root = parent
                 continue
             }
             if Self.isShell(parent.name) {
-                let host = terminalHost(above: parent, visited: &visited, hops: &hops)
-                return Self.job(root: root, host: host, kind: .job)
+                let enclosing = enclosingApp(above: parent, visited: &visited, hops: &hops)
+                // An Xcode run-script phase goes through a shell of its own, and stays Xcode's.
+                if let bundle, enclosing == bundle { return appAssignment(bundle) }
+                return Self.job(root: root, host: enclosing.flatMap(Self.terminalName), kind: .job)
             }
             if let app = Self.applicationPath(parent.executablePath) {
+                // Xcode's tools (xcodebuild, swift-build, make) start more of them, so the climb
+                // goes on through a tool to the shell that ran the first.
+                if Self.isDeveloperTool(parent.executablePath, in: app) {
+                    root = parent
+                    continue
+                }
+                if let bundle, app == bundle {
+                    // Xcode's own main process owns what it runs. Its build service is between a
+                    // terminal's xcodebuild and the compilers, so the climb goes on through it.
+                    if parent.executablePath.hasPrefix(bundle + "/Contents/MacOS/") { return appAssignment(bundle) }
+                    root = parent
+                    continue
+                }
                 if let terminal = Self.terminalName(app) { return Self.job(root: root, host: terminal, kind: .job) }
                 return appAssignment(app)
             }
             root = parent
         }
+        if let bundle { return appAssignment(bundle) }
         // An XPC service or helper launchd started for an app, such as a
         // Safari tab's WebContent process, belongs to that app.
         if let app = responsibleApp(for: root) ?? responsibleApp(for: process) {
@@ -192,12 +212,25 @@ struct ThermalWorkloadResolver {
         return Self.applicationPath(owner.executablePath)
     }
 
-    /// Names the terminal a shell runs in; an editor's integrated terminal is not a host.
-    private mutating func terminalHost(above shell: ProcessMetrics, visited: inout Set<Int32>,
+    /// make and ninja run each recipe through `sh -c`: the build, not the shell, is the job.
+    /// ShellRole reads a launcher inside an app bundle as the app opening a shell, but with
+    /// Xcode selected make and ninja are themselves Xcode's command-line tools.
+    private func isRecipeShell(_ shell: ProcessMetrics) -> Bool {
+        let launcher = processesByPID[shell.parentPID]
+        if ShellRole.isRecipeShell(shell, launcher: launcher) { return true }
+        guard let launcher, ShellRole.isShell(shell.name), ShellRole.runsCommand(shell), shell.parentPID > 1,
+              let app = Self.applicationPath(launcher.executablePath),
+              Self.isDeveloperTool(launcher.executablePath, in: app) else { return false }
+        return !ShellRole.isShell(launcher.name) && !ShellRole.isSessionHost(launcher.name)
+    }
+
+    /// The app a shell runs in, when there is one; an editor's integrated terminal is an app
+    /// but not a terminal host.
+    private mutating func enclosingApp(above shell: ProcessMetrics, visited: inout Set<Int32>,
                                        hops: inout Int) -> String? {
         var current = shell
         while let parent = parent(of: current, visited: &visited, hops: &hops) {
-            if let app = Self.applicationPath(parent.executablePath) { return Self.terminalName(app) }
+            if let app = Self.applicationPath(parent.executablePath) { return app }
             current = parent
         }
         return nil
@@ -265,6 +298,13 @@ struct ThermalWorkloadResolver {
     /// the user would read as apps. Apps, jobs someone started and known sources are never services.
     static func isMacOSService(executablePath: String, kind: ThermalWorkloadKind) -> Bool {
         kind == .process && isOperatingSystemPath(executablePath)
+    }
+
+    /// A command-line tool shipped in an Xcode bundle, not one of the apps beside them
+    /// (Simulator, Instruments) or Xcode's own services.
+    private static func isDeveloperTool(_ executablePath: String, in bundle: String) -> Bool {
+        executablePath.hasPrefix(bundle + "/Contents/Developer/")
+            && !executablePath.hasPrefix(bundle + "/Contents/Developer/Applications/")
     }
 
     /// An XPC service or a program from macOS's own folders, which launchd starts for an app

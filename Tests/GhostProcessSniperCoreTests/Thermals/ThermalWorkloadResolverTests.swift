@@ -4,6 +4,8 @@ import XCTest
 
 final class ThermalWorkloadResolverTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 2_000_200_000)
+    private let xcode = "/Applications/Xcode.app"
+    private var toolchain: String { "\(xcode)/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin" }
 
     func testBuildChildrenCollapseIntoOneJobNamedAfterItsRoot() throws {
         let processes = terminalShell() + [process(603, parent: 602, name: "make", path: "/usr/bin/make", cpu: 1)] +
@@ -303,6 +305,103 @@ final class ThermalWorkloadResolverTests: XCTestCase {
         let assignment = resolver.assignment(for: orphan)
         XCTAssertEqual(assignment.kind, .process)
         XCTAssertEqual(assignment.groupKey, "job:631:2000199000.0")
+    }
+
+    // MARK: - Xcode's command-line tools
+
+    /// With Xcode selected, the xcrun shims for swift, clang, git, make and python3 run
+    /// programs from inside Xcode.app. Started from a shell they are that shell's job.
+    func testToolchainBinariesInsideXcodeStartedFromAShellAreTheShellsJob() throws {
+        let build = process(603, parent: 602, name: "swift-build", path: "\(toolchain)/swift-build", cpu: 40)
+        let frontends = (0..<4).map {
+            process(Int32(610 + $0), parent: 603, name: "swift-frontend", path: "\(toolchain)/swift-frontend", cpu: 98)
+        }
+        let result = projection(terminalShell() + [build] + frontends)
+        let job = try XCTUnwrap(result.contributors.first)
+        XCTAssertEqual(result.contributors.count, 1)
+        XCTAssertEqual(job.displayName, "swift-build")
+        XCTAssertEqual(job.kind, .job)
+        XCTAssertEqual(job.hostAppName, "Terminal")
+        XCTAssertNil(job.applicationPath)
+        XCTAssertEqual(job.processCount, 5)
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(90), activity: result, at: now)
+        XCTAssertEqual(ThermalAppInsight.evaluate(activity: result, diagnosis: diagnosis, at: now).title,
+                       "Start with swift-build")
+    }
+
+    /// The python3 shim runs a Python.app nested in Xcode's frameworks, and make
+    /// runs each recipe through a `sh -c` that is not inside any app.
+    func testPythonAndMakeThroughTheXcodeShimsAreJobsToo() throws {
+        let python = "\(xcode)/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python"
+        var processes = terminalShell() + [
+            process(620, parent: 602, name: "Python", path: python, cpu: 90, command: "python3 train.py"),
+            process(603, parent: 602, name: "make", path: "\(xcode)/Contents/Developer/usr/bin/make", cpu: 1)
+        ]
+        for index in 0..<3 {
+            let shell = Int32(630 + index * 2)
+            let command = "clang -c file\(index).c"
+            processes.append(process(shell, parent: 603, name: "sh", path: "/bin/sh", cpu: 0, command: "/bin/sh -c \(command)"))
+            processes.append(process(shell + 1, parent: shell, name: "clang", path: "\(toolchain)/clang", cpu: 95, command: command))
+        }
+        let result = projection(processes)
+        XCTAssertEqual(result.contributors.count, 2)
+        let make = try XCTUnwrap(result.contributors.first { $0.displayName == "make" })
+        XCTAssertEqual(make.kind, .job)
+        XCTAssertEqual(make.processCount, 7)
+        XCTAssertEqual(make.hostAppName, "Terminal")
+        let script = try XCTUnwrap(result.contributors.first { $0.displayName == "Python" })
+        XCTAssertEqual(script.kind, .job)
+        XCTAssertEqual(script.hostAppName, "Terminal")
+    }
+
+    /// xcodebuild runs its work through XCBBuildService, which lives in Xcode.app too;
+    /// only Xcode's own main process owns a build as the app.
+    func testAShellsXcodebuildAndItsFrontendsAreOneJob() throws {
+        let service = "\(xcode)/Contents/SharedFrameworks/XCBuild.framework/PlugIns/XCBBuildService.bundle/Contents/MacOS/XCBBuildService"
+        let result = projection(terminalShell() + [
+            process(603, parent: 602, name: "xcodebuild", path: "\(xcode)/Contents/Developer/usr/bin/xcodebuild", cpu: 5),
+            process(604, parent: 603, name: "XCBBuildService", path: service, cpu: 5),
+            process(610, parent: 604, name: "swift-frontend", path: "\(toolchain)/swift-frontend", cpu: 98),
+            process(611, parent: 604, name: "swift-frontend", path: "\(toolchain)/swift-frontend", cpu: 98)
+        ])
+        let job = try XCTUnwrap(result.contributors.first { $0.displayName == "xcodebuild" })
+        XCTAssertEqual(job.kind, .job)
+        XCTAssertEqual(job.hostAppName, "Terminal")
+        XCTAssertEqual(job.processCount, 3, "xcodebuild and the frontends it ran through its build service")
+    }
+
+    /// An editor's language server or git call is the editor's, wherever the tool lives.
+    func testToolsAnEditorStartsAreTheEditorsNotXcodes() {
+        let git = process(510, parent: 501, name: "git", path: "\(xcode)/Contents/Developer/usr/bin/git", cpu: 120)
+        let result = projection(editor() + [git])
+        XCTAssertEqual(result.contributors.map(\.displayName), ["Visual Studio Code"])
+        XCTAssertEqual(result.contributors.first?.kind, .app)
+        XCTAssertEqual(result.contributors.first?.processCount, 3)
+    }
+
+    /// Guards: what Xcode itself runs, and apps started from a shell, stay apps.
+    func testXcodesOwnWorkAndAppsStartedFromAShellStayApps() {
+        let service = "\(xcode)/Contents/SharedFrameworks/XCBuild.framework/PlugIns/XCBBuildService.bundle/Contents/MacOS/XCBBuildService"
+        let xcodeWork = [
+            process(700, parent: 1, name: "Xcode", path: "\(xcode)/Contents/MacOS/Xcode", cpu: 10),
+            process(701, parent: 700, name: "XCBBuildService", path: service, cpu: 5),
+            process(702, parent: 701, name: "swift-frontend", path: "\(toolchain)/swift-frontend", cpu: 98),
+            // A run-script build phase goes through a shell too.
+            process(703, parent: 701, name: "sh", path: "/bin/sh", cpu: 0, command: "/bin/sh -c run-script.sh"),
+            process(704, parent: 703, name: "clang", path: "\(toolchain)/clang", cpu: 98),
+            // launchd starts SourceKit's service and the debugger.
+            process(705, parent: 1, name: "SourceKitService",
+                    path: "\(toolchain)/../lib/sourcekitd/SourceKitService.xpc/Contents/MacOS/SourceKitService", cpu: 30),
+            // A GUI tool inside Xcode, started from a shell, is not a command-line job.
+            process(706, parent: 602, name: "Simulator", path: "\(xcode)/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator", cpu: 30),
+            process(707, parent: 602, name: "Foo", path: "/Applications/Foo.app/Contents/MacOS/Foo", cpu: 30),
+            process(708, parent: 707, name: "Foo Helper", path: "/Applications/Foo.app/Contents/Frameworks/Foo Helper.app/Contents/MacOS/Foo Helper", cpu: 30)
+        ]
+        let result = projection(terminalShell() + xcodeWork)
+        XCTAssertTrue(result.contributors.allSatisfy { $0.kind == .app }, "\(result.contributors.map(\.displayName))")
+        XCTAssertEqual(Set(result.contributors.map(\.displayName)), ["Xcode", "Foo"])
+        XCTAssertEqual(result.contributors.first { $0.displayName == "Foo" }?.processCount, 2)
+        XCTAssertEqual(result.contributors.first { $0.displayName == "Xcode" }?.processCount, 7)
     }
 
     func testProjectionDoesNotDependOnInputOrder() {
