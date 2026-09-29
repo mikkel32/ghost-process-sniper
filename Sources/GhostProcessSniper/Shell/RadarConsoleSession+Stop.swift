@@ -38,7 +38,7 @@ extension RadarConsoleSession {
     private func killPlan(for family: ProcessFamily, member: ProcessIdentity?) async -> KillPlan? {
         let plan = await monitor.killPlan(for: family)
         guard let member else { return plan }
-        guard family.ownedIdentities.contains(member),
+        guard family.canStopIndividually(member),
               let process = family.members.first(where: { $0.identity == member }),
               !process.isSystemProcess else {
             return nil

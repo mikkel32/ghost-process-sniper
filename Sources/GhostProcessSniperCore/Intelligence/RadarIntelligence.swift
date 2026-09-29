@@ -353,7 +353,7 @@ public struct RadarIntelligence: Sendable {
     /// the tree, through the single-process stop path.
     private func culpritSuggestion(for family: ProcessFamily, now: Date) -> [RadarActionSuggestion] {
         guard let culprit = family.culprit, culprit.identity != family.root.identity, family.hasCredibleLeak,
-              family.ownedIdentities.contains(culprit.identity)
+              family.canStopIndividually(culprit.identity)
         else {
             return []
         }

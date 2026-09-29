@@ -63,16 +63,21 @@ public struct ProcessFamilyBuilder: Sendable {
         self.hardwareDetector = HardwareOffenderDetector(currentUserID: currentUserID, physicalMemoryBytes: physicalMemoryBytes)
     }
 
+    /// - Parameter responsible: the app macOS holds responsible for each
+    ///   launchd-started helper (`ResponsibleProcessLookup`); such helpers
+    ///   join that app's family. Empty draws families from parent links alone.
     public func buildFamilies(
         from processes: [ProcessMetrics],
         settings: ThresholdSettings,
         trendWindow: inout TrendWindow,
+        responsible: [ProcessIdentity: Int32] = [:],
         now: Date
     ) -> [ProcessFamily] {
         buildFamiliesWithDuplicates(
             from: processes,
             settings: settings,
             trendWindow: &trendWindow,
+            responsible: responsible,
             now: now
         ).families
     }
@@ -82,11 +87,13 @@ public struct ProcessFamilyBuilder: Sendable {
         from processes: [ProcessMetrics],
         settings: ThresholdSettings,
         trendWindow: inout TrendWindow,
+        responsible: [ProcessIdentity: Int32] = [:],
         now: Date
     ) -> ProcessFamilyBuildResult {
         var window = trendWindow
         let result = defaultHistory.withHistory { history in
-            buildFamiliesWithDuplicates(from: processes, settings: settings, trendWindow: &window, history: &history, now: now)
+            buildFamiliesWithDuplicates(from: processes, settings: settings, trendWindow: &window, history: &history,
+                                        responsible: responsible, now: now)
         }
         trendWindow = window
         return result
@@ -97,9 +104,11 @@ public struct ProcessFamilyBuilder: Sendable {
         settings: ThresholdSettings,
         trendWindow: inout TrendWindow,
         history: inout RadarHistory,
+        responsible: [ProcessIdentity: Int32] = [:],
         now: Date
     ) -> ProcessFamilyBuildResult {
-        let tree = ProcessTree(processes: processes, facts: staticFacts.facts(for: processes, make: makeStaticFacts))
+        let tree = ProcessTree(processes: processes, facts: staticFacts.facts(for: processes, make: makeStaticFacts),
+                               responsible: responsible)
         history.activity.recordProcesses(processes, now: now)
 
         let duplicateSet: DuplicateClusterSet
@@ -353,8 +362,16 @@ public struct ProcessFamilyBuilder: Sendable {
             now: now
         )
 
+        // A stop of the root reaches its process tree. Helpers linked in by
+        // the app they work for are outside it and leave when the app quits,
+        // so the family's plan must not name them: the preflight would lock
+        // each as outside the family's tree. Each stays stoppable alone.
+        let linked = tree.linkedMembers(of: members, root: root)
         let owned = killOrder(for: members, root: root)
-            .filter { $0.userID == currentUserID }
+            .filter { $0.userID == currentUserID && !linked.contains($0.identity) }
+            .map(\.identity)
+        let linkedIdentities = members
+            .filter { $0.userID == currentUserID && linked.contains($0.identity) }
             .map(\.identity)
         let protected = members
             .filter { $0.userID != currentUserID }
@@ -374,6 +391,7 @@ public struct ProcessFamilyBuilder: Sendable {
             score: score,
             ownedIdentities: owned,
             protectedPIDs: protected,
+            linkedIdentities: linkedIdentities,
             signature: signature,
             forensics: forensics,
             classification: familyClassification,

@@ -132,7 +132,7 @@ public actor RadarRefreshWorker {
     private var thermalHistory = ThermalActivityHistory()
     private let sentinel: SentinelEngine?
     private var energy: EnergyMonitor
-    private var responsibility = ResponsibleProcessLookup()
+    private var responsibility: ResponsibleProcessLookup
 
     public init(
         sampler: ProcessSampling = NativeProcessSampler(),
@@ -141,8 +141,11 @@ public actor RadarRefreshWorker {
         intelligence: RadarIntelligence = RadarIntelligence(),
         sentinel: SentinelEngine? = nil,
         battery: (any BatterySource)? = IOKitBatterySource(),
-        sleepAssertions: (any SleepAssertionSource)? = IOKitSleepAssertionSource()
+        sleepAssertions: (any SleepAssertionSource)? = IOKitSleepAssertionSource(),
+        responsibleQuery: (@Sendable (Int32) -> Int32?)? = nil
     ) {
+        // Tests stand in for the libSystem call, which answers for real pids only.
+        self.responsibility = ResponsibleProcessLookup(query: responsibleQuery ?? ResponsibleProcessLookup.system)
         self.sampler = sampler
         self.store = store
         self.sentinel = sentinel
@@ -199,9 +202,13 @@ public actor RadarRefreshWorker {
         effectiveSettings: ThresholdSettings,
         systemPressure: SystemMemoryPressure
     ) async -> RefreshOutcome {
+        // Asked once per tick: the families place launchd-started helpers
+        // with it, and the energy attribution below reuses the same answers.
+        let responsible = responsibility.hints(for: batch.processes, now: request.now)
         let build = pipeline.buildCandidates(
             processes: batch.processes,
             settings: effectiveSettings,
+            responsible: responsible,
             now: request.now
         )
         let storeStart = Date()
@@ -337,8 +344,7 @@ public actor RadarRefreshWorker {
             detailSignatures: request.focusedSignatureIDs.union(scored.families.prefix(8).map(\.familyKey)),
             processes: batch.processes
         )
-        var resolver = ThermalWorkloadResolver(
-            processes: batch.processes, responsiblePIDs: responsibility.hints(for: batch.processes, now: request.now))
+        var resolver = ThermalWorkloadResolver(processes: batch.processes, responsiblePIDs: responsible)
         let currentActivity = ThermalActivityAnalyzer.project(
             processes: batch.processes, families: scored.families, now: request.now, resolver: &resolver)
         let thermalActivity = thermalHistory.record(currentActivity, at: request.now)
