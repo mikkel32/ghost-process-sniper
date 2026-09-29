@@ -160,9 +160,11 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         let appItem = NSMenuItem()
         let editItem = NSMenuItem()
         let radarItem = NSMenuItem()
+        let windowItem = NSMenuItem()
         mainMenu.addItem(appItem)
         mainMenu.addItem(editItem)
         mainMenu.addItem(radarItem)
+        mainMenu.addItem(windowItem)
 
         let appMenu = NSMenu(title: "Ghost Process Sniper")
         appItem.submenu = appMenu
@@ -213,6 +215,16 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         addMenuItem("Snooze Family", key: "s", modifiers: [.command, .shift], action: #selector(snoozeCommand), to: radarMenu)
         addMenuItem("Ignore Family", key: "e", modifiers: [.command, .shift], action: #selector(ignoreCommand), to: radarMenu)
         addMenuItem("Stop…", key: String(UnicodeScalar(NSBackspaceCharacter)!), modifiers: [.command, .shift], action: #selector(killPreviewCommand), to: radarMenu)
+
+        // ⌘W, ⌘M and Zoom for the console and Settings. Nil targets send them
+        // down the responder chain to the key window, which enables each only
+        // if that window can close, minimize or zoom.
+        let windowMenu = NSMenu(title: "Window")
+        windowItem.submenu = windowMenu
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        NSApp.windowsMenu = windowMenu
 
         // The single menu definition: the SwiftUI scene declares no commands.
         NSApp.mainMenu = mainMenu

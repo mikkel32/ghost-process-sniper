@@ -1,3 +1,4 @@
+import GhostProcessSniperCore
 import SwiftUI
 
 struct RadarQuickGuideView: View {
@@ -29,25 +30,8 @@ struct RadarQuickGuideView: View {
 
             Divider()
             HStack(alignment: .top, spacing: 32) {
-                VStack(alignment: .leading, spacing: 12) {
-                    shortcut("Find processes", keys: "⌘F")
-                    shortcut("Open best match", keys: "↩")
-                    shortcut("Scan now", keys: "⌘R")
-                    shortcut("Overview · All Processes", keys: "⌘1 · ⌘2")
-                    shortcut("Security · Energy", keys: "⌘3 · ⌘4")
-                    shortcut("Duplicates · Incidents", keys: "⌘5 · ⌘6")
-                    shortcut("Rules", keys: "⌘7")
-                    shortcut("Back · Forward", keys: "⌘[ · ⌘]")
-                    shortcut("Settings", keys: "⌘,")
-                }
-                VStack(alignment: .leading, spacing: 12) {
-                    shortcut("Next / previous family", keys: "⌘↓ / ⌘↑ or ↓ / ↑")
-                    shortcut("Stop…", keys: "⇧⌘⌫")
-                    shortcut("Snooze family", keys: "⇧⌘S")
-                    shortcut("Ignore family", keys: "⇧⌘E")
-                    shortcut("Toggle inspector", keys: "⌥⌘I")
-                    shortcut("Copy diagnostics", keys: "⇧⌘D")
-                }
+                shortcutColumn(RadarShortcutGuide.leadingColumn)
+                shortcutColumn(RadarShortcutGuide.trailingColumn)
             }
             Text("Celsius readings are hardware temperatures, not per-process scores. Action labels explain urgency. Right-click a process on a family's Processes tab to stop just that one; the family stop covers the wider tree. Previews expire after 60 seconds.")
                 .font(.caption)
@@ -82,12 +66,16 @@ struct RadarQuickGuideView: View {
         }
     }
 
-    private func shortcut(_ title: String, keys: String) -> some View {
-        HStack {
-            Text(title).foregroundStyle(.secondary)
-            Spacer(minLength: 10)
-            Text(keys).fontWeight(.medium)
+    private func shortcutColumn(_ rows: [RadarShortcutGuide.Row]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(rows, id: \.title) { row in
+                HStack {
+                    Text(row.title).foregroundStyle(.secondary)
+                    Spacer(minLength: 10)
+                    Text(row.keys).fontWeight(.medium)
+                }
+                .font(.callout)
+            }
         }
-        .font(.callout)
     }
 }

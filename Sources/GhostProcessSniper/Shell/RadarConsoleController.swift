@@ -18,9 +18,14 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
     ) {
         self.monitor = monitor
         if let window {
+            // Ordering front alone may leave a minimized console in the Dock,
+            // with the engine believing it is on screen.
+            if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
             NSApp.activate()
-            monitor.setConsoleVisible(true)
+            // A window still leaving the Dock has not settled; its
+            // deminiaturize delegate call reports the visibility then.
+            monitor.setConsoleVisible(!window.isMiniaturized)
             return
         }
 
@@ -218,6 +223,7 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
     }
 
     private func showIfNeeded() {
+        if let window, window.isMiniaturized { window.deminiaturize(nil) }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }
