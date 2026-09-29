@@ -166,7 +166,7 @@ extension ProcessKiller {
     /// the end, since only then is it known whether force was held back; an
     /// app that stayed open through the grace wait is forced with its helpers.
     func noteHelpersLeftAlone(context: KillPhaseContext, report: inout KillReport) {
-        let note = KillReport.helpersLeftAloneNote(app: context.plan.displayName)
+        let note = KillReport.helpersLeftAloneNote(app: report.displayName)
         guard report.appStillOpen, report.survivorPIDs.count > 1,
               !report.attempts.contains(where: { $0.stage == "forced" }),
               !report.notes.contains(note) else { return }

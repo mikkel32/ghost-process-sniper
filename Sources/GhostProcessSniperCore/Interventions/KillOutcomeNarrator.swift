@@ -59,8 +59,10 @@ public struct KillOutcomeNarrator: Sendable {
                 return ("\(name) is still open; it may be showing a save prompt. Answer it there, or force-stop it.", nil)
             }
             if report.skipForceRequested {
-                // What closed after the stop is the app: no save prompt is left.
-                let appQuit = !report.exitedAfterStopPIDs.isEmpty
+                // Judged by the app itself. Some other process closing later
+                // (a worker, a helper) says nothing about a quit request; and
+                // once the app that accepted one has gone, no prompt is left.
+                let appQuit = report.quitAcceptedPID.map { !report.survivorPIDs.contains($0) } ?? false
                 return ("\(running) \(verb) still running.",
                         appQuit ? "The app has quit. Check again in a moment, or force-stop what is left if you are sure."
                                 : "It may be waiting on you, such as a save prompt; force-stop only if you are sure.")

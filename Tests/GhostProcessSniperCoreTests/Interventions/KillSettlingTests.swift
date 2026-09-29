@@ -55,7 +55,52 @@ final class KillSettlingTests: XCTestCase {
         XCTAssertTrue(settled.narrative.headline.contains("Pages Helper (PID 301) is still running"), settled.narrative.headline)
         let next = settled.nextStep ?? ""
         XCTAssertFalse(next.contains("save prompt"), "nothing is waiting on the user once the app has gone: \(next)")
-        XCTAssertTrue(next.contains("Check again"), next)
+        XCTAssertTrue(next.hasPrefix("The app has quit. Check again"), next)
+    }
+
+    func testAWorkerThatClosedLaterIsNotAnAppQuit() {
+        // No app and no quit request: a held family of workers, one of which
+        // exits after the stop. Nothing quit, and a prompt may still be waiting.
+        let workers = [target(500, "node", root: true), target(501, "node"), target(502, "node")]
+        let report = heldWorkers(workers)
+        XCTAssertFalse(report.appStillOpen)
+
+        let settled = report.settling(exited: [workers[1].identity])
+
+        XCTAssertEqual(settled.survivorPIDs, [500, 502])
+        XCTAssertEqual(settled.exitedAfterStopPIDs, [501])
+        let next = settled.nextStep ?? ""
+        XCTAssertFalse(next.contains("The app has quit"), "no app was asked to quit: \(next)")
+        XCTAssertTrue(next.contains("It may be waiting on you, such as a save prompt"), next)
+        XCTAssertEqual(report.nextStep, next, "settling a worker changes what is listed, not what to do about it")
+    }
+
+    func testAHelperThatClosedLaterDoesNotDecideWhetherTheAppQuit() async throws {
+        // The app answered the quit within the wait and went; two helpers
+        // ignore SIGTERM and force is held. The app has quit whether or not a
+        // later look finds one of the helpers gone too.
+        let table = FakeProcessTable()
+        let app = KillProcessLite.fake(pid: 300, name: "Pages")
+        let first = KillProcessLite.fake(pid: 301, parent: 300, name: "Pages Helper")
+        let second = KillProcessLite.fake(pid: 302, parent: 300, name: "Pages Helper")
+        table.add(app, FakeProcessTable.Behaviour(quitsOnRequest: 3))
+        table.add(first, .ignoresTermination)
+        table.add(second, .ignoresTermination)
+        let report = await table.killer().kill(
+            plan: .fixture(app, members: [app, first, second], paths: [300: KillFixture.pagesPath, 301: KillFixture.pagesHelperPath,
+                                                                       302: KillFixture.pagesHelperPath]),
+            forceKillDelay: 2,
+            skipForce: true
+        )
+        XCTAssertEqual(report.survivorPIDs, [301, 302])
+        XCTAssertFalse(report.appStillOpen)
+        XCTAssertTrue(try XCTUnwrap(report.nextStep).hasPrefix("The app has quit."), "\(String(describing: report.nextStep))")
+
+        let settled = report.settling(exited: [first.identity])
+
+        XCTAssertEqual(settled.survivorPIDs, [302])
+        XCTAssertTrue(try XCTUnwrap(settled.nextStep).hasPrefix("The app has quit."), "\(String(describing: settled.nextStep))")
+        XCTAssertFalse(settled.exitedAfterStopPIDs.contains(300), "the app went during the stop, not after it")
     }
 
     func testAHelperThatExitsFirstLeavesTheAppOpen() {
@@ -220,6 +265,21 @@ final class KillSettlingTests: XCTestCase {
         KillTarget(identity: ProcessIdentity(pid: pid, startTimeSeconds: 1_000, startTimeMicroseconds: 0), parentPID: root ? 1 : 300,
                    name: name, ownerName: "me", depth: root ? 0 : 1, memoryBytes: memory, cpuPercent: 0, state: .survived,
                    reason: "Still alive after verification", isRoot: root)
+    }
+
+    /// The result of a held stop of plain workers: no app, so no quit request.
+    private func heldWorkers(_ workers: [KillTarget]) -> KillReport {
+        KillReport(
+            displayName: "node",
+            rootPID: workers[0].pid,
+            gracefulPIDs: workers.map(\.pid),
+            targetResults: workers,
+            survivorPIDs: workers.map(\.pid).sorted(),
+            attempts: workers.map { KillAttempt(pid: $0.pid, signal: SIGTERM, stage: "graceful", succeeded: true) },
+            timeline: KillExecutionTimeline(preflightMilliseconds: 0, signalMilliseconds: 0, verificationMilliseconds: 0,
+                                            totalMilliseconds: 4_000),
+            skipForceRequested: true
+        )
     }
 
     /// The result of a held quit that the app has not answered yet.

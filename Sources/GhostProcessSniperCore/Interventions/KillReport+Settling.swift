@@ -48,7 +48,7 @@ extension KillReport {
     }
 
     /// The app that accepted the quit request, if the stop asked one.
-    private var quitAcceptedPID: Int32? {
+    var quitAcceptedPID: Int32? {
         attempts.first { $0.action == .quitRequest && $0.succeeded }?.pid
     }
 }
