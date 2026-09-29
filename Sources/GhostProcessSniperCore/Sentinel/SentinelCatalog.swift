@@ -48,6 +48,14 @@ public enum SentinelCatalog {
         "hyper", "tabby", "rio", "wave",
     ]
 
+    /// Coding assistants: they build programs and run them through a shell on
+    /// someone's behalf. Bundle names (lowercased) and process names.
+    static let codingAgentApps: Set<String> = ["claude", "codex"]
+    static let codingAgentNames: Set<String> = ["claude", "codex"]
+    /// Installs whose executable is named by version, not by product
+    /// (`~/.local/share/claude/versions/2.1.5`, Claude Desktop's embedded CLI).
+    static let codingAgentFolders: [String] = ["/claude-code/", "/.local/share/claude/"]
+
     /// Programs that turn text into actions: the usual second step of an attack.
     static let commandRunners: Set<String> = [
         "sh", "bash", "zsh", "dash", "fish", "tcsh", "csh", "ksh",
@@ -84,6 +92,7 @@ public enum SentinelCatalog {
         "/.oh-my-zsh/", "/.tmux/", "/.zinit/", "/.fzf/", "/.gem/", "/.swiftpm/", "/.mint/", "/.proto/",
         "/.moon/", "/.go/", "/go/bin/", "/.kube/", "/.terraform", "/.pulumi/", "/.config/", "/.git/",
         "/.build/", "/.venv/", "/venv/", "/.tox/", "/.conda/", "/miniconda3/", "/anaconda3/", "/.pixi/",
+        "/.foundry/", "/.rvm/", "/.pub-cache/", "/.flutter/", "/.android/", "/.gemini/", "/.opencode/", "/.lmstudio/",
     ]
 
     /// Temporary locations nothing should normally be *installed* in.
@@ -121,6 +130,15 @@ public enum SentinelCatalog {
         return terminalApps.contains(name.lowercased())
     }
 
+    /// Claude or Codex, by bundle, process name or install folder. Says nothing
+    /// about where it runs from: a copy dropped in /tmp is not one.
+    static func isCodingAgent(path: String, name: String) -> Bool {
+        if let app = appName(forPath: path)?.lowercased(), codingAgentApps.contains(app) { return true }
+        if codingAgentNames.contains(programName(name, path: path)) || codingAgentNames.contains(name.lowercased()) { return true }
+        let lower = path.lowercased()
+        return codingAgentFolders.contains(where: lower.contains)
+    }
+
     /// The bare program name: "-zsh" → "zsh", "python3.12" → "python3".
     static func programName(_ name: String, path: String) -> String {
         // Plain string slicing: URL(fileURLWithPath:) would stat the file.
@@ -137,7 +155,24 @@ public enum SentinelCatalog {
         guard commandRunners.contains(program) else { return false }
         // A runner inside an app bundle is the app's own copy (Electron's
         // node, a bundled python), part of the app rather than a new program.
-        return !path.contains(".app/Contents/")
+        // Python's own framework app is the exception: the interpreter.
+        return !path.contains(".app/Contents/") || isFrameworkInterpreter(path)
+    }
+
+    /// python3 from Xcode, the Command Line Tools, python.org and Homebrew execs
+    /// `…/Python.framework/Versions/x/Resources/Python.app/Contents/MacOS/Python`,
+    /// so that bundle path is what the kernel reports for the interpreter. Judged
+    /// by shape and owner (Python's own bundle, or Xcode's), not by a bundle named
+    /// "Python": Xcode's copy sits inside Xcode.app. An app's embedded Python
+    /// framework stays the app's own runner.
+    static func isFrameworkInterpreter(_ path: String) -> Bool {
+        let lower = path.lowercased()
+        guard lower.hasSuffix("/resources/python.app/contents/macos/python"), lower.contains(".framework/versions/") else {
+            return false
+        }
+        // Xcode.app, Xcode-beta.app, Xcode_26.1.app …
+        let outer = appName(forPath: path)?.lowercased() ?? ""
+        return outer == "python" || outer.hasPrefix("xcode")
     }
 
     static func isSystemLocation(_ path: String) -> Bool {

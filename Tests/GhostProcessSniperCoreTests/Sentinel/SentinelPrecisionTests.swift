@@ -17,8 +17,8 @@ final class SentinelPrecisionTests: XCTestCase {
     }
 
     private func evaluate(_ subject: SentinelSubject, ancestors: [SentinelSubject] = [],
-                          signing: CodeSigningSummary? = nil) -> SentinelEvaluation {
-        SentinelRules.evaluate(subject, ancestors: ancestors, signing: signing, fileExists: { _ in true })
+                          signing: CodeSigningSummary? = nil, exists: Bool = true) -> SentinelEvaluation {
+        SentinelRules.evaluate(subject, ancestors: ancestors, signing: signing, fileExists: { _ in exists })
     }
 
     private func kinds(_ evaluation: SentinelEvaluation, atLeast severity: SentinelSeverity = .notable) -> Set<SentinelSignalKind> {
@@ -37,6 +37,16 @@ final class SentinelPrecisionTests: XCTestCase {
         [subject("-zsh", path: "/bin/zsh", command: "-zsh"), subject("login", path: "/usr/bin/login"),
          subject("Terminal", path: terminal)]
     }
+
+    /// Claude's desktop app › its helper › the embedded claude CLI › the shell its tool call runs in.
+    private func agentChain(cli: String = "/Users/me/Library/Application Support/Claude/claude-code/2.1.5/claude") -> [SentinelSubject] {
+        [subject("zsh", path: "/bin/zsh", command: "/bin/zsh -c ./bench3"),
+         subject("claude", path: cli),
+         subject("Claude Helper", path: "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper"),
+         subject("Claude", path: "/Applications/Claude.app/Contents/MacOS/Claude")]
+    }
+
+    private let bench = "/private/tmp/claude-501/-Users-me-project/scratchpad/bench3"
 
     // MARK: - Simulator and Xcode platform daemons
 
@@ -167,6 +177,115 @@ final class SentinelPrecisionTests: XCTestCase {
         XCTAssertEqual(evaluate(quiet, signing: signed(.unsigned)).severity, .suspicious, "listening alone is worth a look")
         XCTAssertEqual(evaluate(quiet).severity, .suspicious, "unknown signer: the quieter verdict")
         XCTAssertFalse(kinds(evaluate(quiet, signing: signed(.developerID))).contains(.tunnel))
+    }
+
+    // MARK: - Hidden home folders
+
+    private let hiddenAgent = "/Users/me/.xq/agent"
+
+    func testUnvouchedProgramInAHiddenHomeFolderThatListensIsSuspicious() {
+        let agent = subject("agent", path: hiddenAgent, ports: [4444])
+        for signing in [signed(.adHoc), signed(.unsigned)] {
+            let result = evaluate(agent, signing: signing)
+            XCTAssertEqual(result.severity, .suspicious, "\(result.signals)")
+            XCTAssertTrue(kinds(result, atLeast: .suspicious).contains(.tunnel), "\(result.signals)")
+        }
+        XCTAssertEqual(evaluate(agent).severity, .notable, "signature not read yet: the quieter verdict, as for /Users/Shared")
+
+        let vouched = evaluate(agent, signing: signed(.developerID))
+        XCTAssertFalse(kinds(vouched).contains(.tunnel), "a signed server is a server, wherever it lives")
+        XCTAssertEqual(vouched.severity, .notable, "still listed, not raised")
+        let typed = evaluate(agent, ancestors: typedInTerminal, signing: signed(.adHoc))
+        XCTAssertFalse(kinds(typed).contains(.tunnel), "someone typed it")
+        XCTAssertEqual(typed.severity, .notable)
+    }
+
+    func testHiddenHomeProgramWithAnotherSignOfAttackIsDangerous() {
+        let blob = String(repeating: "QUJD", count: 70)
+        let command = "\(hiddenAgent) --cfg base64:\(blob)"
+        let listening = evaluate(subject("agent", path: hiddenAgent, command: command, ports: [4444]), signing: signed(.adHoc))
+        XCTAssertEqual(listening.severity, .dangerous)
+        XCTAssertTrue(kinds(listening, atLeast: .dangerous).isSuperset(of: [.tunnel, .hiddenLocation]), "\(listening.signals)")
+
+        let payload = subject("agent", path: hiddenAgent, command: command)
+        let lifted = evaluate(payload, signing: signed(.unsigned))
+        XCTAssertTrue(kinds(lifted, atLeast: .dangerous).contains(.hiddenLocation), "\(lifted.signals)")
+        XCTAssertLessThan(evaluate(payload).severity, .dangerous, "unknown signer: the quieter verdict")
+        XCTAssertEqual(evaluate(payload, signing: signed(.developerID)).signals.first { $0.kind == .hiddenLocation }?.severity, .notable)
+
+        let miner = subject("xmrig", path: "/Users/me/.xq/xmrig", command: "/Users/me/.xq/xmrig -o stratum+tcp://pool.minexmr.com:4444 --donate-level 1")
+        XCTAssertEqual(evaluate(miner, signing: signed(.adHoc)).severity, .dangerous)
+        XCTAssertEqual(evaluate(miner).severity, .suspicious, "a miner is worth a look before anyone reads its signature")
+        XCTAssertEqual(evaluate(miner, signing: signed(.developerID)).severity, .suspicious)
+    }
+
+    func testHiddenFileInTheHomeFolderIsANotableFindingForEveryone() {
+        let helper = subject("helper", path: "/Users/me/.helper")
+        for signing in [nil, signed(.developerID), signed(.adHoc)] {
+            XCTAssertEqual(evaluate(helper, signing: signing).severity, .notable, "\(String(describing: signing))")
+        }
+    }
+
+    // MARK: - Programs a coding assistant just built
+
+    func testProgramABuiltAndRunByACodingAssistantIsOnlyNotable() {
+        let result = evaluate(subject("bench3", path: bench), ancestors: agentChain())
+        XCTAssertEqual(result.severity, .notable, "\(result.signals)")
+        let location = result.signals.first { $0.kind == .temporaryLocation }
+        XCTAssertEqual(location?.severity, .notable, "still recorded, and still 'odd' for the signature rules")
+        XCTAssertTrue(location?.detail.contains("coding assistant") == true, location?.detail ?? "")
+
+        // The standalone install runs a version-named file, and Codex is a bundle of its own.
+        let standalone = agentChain(cli: "/Users/me/.local/share/claude/versions/2.1.5")
+        XCTAssertEqual(evaluate(subject("bench3", path: bench), ancestors: standalone).severity, .notable)
+        let codex = [subject("bash", path: "/bin/bash"), subject("Codex", path: "/Applications/Codex.app/Contents/MacOS/Codex")]
+        XCTAssertEqual(evaluate(subject("bench3", path: bench), ancestors: codex).severity, .notable)
+    }
+
+    func testTheSameProgramFromAnyoneElseStaysSuspicious() {
+        let program = subject("bench3", path: bench)
+        XCTAssertEqual(evaluate(program).severity, .suspicious, "nobody started it that we know of")
+        XCTAssertEqual(evaluate(program, ancestors: [subject("launchd", path: "/sbin/launchd")]).severity, .suspicious)
+        XCTAssertEqual(evaluate(program, ancestors: typedInTerminal).severity, .suspicious,
+                       "a pasted download-and-run drops its stage two exactly here")
+        let editor = [subject("zsh", path: "/bin/zsh"),
+                      subject("Code Helper", path: "/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper")]
+        XCTAssertEqual(evaluate(program, ancestors: editor).severity, .suspicious, "only Claude and Codex are recognised")
+        // No shell between them: the assistant ran it directly, which is not the everyday build-and-run.
+        XCTAssertEqual(evaluate(program, ancestors: Array(agentChain().dropFirst())).severity, .suspicious)
+        // Too far up to say who started it.
+        let far = [subject("zsh", path: "/bin/zsh")] + (0..<8).map { subject("wrapper\($0)", path: "/usr/local/bin/wrapper\($0)") }
+        XCTAssertEqual(evaluate(program, ancestors: far + agentChain().dropFirst()).severity, .suspicious)
+    }
+
+    func testOnlyAnAssistantRunningFromWhereSuchToolsInstallCounts() {
+        let program = subject("bench3", path: bench)
+        let shell = subject("zsh", path: "/bin/zsh")
+        for path in ["/tmp/claude", "/private/tmp/x/claude", "/var/folders/ab/cd/T/claude", "/Users/me/.helper/claude",
+                     "/Users/me/Downloads/claude", "/Users/Shared/claude", "/Users/me/.Trash/claude",
+                     "/Users/me/Downloads/Claude.app/Contents/MacOS/Claude", "/private/tmp/Codex.app/Contents/MacOS/Codex",
+                     "/Volumes/Untitled/Claude.app/Contents/MacOS/Claude"] {
+            let host = subject((path as NSString).lastPathComponent, path: path)
+            XCTAssertEqual(evaluate(program, ancestors: [shell, host]).severity, .suspicious, "a copy named like the assistant at \(path)")
+        }
+    }
+
+    func testAnyOtherSignOnAnAssistantsProgramKeepsItSuspiciousOrWorse() {
+        let program = subject("bench3", path: bench)
+        let miner = subject("bench3", path: bench, command: bench + " --pool stratum+tcp://x.example:3333")
+        XCTAssertEqual(evaluate(miner, ancestors: agentChain()).severity, .dangerous)
+        XCTAssertEqual(evaluate(program, ancestors: agentChain(), exists: false).severity, .suspicious, "deleted itself after starting")
+
+        let server = subject("bench3", path: bench, ports: [8080])
+        let listening = evaluate(server, ancestors: agentChain())
+        XCTAssertEqual(listening.severity, .suspicious, "\(listening.signals)")
+        XCTAssertTrue(kinds(listening, atLeast: .suspicious).contains(.tunnel), "the listener rule judged the unsoftened location")
+
+        let blob = String(repeating: "QUJD", count: 70)
+        let payload = subject("bench3", path: bench, command: "\(bench) --cfg base64:\(blob)")
+        XCTAssertEqual(evaluate(payload, ancestors: agentChain()).severity, .dangerous, "a payload lifts the location signal as before")
+        let masquerade = subject("Finder", path: "/private/tmp/claude-501/x/Finder")
+        XCTAssertEqual(evaluate(masquerade, ancestors: agentChain()).severity, .dangerous)
     }
 
     func testStartupItemInUsersSharedWeighsItsSigner() throws {

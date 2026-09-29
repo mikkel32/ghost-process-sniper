@@ -123,15 +123,22 @@ enum SentinelRules {
         if let disguise = disguisedAsDocument(subject) {
             signals.append(disguise)
         }
+        let interactive = startedFromInteractiveShell(ancestors)
+        // A hidden home folder is only Notable, so by severity alone it would
+        // never count as an odd place for the rules below; once nobody vouches
+        // for the signature, it does, unless someone typed the command.
+        let hiddenHome = isUnvouchedHiddenHome(subject, signing: signing)
         let context = ListenerContext(
-            oddlyLocated: signals.contains { [.temporaryLocation, .hiddenLocation].contains($0.kind) && $0.severity >= .suspicious },
-            signing: signing, interactive: startedFromInteractiveShell(ancestors),
+            oddlyLocated: signals.contains { [.temporaryLocation, .hiddenLocation].contains($0.kind) && $0.severity >= .suspicious }
+                || (hiddenHome && !interactive),
+            signing: signing, interactive: interactive,
             corroborated: signals.contains { corroboratingKinds.contains($0.kind) && $0.severity >= .notable })
         if let listener = listener(subject, context: context) {
             signals.append(listener)
         }
 
-        signals = escalate(signals, contentAncestor: contentAncestor)
+        signals = escalate(signals, contentAncestor: contentAncestor, hiddenHome: hiddenHome)
+        signals = softenAgentBuild(signals, of: subject, ancestors: ancestors)
         let headline = headline(for: subject, signals: signals, contentAncestor: contentAncestor, fromTerminal: fromTerminal)
         return SentinelEvaluation(
             signals: signals,
@@ -168,7 +175,7 @@ enum SentinelRules {
                 "Runs from /Users/Shared, a folder every account can write to.", evidence: path))
         } else if isHiddenUserPath(lower) {
             found.append(SentinelSignal(.hiddenLocation, .notable,
-                "Runs from a hidden folder in your home that is not a known developer tool location.", evidence: path))
+                "Runs from a hidden file or folder in your home that is not a known developer tool location.", evidence: path))
         }
         if lower.range(of: #"^/users/[^/]+/downloads/"#, options: .regularExpression) != nil, !subject.isInAppBundle {
             found.append(SentinelSignal(.downloadedExecutable, .notable,
@@ -191,12 +198,13 @@ enum SentinelRules {
         return found
     }
 
-    /// A dot-folder under a home directory that is not a known tool cache.
+    /// A dot-file or dot-folder under a home directory that is not a known tool cache.
     static func isHiddenUserPath(_ lowerPath: String) -> Bool {
         guard lowerPath.hasPrefix("/users/") else { return false }
         let components = lowerPath.split(separator: "/")
-        // users / name / ... ; a hidden component anywhere below the home folder.
-        guard components.count > 3, components.dropFirst(2).contains(where: { $0.hasPrefix(".") }) else { return false }
+        // users / name / ... ; a hidden component anywhere below the home folder,
+        // the program itself included (`~/.helper` is how droppers persist).
+        guard components.count >= 3, components.dropFirst(2).contains(where: { $0.hasPrefix(".") }) else { return false }
         return !SentinelCatalog.knownToolDirectories.contains(where: lowerPath.contains)
     }
 
@@ -252,8 +260,8 @@ enum SentinelRules {
     // MARK: - Combining evidence
 
     /// Signals that together describe an attack chain outrank each alone.
-    static func escalate(_ signals: [SentinelSignal],
-                         contentAncestor: (name: String, role: SentinelCatalog.ContentApp)?) -> [SentinelSignal] {
+    static func escalate(_ signals: [SentinelSignal], contentAncestor: (name: String, role: SentinelCatalog.ContentApp)?,
+                         hiddenHome: Bool = false) -> [SentinelSignal] {
         let kinds = Dictionary(signals.map { ($0.kind, $0.severity) }, uniquingKeysWith: max)
         let payloadKinds: [SentinelSignalKind] = [.downloadAndExecute, .encodedPayload, .passwordPrompt, .credentialAccess,
                                                   .reverseShell, .persistence, .quarantineRemoval]
@@ -282,6 +290,7 @@ enum SentinelRules {
         // A tunnel command counts, and so does a listener already judged a
         // backdoor; a listener still worth only a look (Suspicious) does not.
         let located = (kinds[.temporaryLocation] ?? .info) >= .suspicious || (kinds[.hiddenLocation] ?? .info) >= .suspicious
+            || hiddenHome
         let tunnel = signals.contains { $0.kind == .tunnel && $0.severity != .suspicious }
         if located, carriesPayload || tunnel || kinds[.cryptoMiner] != nil {
             result = result.map { signal in
@@ -291,6 +300,27 @@ enum SentinelRules {
             }
         }
         return result
+    }
+
+    /// A program a coding assistant just built and ran from a temporary folder
+    /// is the everyday case of the location rule, not a dropper. When its shell
+    /// started it and that folder is the only thing Suspicious about it, the
+    /// signal stays (Notable, so the signature rules still treat the place as
+    /// odd) but stops being an alarm. Anything else Suspicious keeps the
+    /// finding: a listener, a payload or miner (escalate already made the
+    /// location Dangerous), a deleted file. The listener rule ran on the
+    /// original signal, and a program typed into a terminal is not softened.
+    static func softenAgentBuild(_ signals: [SentinelSignal], of subject: SentinelSubject,
+                                 ancestors: [SentinelSubject]) -> [SentinelSignal] {
+        let serious = signals.filter { $0.severity >= .suspicious }
+        guard serious.count == 1, let location = serious.first, location.kind == .temporaryLocation,
+              location.severity == .suspicious, startedByCodingAgent(ancestors) else { return signals }
+        return signals.map { signal in
+            guard signal.kind == .temporaryLocation, signal.severity == .suspicious else { return signal }
+            return SentinelSignal(.temporaryLocation, .notable,
+                "Runs from \((subject.executablePath as NSString).deletingLastPathComponent), a temporary folder. A coding assistant started it from a shell, so it is probably a program it just built. Check it if you did not ask for that.",
+                evidence: signal.evidence)
+        }
     }
 
     // MARK: - Words

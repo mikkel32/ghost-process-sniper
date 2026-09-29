@@ -134,6 +134,17 @@ final class SentinelTrustTests: XCTestCase {
         XCTAssertEqual(SentinelTrust([bareOffer]).match(bare, provenance: nil), .none)
     }
 
+    func testFrameworkPythonIsTrustedOneCommandAtATimeLikeAnyInterpreter() throws {
+        let path = "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python"
+        let python = SentinelSubject(process(550, "Python", path, command: "\(path) -m http.server 8000"))
+        XCTAssertFalse(SentinelTrust.allowsWholeProgram(python), "trusting the interpreter would cover every script it runs")
+        let offer = try XCTUnwrap(SentinelTrust.offer(for: python, provenance: nil, now: now, stamp: { _ in nil }))
+        guard case .command = offer.anchor else { return XCTFail("\(offer.anchor)") }
+
+        let other = SentinelSubject(process(551, "Python", path, command: "\(path) -c print(1)"))
+        XCTAssertNotEqual(SentinelTrust([offer]).match(other, provenance: nil), .trusted, "another command is not covered")
+    }
+
     func testAProgramIsTrustedByItsSignerOrItsExactBuild() {
         let slack = SentinelSubject(process(600, "Slack", "/Applications/Slack.app/Contents/MacOS/Slack"))
         func provenance(_ authority: CodeSigningSummary.Authority, team: String? = nil, hash: String = "aa") -> ExecutableProvenance {
