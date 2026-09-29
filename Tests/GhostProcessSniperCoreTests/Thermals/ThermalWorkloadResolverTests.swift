@@ -201,6 +201,66 @@ final class ThermalWorkloadResolverTests: XCTestCase {
                        "Apple's own apps are still apps you use")
     }
 
+    /// bird, cloudd and fileproviderd are one iCloud sync, not three anonymous
+    /// rows; the security daemons that vet a fresh build or download likewise.
+    func testDaemonsThatExplainHeatAreKnownSources() throws {
+        let frameworks = "/System/Library/PrivateFrameworks"
+        let result = projection([
+            process(60, parent: 1, name: "bird", path: "\(frameworks)/iCloudDriveCore.framework/Versions/A/Support/bird", cpu: 30),
+            process(61, parent: 1, name: "cloudd", path: "\(frameworks)/CloudKitDaemon.framework/Support/cloudd", cpu: 30),
+            process(62, parent: 1, name: "fileproviderd", path: "\(frameworks)/FileProvider.framework/Support/fileproviderd", cpu: 30),
+            process(63, parent: 1, name: "syspolicyd", path: "/usr/libexec/syspolicyd", cpu: 60),
+            process(64, parent: 1, name: "XprotectService", path: "", cpu: 40),
+            process(65, parent: 1, name: "softwareupdated",
+                    path: "/System/Library/CoreServices/Software Update.app/Contents/Resources/softwareupdated", cpu: 20)
+        ])
+        let cloud = try XCTUnwrap(result.contributors.first { $0.knownSource == .cloudSync })
+        XCTAssertEqual(cloud.displayName, "iCloud sync")
+        XCTAssertEqual(cloud.processCount, 3)
+        XCTAssertTrue(cloud.isSystemProcess)
+        XCTAssertEqual(cloud.suggestedAction, ThermalKnownSource.cloudSync.advice)
+        XCTAssertEqual(cloud.workloadSummary, "iCloud Drive, CloudKit and cloud-storage folders")
+        let security = try XCTUnwrap(result.contributors.first { $0.knownSource == .securityChecks })
+        XCTAssertEqual(security.displayName, "Security checks")
+        XCTAssertEqual(security.processCount, 2, "An unresolved path still matches a macOS daemon's name")
+        XCTAssertTrue(security.isSystemProcess)
+        XCTAssertEqual(security.suggestedAction, ThermalKnownSource.securityChecks.advice)
+        let update = try XCTUnwrap(result.contributors.first { $0.knownSource == .softwareUpdate })
+        XCTAssertEqual(update.displayName, "Software update")
+        XCTAssertEqual(update.processCount, 1, "The bundle path does not make it an app")
+        XCTAssertEqual(result.contributors.count, 3, "Six daemons, three explanations")
+
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(90), activity: result, at: now)
+        XCTAssertEqual(ThermalAppInsight.evaluate(activity: result, diagnosis: diagnosis, at: now).title,
+                       "Start with Security checks")
+    }
+
+    /// The iOS Simulator runs its own cloudd, trustd and installd under a path that
+    /// contains "/System/Library/", and people build tools with these names.
+    func testSharedDaemonNamesNeedMacOSsOwnFolder() {
+        let simulator = "/Library/Developer/CoreSimulator/Volumes/iOS_23F77/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.0.simruntime/Contents/Resources/RuntimeRoot/System/Library/PrivateFrameworks/CloudKitDaemon.framework/Support/cloudd"
+        XCTAssertNil(ThermalKnownSource.matching(name: "cloudd", executablePath: simulator))
+        XCTAssertNil(ThermalKnownSource.matching(name: "bird", executablePath: "/Users/me/bin/bird"))
+        XCTAssertNil(ThermalKnownSource.matching(name: "installd", executablePath: "/opt/homebrew/bin/installd"))
+        XCTAssertEqual(ThermalKnownSource.matching(name: "trustd", executablePath: "/usr/libexec/trustd"), .securityChecks)
+        XCTAssertEqual(ThermalKnownSource.matching(name: "trustd", executablePath: ""), .securityChecks)
+
+        let result = projection([process(70, parent: 1, name: "bird", path: "/Users/me/bin/bird", cpu: 90)])
+        XCTAssertEqual(result.contributors.first?.kind, .process)
+        XCTAssertNil(result.contributors.first?.knownSource)
+        XCTAssertFalse(result.contributors.first?.isSystemProcess ?? true)
+    }
+
+    /// A daemon whose path could not be read is still not something to stop.
+    func testAnExplainedDaemonWithoutAPathGetsNoStopShortcut() throws {
+        let daemon = process(80, parent: 1, name: "syspolicyd", path: "", cpu: 90)
+        let family = RefreshPerformanceFixture.family(daemon)
+        let result = ThermalActivityAnalyzer.project(processes: [daemon], families: [family], now: now, processorCount: 10)
+        let contributor = try XCTUnwrap(result.contributors.first)
+        XCTAssertEqual(contributor.knownSource, .securityChecks)
+        XCTAssertNil(ThermalStopTarget.resolve(for: contributor, family: family, ownPID: 1))
+    }
+
     func testProjectionDoesNotDependOnInputOrder() {
         let processes = terminalShell() + editor() + [
             process(603, parent: 602, name: "make", path: "/usr/bin/make", cpu: 3),

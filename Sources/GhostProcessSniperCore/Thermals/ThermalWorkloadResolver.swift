@@ -4,6 +4,7 @@ import Foundation
 /// These are explained and never offered as something to stop.
 public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
     case virtualMachine, spotlight, photosAnalysis, timeMachine, windowServer
+    case cloudSync, securityChecks, softwareUpdate
 
     public var label: String {
         switch self {
@@ -12,6 +13,9 @@ public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
         case .photosAnalysis: "Photos analysis"
         case .timeMachine: "Time Machine backup"
         case .windowServer: "Screen drawing — many windows, external displays or animations"
+        case .cloudSync: "iCloud sync — iCloud Drive, CloudKit and cloud-storage folders"
+        case .securityChecks: "Security checks — Gatekeeper, XProtect, certificate and signature checks"
+        case .softwareUpdate: "Software update — macOS updates, App Store apps and installer packages"
         }
     }
 
@@ -27,6 +31,9 @@ public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
         case .photosAnalysis: "Photos is analysing new images and videos for faces, objects and memories."
         case .timeMachine: "A Time Machine backup is copying changed files."
         case .windowServer: "macOS composites every window and display; many windows, external displays or animations raise its load."
+        case .cloudSync: "macOS is syncing iCloud Drive and other cloud storage, often after big downloads, a new sign-in or many changed files."
+        case .securityChecks: "macOS is vetting downloaded or freshly built software and checking certificates, which builds, downloads and new installs trigger."
+        case .softwareUpdate: "macOS is downloading, verifying or installing software, which keeps it busy for a while."
         }
     }
 
@@ -42,6 +49,12 @@ public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
             "Let the backup finish, or skip it from the Time Machine menu if you need the performance right now."
         case .windowServer:
             "Close unused windows, turn on Reduce Motion or Reduce Transparency, or disconnect an unused display, then compare the next readings."
+        case .cloudSync:
+            "Let the sync finish, especially after big downloads or a new sign-in. If it keeps running, check System Settings › Apple Account › iCloud for what is syncing."
+        case .securityChecks:
+            "This usually settles once the build or download ends, so let it finish. If your own builds keep triggering it, adding your terminal under System Settings › Privacy & Security › Developer Tools skips these checks for software you build yourself."
+        case .softwareUpdate:
+            "Let the installation finish; it runs best while the Mac is plugged in and idle."
         }
     }
 
@@ -49,6 +62,9 @@ public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
         let file = String(PathText.lastComponent(executablePath[...]))
         for candidate in [file, name] where !candidate.isEmpty {
             if let source = exactNames[candidate] { return source }
+            // An unread path (the read has a deadline) is no evidence against a daemon's name.
+            if let source = systemDaemonNames[candidate],
+               executablePath.isEmpty || ThermalWorkloadResolver.isOperatingSystemPath(executablePath) { return source }
             // proc_name truncates long names; only accept a prefix long enough to be unambiguous.
             if candidate.count >= 30,
                candidate != virtualMachineName, virtualMachineName.hasPrefix(candidate) { return .virtualMachine }
@@ -63,6 +79,14 @@ public enum ThermalKnownSource: String, CaseIterable, Equatable, Sendable {
         "photoanalysisd": .photosAnalysis, "mediaanalysisd": .photosAnalysis,
         "backupd": .timeMachine,
         "WindowServer": .windowServer
+    ]
+    /// Names other software shares: the iOS Simulator runs its own cloudd, trustd and installd,
+    /// and people build tools called bird. Only a macOS folder makes these the system's.
+    private static let systemDaemonNames: [String: Self] = [
+        "bird": .cloudSync, "cloudd": .cloudSync, "fileproviderd": .cloudSync,
+        "syspolicyd": .securityChecks, "XprotectService": .securityChecks, "amfid": .securityChecks,
+        "trustd": .securityChecks,
+        "softwareupdated": .softwareUpdate, "installd": .softwareUpdate
     ]
 }
 
