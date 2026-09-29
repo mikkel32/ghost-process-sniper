@@ -61,15 +61,56 @@ public struct DuplicateProcessCluster: Identifiable, Equatable, Sendable {
     /// Listening ports of the redundant copies, when forensics knows them.
     public let redundantPorts: [Int]
 
+    /// Memory of the redundant copies and their matching descendants: what
+    /// stopping the extras gives back, not what the whole cluster holds.
+    public let redundantFootprintBytes: UInt64
+
     /// The copies worth stopping; stop the family that owns each one.
     public let redundantRootIdentities: [ProcessIdentity]
-    /// Changes whenever the keep, the redundant copies or their ports do.
+    /// Changes whenever the keep, the redundant copies, their ports or
+    /// whether they clear `minimumGiveBackBytes` do.
     let copyPlanHash: Int
 
     /// Two or more copies started independently, not one tool's worker pool.
     public var countsAsIndependentCopies: Bool {
         independentRootCount >= 2 && !isInternalToSingleFamily
     }
+
+    /// Stopping the extras must give back at least this much, or free a
+    /// port, before the copies raise their families: a pair of idle 2 MB
+    /// helpers is listed and stoppable but is not worth a Watch row.
+    public static let minimumGiveBackBytes: UInt64 = 32 * 1_048_576
+
+    /// Whether the copies are worth a flag on their families. It reads the
+    /// copies to stop, not the cluster: a small orphan beside one big kept
+    /// copy frees almost nothing, and the kept copy's own port is meant to
+    /// be served.
+    public var copiesMatter: Bool {
+        redundantFootprintBytes >= Self.minimumGiveBackBytes || !redundantPorts.isEmpty
+    }
+
+    /// What a cluster must reach to be listed: the Duplicates page is for
+    /// small tools that add up, and a leftover pair of idle 2 MB helpers does
+    /// not. Any one of these is enough.
+    public static let listingMinimumFootprintBytes: UInt64 = 32 * 1_048_576
+    /// Of one core, summed over the cluster: idle noise stays below it.
+    public static let listingMinimumCPUPercent = 5.0
+    public static let listingMinimumCopies = 4
+
+    /// Whether the cluster adds up to something worth a row: real memory or
+    /// CPU in all, many copies, or a copy to stop that serves a port. Tiny
+    /// clusters are still detected, scored by `copiesMatter` and stoppable
+    /// from their families; they are only not listed.
+    public var addsUp: Bool {
+        totalPhysicalFootprintBytes >= Self.listingMinimumFootprintBytes
+            || totalCPUPercent >= Self.listingMinimumCPUPercent
+            || independentRootCount >= Self.listingMinimumCopies
+            || !redundantPorts.isEmpty
+    }
+
+    /// Shown on the Duplicates page and counted by its badge, the Overview
+    /// card and the menu bar: one predicate, so they cannot disagree.
+    public var isListed: Bool { !isInternalToSingleFamily && addsUp }
 
     public init(
         key: DuplicateClusterKey,
@@ -112,20 +153,27 @@ public struct DuplicateProcessCluster: Identifiable, Equatable, Sendable {
         self.keepReason = keepReason
         let redundant = keepIdentity == nil ? [] : copyRootIdentities.filter { $0 != keepIdentity }
         self.redundantRootIdentities = redundant
-        self.redundantPorts = Self.ports(of: redundant, in: sorted)
+        let stopped = Self.members(ofCopies: redundant, in: sorted)
+        let footprint = stopped.reduce(UInt64(0)) { $0 + $1.memoryForScoringBytes }
+        self.redundantFootprintBytes = footprint
+        self.redundantPorts = Array(Set(stopped.flatMap(\.forensics.listeningPorts))).sorted()
         var hasher = Hasher()
         hasher.combine(keepIdentity)
         hasher.combine(redundant)
         hasher.combine(redundantPorts)
+        // The score reads the floor, so the copy to stop growing past it
+        // must reach the kept family's cached score too.
+        hasher.combine(footprint >= Self.minimumGiveBackBytes)
         self.copyPlanHash = hasher.finalize()
     }
 
-    private static func ports(of copies: [ProcessIdentity], in members: [ProcessMetrics]) -> [Int] {
+    /// The members that stop with `copies`: each copy and its matching
+    /// descendants, which serve its ports and hold its memory too.
+    private static func members(ofCopies copies: [ProcessIdentity], in members: [ProcessMetrics]) -> [ProcessMetrics] {
         guard !copies.isEmpty else { return [] }
         let wanted = Set(copies)
         let memberPIDs = Set(members.map(\.pid))
         let byPID = Dictionary(members.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
-        // A copy's matching descendants serve its ports too.
         func copyRoot(of member: ProcessMetrics) -> ProcessIdentity {
             var current = member
             var steps = 0
@@ -135,7 +183,7 @@ public struct DuplicateProcessCluster: Identifiable, Equatable, Sendable {
             }
             return current.identity
         }
-        return Array(Set(members.filter { wanted.contains(copyRoot(of: $0)) }.flatMap(\.forensics.listeningPorts))).sorted()
+        return members.filter { wanted.contains(copyRoot(of: $0)) }
     }
 
     public func resolving(relatedFamilyKeys: [String], isInternalToSingleFamily: Bool) -> DuplicateProcessCluster {
@@ -188,8 +236,9 @@ public struct DuplicateClusterSet: Equatable, Sendable {
         self.detectorMilliseconds = detectorMilliseconds
     }
 
+    /// The clusters the Duplicates page lists.
     public var visibleClusters: [DuplicateProcessCluster] {
-        clusters.filter { !$0.isInternalToSingleFamily }
+        clusters.filter(\.isListed)
     }
 }
 
@@ -215,14 +264,16 @@ public struct DuplicateClusterViewModel: Identifiable, Equatable, Sendable {
         rootCountText = "\(cluster.independentRootCount)"
         memoryText = RadarFormat.bytes(cluster.totalPhysicalFootprintBytes)
         cpuText = RadarFormat.percent(cluster.totalCPUPercent)
-        kindText = cluster.likelyKind.label
+        // "Heavy process" is the classifier's fallback for a binary it does not
+        // know; on a pair of 2 MB helpers it would read as an alarm.
+        kindText = cluster.likelyKind == .unknownHeavy ? "Repeated tool" : cluster.likelyKind.label
         reasonText = cluster.reason
         pidText = cluster.representativePIDs.map(String.init).joined(separator: ", ")
     }
 
     public static func rows(from clusters: [DuplicateProcessCluster]) -> [DuplicateClusterViewModel] {
         clusters
-            .filter { !$0.isInternalToSingleFamily }
+            .filter(\.isListed)
             .map(DuplicateClusterViewModel.init(cluster:))
             .sorted { lhs, rhs in
                 if lhs.cluster.memberCount != rhs.cluster.memberCount {

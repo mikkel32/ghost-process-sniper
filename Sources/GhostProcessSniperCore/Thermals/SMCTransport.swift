@@ -78,9 +78,16 @@ struct SMCKeyReader {
         let type: String
     }
 
+    static let maximumFans = 4
+    /// Above any real fan; a larger value is a sentinel or garbage, not a speed.
+    static let maximumPlausibleRPM = 20_000.0
+
     let transport: any SMCTransport
     private var metadata: [String: KeyInfo] = [:]
     private(set) var unsupportedKeys: Set<String> = []
+    // Neither the number of fans nor a fan's maximum changes while the Mac runs.
+    private var fanCount: Int?
+    private var fanMaximums: [Int: Double] = [:]
 
     init(transport: any SMCTransport) {
         self.transport = transport
@@ -94,6 +101,28 @@ struct SMCKeyReader {
         }
         guard let bytes = read(key, info: info) else { return nil }
         return SMCTemperatureCodec.decode(type: info.type, bytes: bytes)
+    }
+
+    /// Current speed of every fan, read-only (FNum, F<n>Ac, F<n>Mx through the same
+    /// three read commands as the temperatures). Empty for a Mac without fans, which
+    /// has no FNum or reports none, and whenever a fan's speed cannot be trusted:
+    /// one unreadable fan must not let the others claim "idle". The key names and
+    /// types are the widely documented ones and are not yet verified on this
+    /// project's hardware, so anything unexpected hides the row instead of guessing.
+    mutating func fanSpeeds() -> [ThermalFan] {
+        if fanCount == nil, let count = number("FNum", types: ["ui8 "], within: 0...255) {
+            fanCount = min(Int(count), Self.maximumFans)
+        }
+        guard let count = fanCount, count > 0 else { return [] }
+        var fans: [ThermalFan] = []
+        for index in 0..<count {
+            guard let rpm = fanRPM("F\(index)Ac") else { return [] }
+            if fanMaximums[index] == nil, let maximum = fanRPM("F\(index)Mx"), maximum > 0 {
+                fanMaximums[index] = maximum
+            }
+            fans.append(ThermalFan(rpm: rpm, maximumRPM: fanMaximums[index]))
+        }
+        return fans
     }
 
     /// Walks the SMC key index once for chips without a catalog entry. Only die
@@ -120,6 +149,19 @@ struct SMCKeyReader {
         }
         guard !cpu.isEmpty || !gpu.isEmpty else { return nil }
         return SMCSensorMapping(cpuKeys: cpu, gpuKeys: gpu, source: .discovered)
+    }
+
+    private mutating func fanRPM(_ key: String) -> Double? {
+        number(key, types: ["flt ", "fpe2"], within: 0...Self.maximumPlausibleRPM)
+    }
+
+    /// A plain number of one of the given types, or nil when the key is missing,
+    /// unreadable, of another type or outside the plausible range.
+    private mutating func number(_ key: String, types: Set<String>, within range: ClosedRange<Double>) -> Double? {
+        guard let info = info(key), types.contains(info.type), let bytes = read(key, info: info),
+              let value = SMCTemperatureCodec.decodeNumber(type: info.type, bytes: bytes),
+              range.contains(value) else { return nil }
+        return value
     }
 
     private mutating func info(_ key: String) -> KeyInfo? {

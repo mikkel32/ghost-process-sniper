@@ -6,19 +6,44 @@ final class BaselineLearnerTests: XCTestCase {
     private let learner = FamilyBaselineLearner()
 
     func testSlowLeakDoesNotBecomeTheNormal() throws {
-        // 500 -> 1099 MB over 20 minutes at a 2 s cadence.
-        let steps = 601
+        // Twenty minutes at 500 MB, then 30 MB/min for twenty minutes, which
+        // the long-term trend proves a slow leak, at a 2 s cadence.
         var baseline: FamilyBaseline?
-        for step in 0..<steps {
-            let megabytes = 500 + 599 * Double(step) / Double(steps - 1)
-            baseline = learner.updated(existing: baseline, family: family(megabytes: megabytes, cpu: 3, at: step * 2), now: date(step * 2))
+        for step in 0...600 {
+            baseline = learner.updated(existing: baseline, family: family(megabytes: 500, cpu: 3, at: step * 2), now: date(step * 2))
+        }
+        let leak = LongTermTrend(slopeMegabytesPerMinute: 30, floorSlopeMegabytesPerMinute: 28, rSquared: 0.97,
+                                 spanMinutes: 30, persistentSlopeMegabytesPerMinute: 30)
+        for step in 601...1_200 {
+            let megabytes = 500 + 30 * Double(step - 600) / 30
+            baseline = learner.updated(existing: baseline, family: family(megabytes: megabytes, cpu: 3, at: step * 2, longTerm: leak),
+                                       now: date(step * 2))
         }
         let learned = try XCTUnwrap(baseline)
-        let current = UInt64(1_099 * Double(Fixture.mib))
+        let current = UInt64(1_100 * Double(Fixture.mib))
 
         XCTAssertTrue(learned.isMeasurementTrusted)
+        XCTAssertEqual(learned.meanMemoryBytes, 500 * Double(Fixture.mib), accuracy: Double(Fixture.mib))
         XCTAssertGreaterThanOrEqual(learned.memoryMultiple(for: current), 1.8)
-        XCTAssertGreaterThanOrEqual(learned.memoryZScore(for: current), 3)
+    }
+
+    /// First seen idle, then busy in bursts: when the baseline becomes
+    /// trusted it must describe the bursts, not the first reading.
+    func testTheFirstReadingDoesNotDominateTheLearnedNormal() throws {
+        var baseline = learner.updated(existing: nil, family: family(megabytes: 300, cpu: 1, at: 0), now: date(0))
+        // Every minute: 48 s near idle, then 12 s at 60% (a true mean of 12.8%).
+        var cpus: [Double] = []
+        for seconds in stride(from: 3, through: 1_260, by: 3) {
+            let cpu = seconds % 60 >= 48 ? 60.0 : 1.0
+            cpus.append(cpu)
+            baseline = learner.updated(existing: baseline, family: family(megabytes: 300, cpu: cpu, at: seconds), now: date(seconds))
+        }
+        let mean = cpus.reduce(0, +) / Double(cpus.count)
+        let deviation = (cpus.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(cpus.count)).squareRoot()
+        XCTAssertTrue(baseline.isMeasurementTrusted)
+        XCTAssertEqual(baseline.meanCPUPercent, mean, accuracy: 1.5)
+        XCTAssertEqual(baseline.cpuStandardDeviation, deviation, accuracy: deviation * 0.1)
+        XCTAssertNil(BaselineCPUAnomaly(baseline: baseline, cpuPercent: 60), "a routine burst is the normal")
     }
 
     func testCadenceDoesNotChangeTheLearnedNormal() throws {
@@ -59,6 +84,14 @@ final class BaselineLearnerTests: XCTestCase {
         XCTAssertEqual(updated.sampleCount, 2)
     }
 
+    func testABaselineFromAClockThatRanAheadKeepsLearning() throws {
+        var ahead = learner.updated(existing: nil, family: family(megabytes: 400, cpu: 2, at: 0), now: date(0))
+        ahead.lastSeenAt = date(0).addingTimeInterval(30 * 86_400)
+        let resumed = learner.updated(existing: ahead, family: family(megabytes: 400, cpu: 2, at: 10), now: date(10))
+        XCTAssertEqual(resumed.sampleCount, ahead.sampleCount + 1)
+        XCTAssertEqual(resumed.lastSeenAt, date(10))
+    }
+
     func testLongGapStartsANewSession() throws {
         let first = learner.updated(existing: nil, family: family(megabytes: 400, cpu: 2, at: 0), now: date(0))
         let second = learner.updated(existing: first, family: family(megabytes: 400, cpu: 2, at: 4_000), now: date(4_000))
@@ -70,10 +103,15 @@ final class BaselineLearnerTests: XCTestCase {
         Fixture.now.addingTimeInterval(Double(seconds))
     }
 
-    private func family(megabytes: Double, cpu: Double, at seconds: Int) -> ProcessFamily {
+    private func family(megabytes: Double, cpu: Double, at seconds: Int, longTerm: LongTermTrend = .none) -> ProcessFamily {
         let measured = date(seconds)
-        return Fixture.family(Fixture.process(parent: 999, megabytes: megabytes, cpu: cpu, date: measured))
-            .enriched(lastScoredAt: measured)
+        let root = Fixture.process(parent: 999, megabytes: megabytes, cpu: cpu, date: measured)
+        return ProcessFamily(
+            root: root, members: [root], totalResidentMemoryBytes: root.residentMemoryBytes,
+            totalPhysicalFootprintBytes: root.memoryForScoringBytes, totalCPUPercent: cpu, devConfidence: 0.9,
+            commandHints: [root.commandLine], trend: .empty,
+            score: GhostScore(value: 5, level: .quiet, reasons: [], heat: nil),
+            ownedIdentities: [root.identity], protectedPIDs: [], lastScoredAt: measured, longTermTrend: longTerm)
     }
 }
 

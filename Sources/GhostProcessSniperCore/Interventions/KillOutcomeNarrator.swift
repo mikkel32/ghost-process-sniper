@@ -23,6 +23,10 @@ public struct KillOutcomeNarrative: Equatable, Sendable {
 /// exited, which needed force, which are still running and why, and what
 /// the stop freed. Port claims come only from the ports actually checked.
 public struct KillOutcomeNarrator: Sendable {
+    /// Begins the fact that names what the stop left running; the result
+    /// list shows those processes on their own.
+    public static let leftRunningPrefix = "Left running (now orphaned):"
+
     public init() {}
 
     public func narrate(_ report: KillReport) -> KillOutcomeNarrative {
@@ -59,8 +63,13 @@ public struct KillOutcomeNarrator: Sendable {
                 return ("\(name) is still open; it may be showing a save prompt. Answer it there, or force-stop it.", nil)
             }
             if report.skipForceRequested {
+                // Judged by the app itself. Some other process closing later
+                // (a worker, a helper) says nothing about a quit request; and
+                // once the app that accepted one has gone, no prompt is left.
+                let appQuit = report.quitAcceptedPID.map { !report.survivorPIDs.contains($0) } ?? false
                 return ("\(running) \(verb) still running.",
-                        "It may be waiting on you, such as a save prompt; force-stop only if you are sure.")
+                        appQuit ? "The app has quit. Check again in a moment, or force-stop what is left if you are sure."
+                                : "It may be waiting on you, such as a save prompt; force-stop only if you are sure.")
             }
             guard !report.forcedPIDs.isEmpty else {
                 return ("\(running) \(verb) still running.", "Open a new preview to force-stop what is left.")
@@ -119,7 +128,7 @@ public struct KillOutcomeNarrator: Sendable {
             facts.append("Kept running after \(report.displayName) stopped: \(Self.names(keptRunning)).")
         }
         if !report.leftRunning.isEmpty {
-            facts.append("Left running (now orphaned): \(Self.names(report.leftRunning)).")
+            facts.append("\(Self.leftRunningPrefix) \(Self.names(report.leftRunning)).")
         }
         if report.forkStorm {
             facts.append("It kept starting new processes; Ghost froze and stopped \(report.frozenCount) of them. Check that nothing starts it again.")

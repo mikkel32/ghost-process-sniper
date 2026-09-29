@@ -30,8 +30,10 @@ struct FamilyEvidenceScorer: Sendable {
         let leakRatio = leakVelocity / max(settings.leakVelocityMegabytesPerMinute, 1)
         let childFanout = max(0, members.count - 6)
         // Only copies started independently count; a worker pool inside one
-        // family is how the tool works, not a duplicate.
-        let copies = duplicateCluster.flatMap { $0.countsAsIndependentCopies ? $0 : nil }
+        // family is how the tool works, not a duplicate. And only ones whose
+        // stopping gives something back: idle 2 MB leftovers stay listed on
+        // the Duplicates page but are not evidence about any family.
+        let copies = duplicateCluster.flatMap { $0.countsAsIndependentCopies && $0.copiesMatter ? $0 : nil }
         let duplicateImpact = copies.map { min(12, Double($0.independentRootCount - 1) * 4) } ?? 0
         let hardwareImpact = min(24, hardwareSignals.reduce(0) { $0 + $1.impact })
         let ageMinutes = max(0, now.timeIntervalSince(Date(timeIntervalSince1970: TimeInterval(root.identity.startTimeSeconds))) / 60)
@@ -84,7 +86,11 @@ struct FamilyEvidenceScorer: Sendable {
                 detail: "\(RadarFormat.fixed0(leakVelocity)) MB/min is \(RadarFormat.fixed1(leakRatio))x the " +
                     "\(RadarFormat.fixed0(settings.leakVelocityMegabytesPerMinute)) MB/min limit",
                 impact: leakImpact,
-                level: componentLevel(leakRatio, critical: 1.6)
+                // A launch allocates fast while it warms up: the climb is shown, but
+                // it is not a leak (Leaks, "Sustained memory growth", a culprit) until grace is over.
+                level: StartupGrace.isStarting(root: root, now: now)
+                    ? min(componentLevel(leakRatio, critical: 1.6), .watch)
+                    : componentLevel(leakRatio, critical: 1.6)
             ),
             GhostScoreComponent(
                 slot: "relevance",
@@ -223,7 +229,8 @@ struct FamilyEvidenceScorer: Sendable {
             leakRatio: leakRatio,
             trend: trend,
             hardwareLevel: hardwareLevel,
-            cpuBehavior: cpuBehavior
+            cpuBehavior: cpuBehavior,
+            isStarting: StartupGrace.isStarting(root: root, now: now)
         )
         if let copies, heat.level == .quiet {
             heat = GhostHeat(

@@ -16,12 +16,14 @@ struct PopoverView: View {
     let onOpenSettings: () -> Void
     let onQuit: () -> Void
     var onOpenSecurity: () -> Void = {}
+    var onOpenEnergy: () -> Void = {}
     var refreshesOnAppear = true
 
     var body: some View {
         VStack(spacing: 12) {
             PopoverVerdictBar(monitor: monitor)
             PopoverSecurityRow(monitor: monitor, onOpen: onOpenSecurity)
+            PopoverEnergyRow(monitor: monitor, onOpen: onOpenEnergy)
             PopoverStoreWarning(monitor: monitor)
             PopoverCulprits(monitor: monitor, quickStops: quickStops, onOpenFamily: onOpenFamily, onStop: onStop)
             PopoverVitals(monitor: monitor)
@@ -52,7 +54,7 @@ private struct PopoverSecurityRow: View {
 
     var body: some View {
         let report = monitor.sentinel
-        let finding = report.findings.first { $0.isRunning && $0.severity >= .suspicious }
+        let finding = report.findings.first { $0.isRunning && $0.severity >= .suspicious } ?? report.latestExitedDangerous
         let item = report.flaggedLaunchItems.first
         if finding != nil || item != nil {
             let severity = finding?.severity ?? item?.severity ?? .suspicious
@@ -67,7 +69,8 @@ private struct PopoverSecurityRow: View {
                         Text(finding?.headline ?? "Startup item: \(item?.label ?? "")")
                             .font(.callout.weight(.semibold))
                             .lineLimit(1)
-                        Text(report.attentionCount > 1 ? "\(report.attentionCount) things need a look" : "Security needs a look")
+                        Text(report.attentionCount > 1 ? "\(report.attentionCount) things need a look"
+                             : finding?.isRunning == false ? "A dangerous command ran and has already exited" : "Security needs a look")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -197,12 +200,16 @@ private struct PopoverCulprits: View {
     var body: some View {
         let compact = monitor.consoleSnapshot.compact
         let risk = Array(compact.topRiskRows.prefix(3))
-        let warnings = Array(compact.warmingRows.prefix(2))
+        // Warming rows list families with something against them first; a
+        // family that is only big is watched, and is not an early warning.
+        let leading = compact.warmingRows.prefix(2)
+        let hasEarlyWarning = leading.first?.isWatchedForSizeOnly == false
+        let warnings = hasEarlyWarning ? leading.filter { !$0.isWatchedForSizeOnly } : Array(leading)
         VStack(alignment: .leading, spacing: 6) {
             if !risk.isEmpty {
                 rows(risk, showsStopButton: true)
             } else if !warnings.isEmpty {
-                Text("EARLY WARNINGS")
+                Text(hasEarlyWarning ? "EARLY WARNINGS" : "WATCHING")
                     .font(.caption2.weight(.bold))
                     .tracking(0.6)
                     .foregroundStyle(.secondary)
@@ -243,13 +250,13 @@ private struct PopoverCulprits: View {
                     }
                     Menu {
                         FamilySnoozeMenu { minutes in
-                            Task { await monitor.snooze(signatureID: row.id, minutes: minutes) }
+                            Task { await monitor.snooze(signatureID: row.id, name: row.title, minutes: minutes) }
                         }
                     } label: {
                         Label("Snooze", systemImage: "moon")
                     }
                     Button {
-                        Task { await monitor.ignore(signatureID: row.id) }
+                        Task { await monitor.ignore(signatureID: row.id, name: row.title) }
                     } label: {
                         Label("Ignore Family", systemImage: "eye.slash")
                     }
@@ -351,7 +358,7 @@ private struct PopoverVitals: View {
     let monitor: ProcessMonitor
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
             PopoverThermalReadings(monitor: monitor)
             Spacer(minLength: 4)
             PopoverPressureReading(monitor: monitor)
@@ -368,11 +375,24 @@ private struct PopoverThermalReadings: View {
 
     var body: some View {
         let thermals = monitor.thermals
-        HStack(spacing: 12) {
-            Label("CPU \(thermals.temperatureText(thermals.cpuCelsius))", systemImage: "cpu")
-            Label("GPU \(thermals.temperatureText(thermals.gpuCelsius))", systemImage: "thermometer.medium")
+        // macOS's own verdict, read with the temperatures so it is as current
+        // as they are (each sample); it needs no timer.
+        let now = Date()
+        let throttling = ThermalPressureReading.current(at: now).throttling(at: now)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Label("CPU \(thermals.temperatureText(thermals.cpuCelsius))", systemImage: "cpu")
+                Label("GPU \(thermals.temperatureText(thermals.gpuCelsius))", systemImage: "thermometer.medium")
+            }
+            .lineLimit(1)
+            // A second line, so the row cannot overflow the popover's width.
+            if let throttling {
+                Label(throttling.label, systemImage: "thermometer.high")
+                    .foregroundStyle(throttling.isCritical ? Color.red : Color.orange)
+                    .lineLimit(1)
+                    .help(throttling.detail)
+            }
         }
-        .lineLimit(1)
     }
 }
 

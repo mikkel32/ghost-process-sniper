@@ -2,16 +2,6 @@ import AppKit
 import GhostProcessSniperCore
 import SwiftUI
 
-/// Programs the user vouched for, kept across launches.
-enum SentinelPreferences {
-    private static let trustedKey = "Sentinel.trustedPaths"
-
-    static var trustedPaths: Set<String> {
-        get { Set(UserDefaults.standard.stringArray(forKey: trustedKey) ?? []) }
-        set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: trustedKey) }
-    }
-}
-
 /// The Security page: live findings, the privacy sensors and every new
 /// process, newest first. It observes only the Sentinel report, which is
 /// republished only when its content changes.
@@ -29,6 +19,7 @@ struct SentinelConsoleView: View {
                 SentinelSensorStrip(sensors: report.sensors)
                 findings
                 SentinelStartupItems(items: report.launchItems)
+                SentinelTrustedList(entries: report.trusted) { session.monitor.revokeSentinelTrust($0.id) }
                 SentinelLaunchFeed(launches: report.launches, perMinute: report.launchesLastMinute) { event in
                     focusedLaunch = event
                 }
@@ -94,12 +85,15 @@ struct SentinelConsoleView: View {
                 session.toast = RadarToast(message: "Finding copied", systemImage: "doc.on.doc")
             },
             trust: { finding in
-                var trusted = SentinelPreferences.trustedPaths
-                trusted.insert(finding.executablePath)
-                SentinelPreferences.trustedPaths = trusted
-                session.monitor.setSentinelTrustedPaths(trusted)
-                session.toast = RadarToast(message: "Trusted \(URL(fileURLWithPath: finding.executablePath).lastPathComponent)",
-                                           systemImage: "checkmark.shield")
+                Task {
+                    guard let entry = await session.monitor.trustSentinelFinding(finding.id) else {
+                        // The finding expired between the card being drawn and the click.
+                        session.toast = RadarToast(message: "Nothing to trust here; the finding has expired",
+                                                   systemImage: "questionmark.circle")
+                        return
+                    }
+                    session.toast = RadarToast(message: "Trusted: \(entry.scope)", systemImage: "checkmark.shield")
+                }
             },
             dismiss: { finding in
                 session.monitor.dismissSentinelFinding(finding.id)
@@ -145,12 +139,18 @@ struct SentinelHero: View {
     let report: SentinelReport
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var severity: SentinelSeverity? { report.highestSeverity }
+    private var severity: SentinelSeverity? { report.displaySeverity }
     private var tint: Color { severity.map(SentinelStyle.color(for:)) ?? .green }
 
     private var title: String {
         let active = report.findings.filter { $0.isRunning && $0.severity >= .suspicious }
         let startup = report.flaggedLaunchItems.count
+        let exited = report.exitedDangerousCount
+        if active.isEmpty, exited > 0 {
+            // Over already, but it ran: the card below says what it was.
+            return exited == 1 ? "A dangerous command ran and has already exited"
+                : "\(exited) dangerous commands ran and have already exited"
+        }
         if active.isEmpty, startup > 0 {
             return startup == 1 ? "1 startup item to review" : "\(startup) startup items to review"
         }
@@ -233,7 +233,7 @@ struct SentinelSensorStrip: View {
             tile(
                 title: "Microphone",
                 systemImage: sensors.microphoneActive ? "mic.fill" : "mic.slash",
-                active: sensors.microphoneActive,
+                active: sensors.microphoneNeedsAttention,
                 detail: microphoneDetail
             )
             tile(
@@ -249,6 +249,8 @@ struct SentinelSensorStrip: View {
 
     private var microphoneDetail: String {
         guard sensors.available else { return "Checking…" }
+        // Only Siri, holding the microphone open until it hears its wake phrase: the tile stays calm.
+        if sensors.microphoneIsPassive { return "Siri is waiting for \u{201C}Hey Siri\u{201D}" }
         if !sensors.microphoneUsers.isEmpty {
             return "In use by " + sensors.microphoneUsers.map(\.name).joined(separator: ", ")
         }
@@ -330,15 +332,13 @@ struct SidebarSecurityDestination: View {
 
     var body: some View {
         let report = session.monitor.sentinel
-        let severity = report.highestSeverity
-        let active = report.attentionCount
+        let severity = report.displaySeverity
         let isSelected = session.state.focusedSelection == .security
         Button { session.focus(.security) } label: {
             SidebarDestinationRow(
                 title: "Security",
-                subtitle: active > 0
-                    ? (active == 1 ? "1 process needs a look" : "\(active) processes need a look")
-                    : (report.watchedAppNames.isEmpty ? "Watching every new process" : "Watching \(report.watchedAppNames.count) apps live"),
+                subtitle: report.attentionLine
+                    ?? (report.watchedAppNames.isEmpty ? "Watching every new process" : "Watching \(report.watchedAppNames.count) apps live"),
                 systemImage: (severity ?? .info) >= .suspicious ? "exclamationmark.shield.fill" : "checkmark.shield",
                 color: (severity ?? .info) >= .suspicious ? SentinelStyle.color(for: severity ?? .info) : RadarTheme.brand,
                 isSelected: isSelected
@@ -362,7 +362,39 @@ struct SentinelOverviewBanner: View {
         let report = session.monitor.sentinel
         let live = report.findings.filter { $0.isRunning && $0.severity >= .suspicious }
         ZStack {
-            if let top = live.first {
+            if live.isEmpty, let gone = report.latestExitedDangerous {
+                // Over already, but it ran: the page below says what it did.
+                let tint = SentinelStyle.color(for: .dangerous)
+                Button { session.focus(.security) } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.shield.fill")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(tint.gradient)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("SECURITY · A DANGEROUS COMMAND RAN")
+                                .font(.system(size: 9, weight: .black))
+                                .tracking(1.1)
+                                .foregroundStyle(tint)
+                            Text(gone.headline)
+                                .font(.headline)
+                                .lineLimit(1)
+                            Text("It had already exited when Ghost caught it. Review what it did.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        Text("Review")
+                            .font(.callout.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(tint.opacity(0.16), in: Capsule())
+                    }
+                    .padding(14)
+                    .radarSurface(tint: tint, cornerRadius: 16)
+                }
+                .buttonStyle(RadarCardButtonStyle(tint: tint))
+            } else if let top = live.first {
                 let tint = SentinelStyle.color(for: top.severity)
                 Button { session.focus(.security) } label: {
                     HStack(spacing: 12) {

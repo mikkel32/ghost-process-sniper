@@ -14,6 +14,9 @@ enum RadarStoreSchema {
     /// relearning.
     static let baselineStatisticsVersion: Int32 = 5
 
+    /// The version that adds each day's energy per app and job.
+    static let energyHistoryVersion: Int32 = 6
+
     /// Append new versions; never edit a version that has shipped.
     static let migrations = [
         // Version 1 is the schema from before versioning. Its statements are
@@ -64,6 +67,26 @@ enum RadarStoreSchema {
                 SQLiteAddedColumn(table: "baselines", column: "cpu_variance", definition: "REAL NOT NULL DEFAULT 0"),
                 SQLiteAddedColumn(table: "baselines", column: "observed_seconds", definition: "REAL NOT NULL DEFAULT 0"),
                 SQLiteAddedColumn(table: "baselines", column: "session_count", definition: "INTEGER NOT NULL DEFAULT 1")
+            ]
+        ),
+        // One row per local day and app or job, added to every few minutes.
+        SQLiteMigration(
+            version: energyHistoryVersion,
+            statements: [
+                """
+                CREATE TABLE IF NOT EXISTS energy_days(
+                    day TEXT NOT NULL,
+                    group_key TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    application_path TEXT,
+                    joules REAL NOT NULL DEFAULT 0,
+                    wakeups REAL NOT NULL DEFAULT 0,
+                    disk_bytes REAL NOT NULL DEFAULT 0,
+                    cpu_seconds REAL NOT NULL DEFAULT 0,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY(day, group_key)
+                ) WITHOUT ROWID
+                """
             ]
         )
     ]
@@ -433,28 +456,30 @@ enum RadarStoreQueries {
     static let refreshIncident = """
         UPDATE incidents
         SET level = ?, max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
-            cpu_percent = ?, leak_velocity = ?, last_seen_at = ?
+            cpu_percent = MAX(cpu_percent, ?), leak_velocity = MAX(leak_velocity, ?), last_seen_at = ?
         WHERE id = ?
         """
 
     static let escalateIncident = """
         UPDATE incidents
         SET level = ?, max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
-            cpu_percent = ?, leak_velocity = ?, last_seen_at = ?, reasons_json = ?
+            cpu_percent = MAX(cpu_percent, ?), leak_velocity = MAX(leak_velocity, ?), last_seen_at = ?, reasons_json = ?
         WHERE id = ?
         """
 
     static let reopenIncident = """
         UPDATE incidents
         SET resolved_at = NULL, occurrence_count = occurrence_count + 1, last_seen_at = ?, level = ?,
-            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?), cpu_percent = ?, leak_velocity = ?
+            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
+            cpu_percent = MAX(cpu_percent, ?), leak_velocity = MAX(leak_velocity, ?)
         WHERE id = ?
         """
 
     static let closeIncident = """
         UPDATE incidents
         SET resolved_at = ?, last_seen_at = MAX(last_seen_at, ?),
-            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?)
+            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
+            cpu_percent = MAX(cpu_percent, ?), leak_velocity = MAX(leak_velocity, ?)
         WHERE id = ?
         """
 

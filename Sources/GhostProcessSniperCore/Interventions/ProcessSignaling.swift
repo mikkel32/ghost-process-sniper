@@ -135,9 +135,17 @@ public struct DarwinProcessSignaler: ProcessSignaling {
     }
 
     public func requestQuit(identity: ProcessIdentity) async -> Bool {
-        switch Self.check(identity) {
-        case .gone, .recycled: false
-        case .same, .unknown: await requestQuit(pid: identity.pid)
+        guard identity.pid > 1, identity.pid != getpid() else { return false }
+        return await MainActor.run {
+            // Checked on the main actor, next to the quit: checking before the
+            // hop left a busy main thread's delay between the check and it.
+            switch Self.check(identity) {
+            case .gone, .recycled:
+                return false
+            case .same, .unknown:
+                guard let app = NSRunningApplication(processIdentifier: identity.pid), !app.isTerminated else { return false }
+                return app.terminate()
+            }
         }
     }
 

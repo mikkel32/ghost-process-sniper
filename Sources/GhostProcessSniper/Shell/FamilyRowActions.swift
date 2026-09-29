@@ -82,7 +82,10 @@ private struct FamilyRowActionsModifier: ViewModifier {
                 Label("Copy Command Line", systemImage: "terminal")
             }
             Button {
-                session.copyToPasteboard("\(row.title) — \(row.subtitle)\n\(row.metricText)", toast: "Copied \(row.title) summary")
+                // The numbers as they are now: a row that skips redraws may hold older ones.
+                let current = session.compactSnapshot.allRows.first { $0.id == familyKey } ?? row
+                session.copyToPasteboard("\(current.title) — \(current.subtitle)\n\(current.metricText)",
+                                         toast: "Copied \(current.title) summary")
             } label: {
                 Label("Copy Summary", systemImage: "doc.on.clipboard")
             }

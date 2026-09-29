@@ -30,30 +30,6 @@ struct OverviewAnalyticsSection: View {
     }
 }
 
-/// Every tracked family, riskiest first — never the All Processes search,
-/// filter or sort — straight from the content-gated snapshot.
-private struct LiveRadarCard: View {
-    let session: RadarConsoleSession
-
-    var body: some View {
-        CompactRadarSection(
-            title: "Live Radar",
-            subtitle: "closer to center = higher risk",
-            systemImage: "dot.radiowaves.left.and.right",
-            tip: RadarTip(
-                title: "Live Radar",
-                message: "Every blip is a tracked process family. Distance from the center encodes risk — a blip drifting inward is getting worse. Each family keeps a fixed bearing, so you can watch the same blip over time. Click a blip to open its detail, right-click to snooze, ignore, or stop it.",
-                shortcut: "⌘1 Overview"
-            ),
-            accent: RadarTheme.accent(for: session.commandCenter.level)
-        ) {
-            RadarSweepView(rows: Array(session.compactSnapshot.allRows.prefix(24)), session: session)
-                .frame(height: 255)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
 private struct MemoryShareCard: View {
     let session: RadarConsoleSession
     let shares: [MemoryShare]
@@ -86,12 +62,12 @@ private struct RecentIncidentsCard: View {
         if !rows.isEmpty {
             CompactRadarSection(
                 title: "Recent Incidents",
-                subtitle: "\(session.monitor.incidents.count) total",
+                subtitle: IncidentListScope.published(total: session.monitor.incidents.count).overviewText,
                 systemImage: "clock.badge.exclamationmark",
                 tip: RadarTip(
                     title: "Incidents",
                     message: "Every time a family crosses into hot, an incident is recorded with its peak score, metrics, and timeline — a memory of what misbehaved even after it calms down. Click through for the full log.",
-                    shortcut: "⌘5 Incidents"
+                    shortcut: "⌘6 Incidents"
                 ),
                 accent: .pink
             ) {

@@ -184,10 +184,11 @@ public struct RadarScheduler: Sendable {
         return Set(picked)
     }
 
-    /// Seconds until the next tick. Someone watching gets about one second
-    /// (stretching when nobody has touched the Mac for a while);
-    /// hidden, the radar slows with calm, battery, Low Power Mode, heat and
-    /// its own cost. Timer tolerance, not jitter, spreads hidden wake-ups.
+    /// Seconds until the next tick. Someone watching gets about one second,
+    /// or the Refresh slider's pace with adaptive scanning off (stretching
+    /// when nobody has touched the Mac for a while); hidden, the radar slows
+    /// with calm, battery, Low Power Mode, heat and its own cost, whatever the
+    /// slider says. Timer tolerance, not jitter, spreads hidden wake-ups.
     public mutating func nextInterval(settings: ThresholdSettings, context: RadarSchedulingContext) -> TimeInterval {
         let mode = settings.resolvedPerformanceMode(context)
         effectivePerformanceMode = mode
@@ -210,7 +211,11 @@ public struct RadarScheduler: Sendable {
     ) -> TimeInterval {
         let level = context.summaryLevel
         if context.uiVisible {
-            let watched: TimeInterval = level >= .hot ? 0.75 : (mode == .realtime ? 1 : max(1, settings.refreshInterval))
+            // Adaptive scanning picks Realtime, which is a second; with it
+            // off, the Refresh slider sets the pace in every mode, Realtime
+            // included. A hot family still gets the fast pace either way.
+            let pace = mode == .realtime && settings.adaptivePerformance ? 1 : settings.watchedInterval
+            let watched: TimeInterval = level >= .hot ? 0.75 : pace
             return watched * unattendedMultiplier(idleSeconds: context.userIdleSeconds)
         }
         if context.power.lowPowerMode {
@@ -270,6 +275,17 @@ public struct RadarScheduler: Sendable {
         }
         hotSince = next
         return anyHot && allSettled
+    }
+
+    /// The level that sets the scanning pace. A family with nothing against
+    /// it but its size does not speed scans up: a 2.5 GB chat app open all
+    /// day kept the hidden radar at a hot family's one-second pace.
+    static func schedulingLevel(_ families: [ProcessFamily]) -> GhostLevel {
+        families.reduce(GhostLevel.quiet) { level, family in
+            guard !family.hasOnlySizeAgainstIt else { return level }
+            let escalates = family.forecastIsCredibleEscalation
+            return max(level, max(family.score.level, escalates ? family.forecast.state.level : .quiet))
+        }
     }
 
     public var currentPower: PowerContext {

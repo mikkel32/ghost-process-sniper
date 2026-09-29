@@ -173,11 +173,10 @@ extension RadarConsoleSession {
             if let family = families.first { snooze(familyKey: family.key, name: family.name, minutes: minutes) }
             return
         }
-        let monitor = monitor
         Task {
-            for family in families { await monitor.snooze(signatureID: family.key, minutes: minutes) }
+            for family in families { await monitor.snooze(signatureID: family.key, name: family.name, minutes: minutes) }
+            showToast("Snoozed \(families.count) families for \(Self.durationText(minutes: minutes))", systemImage: "moon")
         }
-        showToast("Snoozed \(families.count) families for \(Self.durationText(minutes: minutes))", systemImage: "moon")
     }
 
     func ignore(families: [(key: String, name: String)]) {
@@ -185,10 +184,9 @@ extension RadarConsoleSession {
             if let family = families.first { ignore(familyKey: family.key, name: family.name) }
             return
         }
-        let monitor = monitor
         Task {
-            for family in families { await monitor.ignore(signatureID: family.key) }
+            for family in families { await monitor.ignore(signatureID: family.key, name: family.name) }
+            showToast("Ignoring \(families.count) families \u{2014} undo under Rules", systemImage: "eye.slash")
         }
-        showToast("Ignoring \(families.count) families \u{2014} undo under Rules", systemImage: "eye.slash")
     }
 }

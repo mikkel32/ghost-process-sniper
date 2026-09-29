@@ -46,10 +46,10 @@ struct NativeProcessProbeSource: ProcessProbeSource {
     }
 
     func usage(_ pid: pid_t) -> ProbeUsage? {
-        var info = rusage_info_v4()
+        var info = rusage_info_v6()
         let result = withUnsafeMutablePointer(to: &info) { pointer in
             pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { rebound in
-                proc_pid_rusage(pid, RUSAGE_INFO_V4, rebound)
+                proc_pid_rusage(pid, RUSAGE_INFO_V6, rebound)
             }
         }
         guard result == 0 else { return nil }
@@ -57,8 +57,9 @@ struct NativeProcessProbeSource: ProcessProbeSource {
             cpuSeconds: ProcessCPUTime.seconds(user: info.ri_user_time, system: info.ri_system_time),
             physicalFootprintBytes: info.ri_phys_footprint,
             residentBytes: info.ri_resident_size,
-            wakeups: info.ri_pkg_idle_wkups &+ info.ri_interrupt_wkups,
+            wakeups: info.ri_interrupt_wkups,
             diskBytesWritten: info.ri_diskio_byteswritten,
+            energyNanojoules: info.ri_energy_nj,
             processStartAbsoluteTime: info.ri_proc_start_abstime
         )
     }

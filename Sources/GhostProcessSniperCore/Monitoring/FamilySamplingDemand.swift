@@ -54,8 +54,10 @@ struct FamilySamplingDemand: Sendable {
         }
         for family in families {
             let escalates = family.forecastIsCredibleEscalation
-            highestLevel = max(highestLevel,
-                max(family.score.level, escalates ? family.forecast.state.level : .quiet))
+            if !family.hasOnlySizeAgainstIt {
+                highestLevel = max(highestLevel,
+                    max(family.score.level, escalates ? family.forecast.state.level : .quiet))
+            }
             let isHot = family.score.level >= .hot || escalates ||
                 family.alertState.kind == .new || family.alertState.kind == .recurring
             let isFocused = focusedKeys.contains(family.signature.id) ||

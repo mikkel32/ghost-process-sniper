@@ -112,6 +112,49 @@ final class RadarSchedulerTests: XCTestCase {
         XCTAssertEqual(cadence(.quiet, power: lowPower, settings: realtime).interval, 6, "Low Power Mode still wins hidden")
     }
 
+    /// Adaptive scanning off: the explicit mode and the Refresh slider decide.
+    private func manual(_ mode: RadarPerformanceMode, refresh: TimeInterval) -> ThresholdSettings {
+        var settings = ThresholdSettings.smart
+        settings.adaptivePerformance = false
+        settings.performanceMode = mode
+        settings.refreshInterval = refresh
+        return settings
+    }
+
+    func testRefreshSliderSetsTheWatchedPaceInEveryMode() {
+        for mode in RadarPerformanceMode.allCases {
+            for seconds in stride(from: 1.0, through: 5.0, by: 0.5) {
+                XCTAssertEqual(cadence(.quiet, visible: true, settings: manual(mode, refresh: seconds)).interval, seconds,
+                               "\(mode) at \(seconds) s")
+            }
+        }
+    }
+
+    func testRefreshSliderLeavesHotFamiliesTheFastPaceAndAdaptiveScanningItsOwn() {
+        for mode in RadarPerformanceMode.allCases {
+            XCTAssertEqual(cadence(.hot, visible: true, settings: manual(mode, refresh: 5)).interval, 0.75, "\(mode)")
+        }
+        var adaptive = ThresholdSettings.smart
+        adaptive.refreshInterval = 5
+        XCTAssertEqual(cadence(.quiet, visible: true, settings: adaptive).interval, 1,
+                       "with adaptive scanning on the slider is hidden and the watched pace stays a second")
+    }
+
+    func testRefreshSliderDoesNotSlowTheBackgroundCadence() {
+        XCTAssertEqual(cadence(.quiet, settings: manual(.balanced, refresh: 5)).interval, 3.5)
+        XCTAssertEqual(cadence(.hot, settings: manual(.balanced, refresh: 5)).interval, 1)
+        XCTAssertEqual(cadence(.hot, settings: manual(.realtime, refresh: 5)).interval, 0.75)
+    }
+
+    func testRefreshSliderOffersOnlyPacesTheSchedulerKeeps() {
+        XCTAssertEqual(ThresholdSettings.refreshIntervalRange, 1...5)
+        XCTAssertEqual(manual(.balanced, refresh: 0.5).watchedInterval, 1, "settings saved when the slider still offered half a second")
+        XCTAssertEqual(manual(.balanced, refresh: 3).watchedInterval, 3)
+        XCTAssertEqual(manual(.balanced, refresh: 9).watchedInterval, 5)
+        XCTAssertEqual(manual(.balanced, refresh: .nan).watchedInterval, 1)
+        XCTAssertEqual(cadence(.quiet, visible: true, settings: manual(.realtime, refresh: 0.5)).interval, 1)
+    }
+
     func testSelfThrottleTargetsTwiceTheIdleBudgetOnlyWhileHidden() {
         XCTAssertEqual(RadarScheduler.selfThrottled(3.5, selfAverageCPUPercent: 0.4, targetIdleCPUPercent: 0.25, uiVisible: false), 3.5)
         XCTAssertEqual(RadarScheduler.selfThrottled(2, selfAverageCPUPercent: 1, targetIdleCPUPercent: 0.25, uiVisible: false), 4)

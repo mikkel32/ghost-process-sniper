@@ -17,6 +17,7 @@ struct RadarConsoleSidebar: View {
                 destination("Overview", subtitle: "Your Mac at a glance", image: "square.grid.2x2", selection: .overview)
                 destination("All Processes", subtitle: "Search and explore every family", image: "list.bullet.rectangle", selection: .processes)
                 SidebarSecurityDestination(session: session, namespace: destinationNamespace)
+                SidebarEnergyDestination(session: session, namespace: destinationNamespace)
             }
             .padding(10)
 
@@ -176,33 +177,34 @@ struct RadarConsoleSidebar: View {
     }
 }
 
-/// Badges read only the content-gated console snapshot.
+/// Badges read only the content-gated console snapshot. One row of three
+/// tiles, so "Duplicates" is not clipped and the family list keeps the height.
 private struct SidebarToolGrid: View {
     let session: RadarConsoleSession
 
     var body: some View {
         let snapshot = session.monitor.consoleSnapshot
         let activeIncidents = snapshot.activeIncidentCount
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+        HStack(spacing: 6) {
             SidebarToolButton(
                 title: "Duplicates",
                 systemImage: "square.on.square",
                 color: .orange,
-                badge: "\(snapshot.duplicateRows.count)",
+                count: snapshot.duplicateRows.count,
                 isSelected: session.state.focusedSelection == .duplicates
             ) { session.focus(.duplicates) }
             SidebarToolButton(
                 title: "Incidents",
                 systemImage: "waveform.path.ecg",
                 color: .pink,
-                badge: "\(activeIncidents)",
+                count: activeIncidents,
                 isSelected: session.state.focusedSelection == .incidents
             ) { session.focus(.incidents) }
             SidebarToolButton(
                 title: "Rules",
                 systemImage: "slider.horizontal.3",
                 color: .purple,
-                badge: nil,
+                count: nil,
                 isSelected: session.state.focusedSelection == .rules
             ) { session.focus(.rules) }
         }
@@ -216,40 +218,46 @@ private struct SidebarToolButton: View {
     let title: String
     let systemImage: String
     let color: Color
-    let badge: String?
+    /// The badge shows it from one up; help and VoiceOver still say zero.
+    let count: Int?
     let isSelected: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            VStack(spacing: 3) {
                 Image(systemName: systemImage)
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(color)
-                    .frame(width: 16)
+                    .frame(height: 18)
                     .accessibilityHidden(true)
                 Text(title)
-                    .font(.callout.weight(.medium))
+                    .font(.caption2.weight(.medium))
                     .lineLimit(1)
-                Spacer(minLength: 0)
-                if let badge, badge != "0" {
+                    .minimumScaleFactor(0.85)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 4)
+            .background(isSelected ? color.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            // A corner overlay takes no width from the label.
+            .overlay(alignment: .topTrailing) {
+                if let badge = count.flatMap(RadarFormat.badge) {
                     Text(badge)
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(Color.primary.opacity(0.07), in: Capsule())
+                        .padding(2)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 30)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 5)
-            .background(isSelected ? color.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .help(badge.map { "\(title): \($0)" } ?? title)
-        .accessibilityLabel(badge.map { "\(title), \($0)" } ?? title)
+        .help(count.map { "\(title): \($0)" } ?? title)
+        .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
     }
 }
 
@@ -301,7 +309,7 @@ struct SidebarDestinationRow: View {
             Spacer(minLength: 4)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 10)
+        .padding(.vertical, 7)
     }
 }
 

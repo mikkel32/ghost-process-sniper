@@ -57,6 +57,8 @@ public enum SentinelSignalKind: String, Codable, Sendable, CaseIterable {
     case invalidSignature
     case downloadedExecutable
     case microphoneInUse
+    /// A program the user trusted, but the file there is no longer what was trusted.
+    case trustedProgramChanged
     case shortLived
 
     public var title: String {
@@ -82,6 +84,7 @@ public enum SentinelSignalKind: String, Codable, Sendable, CaseIterable {
         case .invalidSignature: "Signature does not match its code"
         case .downloadedExecutable: "Downloaded from the internet"
         case .microphoneInUse: "Using the microphone"
+        case .trustedProgramChanged: "Changed since you trusted it"
         case .shortLived: "Ran for under a second"
         }
     }
@@ -109,6 +112,7 @@ public enum SentinelSignalKind: String, Codable, Sendable, CaseIterable {
         case .invalidSignature: "xmark.seal"
         case .downloadedExecutable: "globe"
         case .microphoneInUse: "mic"
+        case .trustedProgramChanged: "exclamationmark.lock"
         case .shortLived: "bolt"
         }
     }
@@ -163,11 +167,14 @@ public struct CodeSigningSummary: Hashable, Codable, Sendable {
     public let authority: Authority
     public let teamIdentifier: String?
     public let signingIdentifier: String?
+    /// The code directory hash: one exact build, whoever signed it.
+    public let cdHash: String?
 
-    public init(authority: Authority, teamIdentifier: String?, signingIdentifier: String?) {
+    public init(authority: Authority, teamIdentifier: String?, signingIdentifier: String?, cdHash: String? = nil) {
         self.authority = authority
         self.teamIdentifier = teamIdentifier
         self.signingIdentifier = signingIdentifier
+        self.cdHash = cdHash
     }
 
     /// Apple, the Mac App Store or a Developer ID stands behind the code.
@@ -207,6 +214,8 @@ public struct SentinelFinding: Identifiable, Hashable, Sendable {
     public var downloadedFrom: [String]
     /// Established connections ("203.0.113.7:443"), read while it runs.
     public var connections: [String] = []
+    /// What its Trust item would trust; nil when nothing can be trusted safely.
+    public var trustOffer: SentinelTrustEntry?
 
     public init(
         identity: ProcessIdentity, name: String, executablePath: String, commandLine: String,
@@ -267,9 +276,10 @@ public struct LaunchEvent: Identifiable, Hashable, Sendable {
     public init(
         at: Date, identity: ProcessIdentity, name: String, executablePath: String, commandLine: String,
         lineage: [SentinelLineageNode], severity: SentinelSeverity, signalKinds: [SentinelSignalKind],
-        source: LaunchEventSource, isSystem: Bool, exitedAfter: TimeInterval? = nil
+        source: LaunchEventSource, isSystem: Bool, exitedAfter: TimeInterval? = nil, sequence: UInt64 = 0
     ) {
-        id = SentinelFinding.key(for: identity)
+        // An exec keeps the process's identity, so the sequence keeps each entry's ID unique.
+        id = SentinelFinding.key(for: identity) + "#\(sequence)"
         self.at = at
         self.identity = identity
         self.name = name
@@ -291,11 +301,15 @@ public struct LaunchEvent: Identifiable, Hashable, Sendable {
 public struct PrivacySensorUser: Hashable, Sendable, Identifiable {
     public let pid: Int32
     public let name: String
+    /// A system client that holds the microphone open only to wait for a wake
+    /// phrase ("Hey Siri"); nothing is recording while it does.
+    public let isPassive: Bool
     public var id: Int32 { pid }
 
-    public init(pid: Int32, name: String) {
+    public init(pid: Int32, name: String, isPassive: Bool = false) {
         self.pid = pid
         self.name = name
+        self.isPassive = isPassive
     }
 }
 
@@ -317,6 +331,17 @@ public struct PrivacySensorState: Hashable, Sendable {
         self.available = available
     }
 
+    /// Only system clients that wait for a wake phrase hold the microphone.
+    public var microphoneIsPassive: Bool {
+        microphoneActive && !microphoneUsers.isEmpty && microphoneUsers.allSatisfy(\.isPassive)
+    }
+
+    /// In use by something other than a passive listener, or by nothing macOS
+    /// names: the states worth an orange tile.
+    public var microphoneNeedsAttention: Bool {
+        microphoneActive && !microphoneIsPassive
+    }
+
     public static let unknown = PrivacySensorState()
 }
 
@@ -331,11 +356,13 @@ public struct SentinelReport: Sendable {
     public var watchedAppNames: [String]
     public var launchesLastMinute: Int
     public var dismissedCount: Int
+    /// Programs, scripts and commands the user vouched for.
+    public var trusted: [SentinelTrustEntry]
     public var revision: UInt64
 
     public init(findings: [SentinelFinding] = [], launches: [LaunchEvent] = [], launchItems: [LaunchItem] = [],
                 sensors: PrivacySensorState = .unknown, watchedAppNames: [String] = [], launchesLastMinute: Int = 0,
-                dismissedCount: Int = 0, revision: UInt64 = 0) {
+                dismissedCount: Int = 0, trusted: [SentinelTrustEntry] = [], revision: UInt64 = 0) {
         self.findings = findings
         self.launches = launches
         self.launchItems = launchItems
@@ -343,6 +370,7 @@ public struct SentinelReport: Sendable {
         self.watchedAppNames = watchedAppNames
         self.launchesLastMinute = launchesLastMinute
         self.dismissedCount = dismissedCount
+        self.trusted = trusted
         self.revision = revision
     }
 
@@ -356,6 +384,12 @@ public struct SentinelReport: Sendable {
         findings.filter { $0.isRunning && $0.severity >= .suspicious }.count
     }
 
+    /// Dangerous findings whose process already exited, still listed as history:
+    /// the one-shot commands the spawn watcher exists to catch.
+    public var exitedDangerousCount: Int {
+        findings.filter { !$0.isRunning && $0.severity == .dangerous }.count
+    }
+
     public var flaggedLaunchItems: [LaunchItem] {
         launchItems.filter { $0.severity >= .suspicious }
     }
@@ -363,6 +397,26 @@ public struct SentinelReport: Sendable {
     /// Running processes and startup items that deserve a look now.
     public var attentionCount: Int {
         activeFindingCount + flaggedLaunchItems.count
+    }
+
+    /// The level the page, the sidebar and the Overview show. `highestSeverity`
+    /// is what is running; a dangerous command that already exited is still
+    /// listed, and reading all-clear beside it would hide the one thing the
+    /// spawn watcher exists to catch.
+    public var displaySeverity: SentinelSeverity? {
+        exitedDangerousCount > 0 ? max(highestSeverity ?? .info, .dangerous) : highestSeverity
+    }
+
+    /// The newest dangerous command that has already exited.
+    public var latestExitedDangerous: SentinelFinding? {
+        findings.first { !$0.isRunning && $0.severity == .dangerous }
+    }
+
+    /// The sidebar's line when something needs a look, else nil.
+    public var attentionLine: String? {
+        if attentionCount > 0 { return attentionCount == 1 ? "1 process needs a look" : "\(attentionCount) processes need a look" }
+        let exited = exitedDangerousCount
+        return exited == 0 ? nil : exited == 1 ? "A dangerous command ran" : "\(exited) dangerous commands ran"
     }
 }
 

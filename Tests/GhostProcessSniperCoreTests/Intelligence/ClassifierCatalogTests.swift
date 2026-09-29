@@ -30,12 +30,20 @@ final class ClassifierCatalogTests: XCTestCase {
     private let rows: [Row] = [
         // Editors and IDE services.
         Row("Xcode", "\(xcode)/MacOS/Xcode", nil, .editorApp),
+        Row("Xcode", "/Applications/Xcode-beta.app/Contents/MacOS/Xcode", nil, .editorApp),
+        Row("Xcode", "/Applications/Xcode_26.1.app/Contents/MacOS/Xcode", nil, .editorApp),
+        Row("Xcode", "/Applications/Xcode-26.1.0.app/Contents/MacOS/Xcode", nil, .editorApp),
+        Row("Xcode", "/Applications/Xcode 26.app/Contents/MacOS/Xcode", nil, .editorApp),
         Row("Electron", "\(code)/MacOS/Electron", nil, .editorApp),
         Row("Cursor", "/Applications/Cursor.app/Contents/MacOS/Cursor", nil, .editorApp),
         Row("zed", "/Applications/Zed.app/Contents/MacOS/zed", nil, .editorApp),
         Row("idea", "/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea", nil, .editorApp),
         Row("SourceKitService", "\(xcode)/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/sourcekitd.framework/Versions/A/XPCServices/SourceKitService.xpc/Contents/MacOS/SourceKitService", "SourceKitService", .ideService),
         Row("fsnotifier", "/Applications/IntelliJ IDEA CE.app/Contents/bin/fsnotifier", nil, .ideService),
+        // A service inside any Xcode is an IDE service, judged by where it lives rather than by its name.
+        Row("DocumentationService", "\(xcode)/SharedFrameworks/DVTDocumentation.framework/Versions/A/XPCServices/DocumentationService.xpc/Contents/MacOS/DocumentationService", nil, .ideService),
+        Row("DocumentationService", "/Applications/Xcode-beta.app/Contents/SharedFrameworks/DVTDocumentation.framework/Versions/A/XPCServices/DocumentationService.xpc/Contents/MacOS/DocumentationService", nil, .ideService),
+        Row("DocumentationService", "/Applications/Xcode_26.1.app/Contents/SharedFrameworks/DVTDocumentation.framework/Versions/A/XPCServices/DocumentationService.xpc/Contents/MacOS/DocumentationService", nil, .ideService),
         Row("Code Helper (Plugin)", "\(code)/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)",
             "\(code)/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin) --type=utility", .electronApp),
         Row("Codex Helper", "/Applications/Codex.app/Contents/Frameworks/Codex Helper.app/Contents/MacOS/Codex Helper",
@@ -100,6 +108,8 @@ final class ClassifierCatalogTests: XCTestCase {
         Row("dotnet", "/usr/local/share/dotnet/dotnet", "dotnet watch run", .dotnetService),
         // Negatives: substring look-alikes and ordinary system work.
         Row("Safari", "/Applications/Safari.app/Contents/MacOS/Safari", nil, .unknownHeavy, dev: false),
+        Row("Xcodes", "/Applications/Xcodes.app/Contents/MacOS/Xcodes", nil, .unknownHeavy, dev: false),
+        Row("Zedify", "/Applications/Zedify.app/Contents/MacOS/Zedify", nil, .unknownHeavy, dev: false),
         Row("Invites", "/Applications/Invites.app/Contents/MacOS/Invites", nil, .unknownHeavy, dev: false),
         Row("Foo Agent", "/Library/Application Support/Foo/Foo.bundle/Contents/MacOS/Foo Agent", nil, .unknownHeavy, dev: false),
         Row("WindowServer", "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer", "WindowServer -daemon", .unknownHeavy, dev: false),
@@ -121,6 +131,20 @@ final class ClassifierCatalogTests: XCTestCase {
             XCTAssertEqual(classification.confidence >= 0.35, row.dev,
                            "\(row.name) confidence \(classification.confidence)", line: row.line)
         }
+    }
+
+    /// The bundle names Xcode installs go by: beta, versioned and renamed
+    /// copies sit beside the release. A name that goes on with a letter is
+    /// another app, such as the Xcodes version manager.
+    func testXcodeIsRecognisedByAnyBundleNameItGoesBy() {
+        for name in ["xcode", "xcode-beta", "xcode_26.1", "xcode 26", "xcode-26.1.0", "xcode.beta", "xcode26"] {
+            XCTAssertTrue(WorkloadCatalog.isXcodeBundle(name), name)
+        }
+        for name in ["xcodes", "xcodeproj-tools", "xcod", "xcoder", "zed", "code", ""] {
+            XCTAssertFalse(WorkloadCatalog.isXcodeBundle(name), name)
+        }
+        XCTAssertTrue(WorkloadCatalog.isEditorBundle("xcode-beta"))
+        XCTAssertFalse(WorkloadCatalog.isEditorBundle("zedify"), "short editor names match whole words only")
     }
 
     func testTraitsSayWhatTheWorkIsFor() {

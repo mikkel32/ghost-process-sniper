@@ -9,7 +9,7 @@ struct IncidentsConsoleView: View {
     /// The displayed row, then the full incident behind it for the timeline.
     private var selection: (row: IncidentRowViewModel, incident: RadarIncident)? {
         guard let tableSelection, let row = session.incidentRows.first(where: { $0.id == tableSelection }),
-              let incident = session.monitor.incidents.first(where: { $0.id == row.id }) else {
+              let incident = session.incident(id: row.id) else {
             return nil
         }
         return (row, incident)
@@ -22,7 +22,15 @@ struct IncidentsConsoleView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if session.incidentRows.isEmpty {
+            if session.incidentRows.isEmpty, session.isSearchingIncidentLog {
+                // The window found nothing, but the whole log has not answered yet.
+                ContentUnavailableView(
+                    "Searching Incidents",
+                    systemImage: "magnifyingglass",
+                    description: Text("Reading every recorded incident.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if session.incidentRows.isEmpty {
                 ContentUnavailableView(
                     hasQuery ? "No Matching Incidents" : "No Incidents",
                     systemImage: hasQuery ? "magnifyingglass" : "checkmark.circle",
@@ -59,14 +67,18 @@ struct IncidentsConsoleView: View {
             RadarPageHeader(
                 eyebrow: "Evidence Log",
                 title: "Incidents",
-                subtitle: "\(session.incidentRows.count) events shown",
+                subtitle: session.incidentScope.caption(
+                    shown: session.incidentRows.count,
+                    query: session.state.incidentQuery,
+                    isLoadingHistory: session.isSearchingIncidentLog
+                ),
                 systemImage: "waveform.path.ecg",
                 accent: .pink
             ) {
                 InfoTip(tip: RadarTip(
                     title: "Incidents",
                     message: "The radar's memory: every time a family crosses into hot, an incident is recorded with its peak score, metrics, evidence, and timeline. Active incidents are still misbehaving; resolved ones calmed down on their own or after intervention.",
-                    shortcut: "⌘5"
+                    shortcut: "⌘6"
                 ))
                 Button {
                     session.copyReport()
@@ -98,21 +110,22 @@ struct IncidentsConsoleView: View {
         Table(session.incidentRows, selection: $tableSelection, sortOrder: sortOrder) {
             TableColumn("Family", value: \.familyName) { row in
                 HStack(spacing: 6) {
+                    // The name comes first: a capsule beside it cut "Safari" to "Saf…".
                     Label(row.familyName, systemImage: RadarStyle.icon(for: row.level))
                         .foregroundStyle(RadarStyle.color(for: row.level))
                         .lineLimit(1)
+                        .layoutPriority(1)
                     if row.liveFamilyKey != nil {
-                        Text("Running")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.green)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1)
-                            .background(Color.green.opacity(0.12), in: Capsule())
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 7, height: 7)
+                            .help("Running now")
+                            .accessibilityLabel("Running now")
                     }
                 }
-                .help("\(row.leakText)\n\(row.timeRangeText)")
+                .help("Peak growth: \(row.leakText)\n\(row.timeRangeText)")
             }
-            .width(min: 160, ideal: 220)
+            .width(min: 170, ideal: 230)
 
             TableColumn("State") { row in
                 Text(row.stateText)
@@ -207,16 +220,17 @@ struct IncidentsConsoleView: View {
                         }
                         HStack(spacing: 8) {
                             RadarChip(title: "Score", value: "\(Int(incident.maxScore.rounded()))", systemImage: "gauge.with.dots.needle.67percent", level: incident.level)
-                            RadarChip(title: "Duration", value: incidentDuration(incident), systemImage: "clock")
+                            RadarChip(title: "Duration", value: row.durationText, systemImage: "clock")
                         }
                         FlowTags(title: "Why", items: incident.reasons)
                     }
 
-                    RadarSection(title: "Metrics") {
+                    // Every value is the episode's highest, not the last sample.
+                    RadarSection(title: "Metrics", subtitle: "Peak values") {
                         HStack(spacing: 8) {
-                            RadarChip(title: "Memory", value: RadarFormat.bytes(incident.memoryBytes), systemImage: "memorychip", level: incident.level)
-                            RadarChip(title: "CPU", value: "\(Int(incident.cpuPercent.rounded()))%", systemImage: "cpu", level: incident.level)
-                            RadarChip(title: "Leak", value: "\(Int(incident.leakVelocityMegabytesPerMinute.rounded())) MB/min", systemImage: "chart.line.uptrend.xyaxis", level: incident.leakVelocityMegabytesPerMinute > 0 ? .watch : .quiet)
+                            RadarChip(title: "Memory", value: row.memoryText, systemImage: "memorychip", level: incident.level)
+                            RadarChip(title: "CPU", value: row.cpuText, systemImage: "cpu", level: incident.level)
+                            RadarChip(title: "Growth", value: row.leakText, systemImage: "chart.line.uptrend.xyaxis", level: IncidentRowViewModel.hasGrowth(incident.leakVelocityMegabytesPerMinute) ? .watch : .quiet)
                         }
                     }
 
@@ -225,6 +239,19 @@ struct IncidentsConsoleView: View {
                             detailLine("Started", incident.startedAt.formatted(date: .abbreviated, time: .shortened))
                             detailLine("Last seen", incident.lastSeenAt.formatted(date: .abbreviated, time: .shortened))
                             detailLine("Resolved", incident.resolvedAt?.formatted(date: .abbreviated, time: .shortened) ?? "not resolved")
+                        }
+                    }
+
+                    // Facts about the app's other episodes, never a verdict: the scorer counts a repeat against a family.
+                    if let recurrence = row.recurrence {
+                        RadarSection(title: "Recurrence", subtitle: "Same app and command") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                detailLine("Episodes", recurrence.episodesText)
+                                if let length = recurrence.lengthText {
+                                    detailLine("Typical length", length)
+                                }
+                                detailLine("Peak memory", recurrence.peakText)
+                            }
                         }
                     }
                 }
@@ -238,18 +265,6 @@ struct IncidentsConsoleView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    private func incidentDuration(_ incident: RadarIncident) -> String {
-        let end = incident.resolvedAt ?? incident.lastSeenAt
-        let seconds = max(0, end.timeIntervalSince(incident.startedAt))
-        if seconds < 60 {
-            return "\(Int(seconds.rounded()))s"
-        }
-        if seconds < 3_600 {
-            return "\(Int((seconds / 60).rounded()))m"
-        }
-        return String(format: "%.1fh", seconds / 3_600)
     }
 
     private func detailLine(_ title: String, _ value: String) -> some View {
@@ -277,8 +292,9 @@ struct IncidentsConsoleView: View {
             "Family: \(incident.familyName)",
             "State: \(incident.resolvedAt == nil ? "Active" : "Resolved")",
             "Score: \(Int(incident.maxScore.rounded()))",
-            "Memory: \(RadarFormat.bytes(incident.memoryBytes))",
-            "CPU: \(RadarFormat.percent(incident.cpuPercent))",
+            "Peak memory: \(RadarFormat.bytes(incident.memoryBytes))",
+            "Peak CPU: \(RadarFormat.percent(incident.cpuPercent))",
+            "Peak growth: \(IncidentRowViewModel.growthText(incident.leakVelocityMegabytesPerMinute))",
             "Reasons: \(incident.reasons.joined(separator: ", "))"
         ].joined(separator: "\n")
     }

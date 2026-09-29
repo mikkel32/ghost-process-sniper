@@ -53,7 +53,7 @@ final class SentinelEngineTests: XCTestCase {
         XCTAssertTrue(later.findings.isEmpty)
     }
 
-    func testDismissAndTrustHideFindings() async {
+    func testDismissHidesAFindingForAsLongAsItLasts() async {
         let engine = SentinelEngine(live: .rulesOnly)
         _ = await engine.ingest(processes: baseline, uiVisible: true, now: now)
         let tunnel = process(402, "ngrok", "/opt/homebrew/bin/ngrok", command: "ngrok http 3000")
@@ -66,10 +66,10 @@ final class SentinelEngineTests: XCTestCase {
         XCTAssertTrue(dismissed.findings.isEmpty)
         XCTAssertEqual(dismissed.dismissedCount, 1)
 
-        let other = process(403, "ngrok", "/opt/homebrew/bin/ngrok", command: "ngrok tcp 22")
-        await engine.setTrustedPaths(["/opt/homebrew/bin/ngrok"])
-        let trusted = await engine.ingest(processes: baseline + [tunnel, other], uiVisible: true, now: now.addingTimeInterval(2))
-        XCTAssertTrue(trusted.findings.isEmpty, "a trusted program is never flagged")
+        _ = await engine.ingest(processes: baseline, uiVisible: true, now: now.addingTimeInterval(2))
+        let expired = await engine.ingest(processes: baseline, uiVisible: true,
+                                          now: now.addingTimeInterval(SentinelEngine.findingRetention + 5))
+        XCTAssertEqual(expired.dismissedCount, 0, "the dismissal went with its finding")
     }
 
     func testLateArgumentsAreJudgedAgain() async {
@@ -80,6 +80,45 @@ final class SentinelEngineTests: XCTestCase {
         let full = process(404, "sh", "/bin/sh", command: "/bin/sh -c echo aGk= | base64 -d | sh")
         let report = await engine.ingest(processes: baseline + [full], uiVisible: true, now: now.addingTimeInterval(2))
         XCTAssertTrue(report.findings.contains { $0.signals.contains { $0.kind == .encodedPayload } })
+    }
+
+    /// The chain is captured at first sight because a parent that exits takes that evidence with it; judging
+    /// the process again once its arguments arrive must not throw the chain away.
+    func testALateJudgementKeepsTheChainCapturedAtFirstSight() async throws {
+        let engine = SentinelEngine(live: .rulesOnly)
+        _ = await engine.ingest(processes: baseline, uiVisible: true, now: now)
+        let wrapper = process(410, "zsh", "/bin/zsh", command: "zsh -c nohup x &", parent: 300)
+        let payload = process(411, "bash", "/bin/bash", command: "bash", parent: 410)
+        let first = await engine.ingest(processes: baseline + [wrapper, payload], uiVisible: true, now: now.addingTimeInterval(1))
+        let seen = try XCTUnwrap(first.findings.first { $0.identity.pid == 411 })
+        XCTAssertEqual(seen.lineageText, "Google Chrome › zsh › bash")
+
+        // The wrapper exits, launchd adopts the payload, and its full arguments arrive.
+        let orphan = process(411, "bash", "/bin/bash", command: "bash -c echo aGk= | base64 -d | bash", parent: 1)
+        let later = await engine.ingest(processes: baseline + [orphan], uiVisible: true, now: now.addingTimeInterval(2))
+        let finding = try XCTUnwrap(later.findings.first { $0.identity.pid == 411 })
+        XCTAssertEqual(finding.lineageText, "Google Chrome › zsh › bash", "the launcher is still who started it")
+        XCTAssertTrue(finding.signals.contains { $0.kind == .appSpawnedShell })
+        XCTAssertEqual(finding.severity, .dangerous, "an app-launched shell that carries a payload")
+        XCTAssertTrue(finding.headline.hasPrefix("Google Chrome started"), finding.headline)
+    }
+
+    /// A parent that is still there is read again: its own arguments may have arrived since.
+    func testALaterJudgementStillReadsAParentThatIsAlive() async throws {
+        let engine = SentinelEngine(live: .rulesOnly)
+        _ = await engine.ingest(processes: baseline, uiVisible: true, now: now)
+        let wrapper = process(410, "zsh", "/bin/zsh", command: "zsh", parent: 300)
+        let child = process(411, "bash", "/bin/bash", command: "bash", parent: 410)
+        let first = await engine.ingest(processes: baseline + [wrapper, child], uiVisible: true, now: now.addingTimeInterval(1))
+        XCTAssertEqual(first.findings.first { $0.identity.pid == 411 }?.severity, .suspicious)
+
+        // The wrapper's arguments arrive and name it a browser extension's native-messaging host.
+        let named = process(410, "zsh", "/bin/zsh", command: "zsh /Users/me/host.sh chrome-extension://abc/", parent: 300)
+        let longer = process(411, "bash", "/bin/bash", command: "bash -c whoami", parent: 410)
+        let report = await engine.ingest(processes: baseline + [named, longer], uiVisible: true, now: now.addingTimeInterval(2))
+        let finding = try XCTUnwrap(report.findings.first { $0.identity.pid == 411 })
+        XCTAssertEqual(finding.lineageText, "Google Chrome › zsh › bash")
+        XCTAssertEqual(finding.severity, .notable, "the parent's new arguments are read, not the ones captured at first sight")
     }
 
     func testAppHelpersStayOutOfTheFeed() async {

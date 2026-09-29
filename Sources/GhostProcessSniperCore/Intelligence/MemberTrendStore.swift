@@ -10,16 +10,24 @@ public struct LongTermTrend: Equatable, Sendable {
     /// R² of the minute means, weighted by each member's growth.
     public let rSquared: Double
     public let spanMinutes: Double
+    /// The part of the slope from members that kept growing through at
+    /// least two thirds of their window; one allocation grows in one third.
+    public let persistentSlopeMegabytesPerMinute: Double
 
-    public static let none = LongTermTrend(slopeMegabytesPerMinute: 0, floorSlopeMegabytesPerMinute: 0, rSquared: 0, spanMinutes: 0)
+    public static let none = LongTermTrend(slopeMegabytesPerMinute: 0, floorSlopeMegabytesPerMinute: 0, rSquared: 0,
+                                           spanMinutes: 0, persistentSlopeMegabytesPerMinute: 0)
 
     /// A slow leak: twenty minutes of steady growth of at least 5 MB/min (or
-    /// 0.5% of RAM an hour), with the floor rising too and a clean fit.
+    /// 0.5% of RAM an hour), with the floor rising too, a clean fit, and most
+    /// of the growth persistent. A single allocation near the middle of the
+    /// window otherwise fits a clean-looking line: over half the pairs
+    /// straddle it, so the Theil-Sen median is its size over the window.
     public func isSlowLeak(physicalMemoryBytes: UInt64) -> Bool {
         let ramFloor = Double(physicalMemoryBytes) / 1_048_576 * 0.005 / 60
         let minimum = max(5, ramFloor)
         return spanMinutes >= 20 && slopeMegabytesPerMinute >= minimum &&
-            floorSlopeMegabytesPerMinute >= 0.5 * slopeMegabytesPerMinute && rSquared >= 0.6
+            floorSlopeMegabytesPerMinute >= 0.5 * slopeMegabytesPerMinute && rSquared >= 0.6 &&
+            persistentSlopeMegabytesPerMinute >= 0.5 * slopeMegabytesPerMinute
     }
 }
 
@@ -65,6 +73,9 @@ public struct MemberTrendStore: Sendable {
     static let maturitySeconds: TimeInterval = 15
     /// Long-term slopes come from members watched at least this long.
     static let longTermMinutes: Double = 10
+    /// A gap between two scans longer than this is time nobody observed (the
+    /// Mac asleep); scans are at most 8 s apart while Ghost runs.
+    static let unobservedGap: TimeInterval = 300
 
     struct FineSample {
         /// Seconds since the series origin.
@@ -109,6 +120,11 @@ public struct MemberTrendStore: Sendable {
     private var series: [ProcessIdentity: Series] = [:]
     private var chains: [String: Chain] = [:]
     private var lastPrune: Date?
+    private var lastScan: Date?
+    /// Seconds of unobserved gaps so far. Minute buckets count minutes the
+    /// Mac was awake: memory does not move while it sleeps, so a night
+    /// between two readings must not dilute a leak's rate or lengthen its span.
+    private var unobservedSeconds: TimeInterval = 0
 
     public init() {}
 
@@ -124,6 +140,10 @@ public struct MemberTrendStore: Sendable {
     }
 
     mutating func advance(familyKey: String, members: [ProcessMetrics], now: Date) -> FamilyTrendStep {
+        if let lastScan, now.timeIntervalSince(lastScan) > Self.unobservedGap {
+            unobservedSeconds += now.timeIntervalSince(lastScan)
+        }
+        lastScan = max(lastScan ?? now, now)
         var newest: Date?
         var current: [ProcessIdentity: (held: UInt64, mature: Bool)] = [:]
         current.reserveCapacity(members.count)
@@ -180,7 +200,7 @@ public struct MemberTrendStore: Sendable {
             coarse.reserveCapacity(Self.coarseCapacity)
             var created = Series(origin: measured, name: member.name, fine: fine, coarse: coarse,
                                  lastMeasured: measured, heldBytes: bytes, lastSeen: now, longTerm: nil)
-            Self.append(bytes, at: measured, to: &created)
+            Self.append(bytes, at: measured, minute: observedMinute(measured), to: &created)
             series[member.identity] = created
             return measured
         }
@@ -191,11 +211,15 @@ public struct MemberTrendStore: Sendable {
         }
         series.values[index].lastMeasured = measured
         series.values[index].heldBytes = bytes
-        Self.append(bytes, at: measured, to: &series.values[index])
+        Self.append(bytes, at: measured, minute: observedMinute(measured), to: &series.values[index])
         return measured
     }
 
-    private static func append(_ bytes: UInt64, at date: Date, to entry: inout Series) {
+    private func observedMinute(_ date: Date) -> Int32 {
+        Int32(((date.timeIntervalSince1970 - unobservedSeconds) / 60).rounded(.down))
+    }
+
+    private static func append(_ bytes: UInt64, at date: Date, minute: Int32, to entry: inout Series) {
         let megabytes = Float(Double(bytes) / 1_048_576)
         let time = Float(date.timeIntervalSince(entry.origin))
         // Drop before appending: appending to a full ring would double its
@@ -208,8 +232,7 @@ public struct MemberTrendStore: Sendable {
         }
         entry.fine.append(FineSample(time: time, megabytes: megabytes))
 
-        let minute = Int32((date.timeIntervalSince1970 / 60).rounded(.down))
-        if let last = entry.coarse.last, last.minute == minute {
+        if let last = entry.coarse.last, last.minute >= minute {
             var bucket = last
             bucket.minimum = min(bucket.minimum, megabytes)
             bucket.maximum = max(bucket.maximum, megabytes)
@@ -248,8 +271,23 @@ public struct MemberTrendStore: Sendable {
             slopeMegabytesPerMinute: slope,
             floorSlopeMegabytesPerMinute: floor,
             rSquared: rSquared(means),
-            spanMinutes: Double(last.minute - first.minute)
+            spanMinutes: Double(last.minute - first.minute),
+            persistentSlopeMegabytesPerMinute: isPersistent(means, slope: slope) ? slope : 0
         )
+    }
+
+    /// Growth that goes on: at least two of the window's thirds climb at a
+    /// third of the overall rate. A leak, a staircase of small leaks and a
+    /// garbage-collected sawtooth with rising troughs climb in every third;
+    /// one allocation climbs in the third it landed in. Slopes too small to
+    /// matter skip the three extra fits.
+    private static func isPersistent(_ means: [RobustTrend.Point], slope: Double) -> Bool {
+        guard slope >= 0.5 else { return true }
+        guard means.count >= 9 else { return false }
+        let third = means.count / 3
+        let parts = [means[..<third], means[third..<(2 * third)], means[(2 * third)...]]
+        let climbing = parts.filter { part in (RobustTrend.theilSen(Array(part))?.slope ?? 0) >= slope / 3 }.count
+        return climbing >= 2
     }
 
     private static func rSquared(_ points: [RobustTrend.Point]) -> Double {
@@ -275,11 +313,12 @@ public struct MemberTrendStore: Sendable {
     /// member watched for an hour says nothing about how long the growth
     /// has lasted, so it must not lend its span to a young growing child.
     private mutating func longTermSum(members: [ProcessMetrics]) -> LongTermTrend {
-        var slope = 0.0, floor = 0.0, weightedSpan = 0.0, weightedFit = 0.0, weight = 0.0
+        var slope = 0.0, floor = 0.0, persistent = 0.0, weightedSpan = 0.0, weightedFit = 0.0, weight = 0.0
         for member in members {
             guard let trend = longTerm(of: member.identity), trend.spanMinutes >= Self.longTermMinutes else { continue }
             slope += trend.slopeMegabytesPerMinute
             floor += trend.floorSlopeMegabytesPerMinute
+            persistent += trend.persistentSlopeMegabytesPerMinute
             if trend.slopeMegabytesPerMinute > 0 {
                 weightedFit += trend.rSquared * trend.slopeMegabytesPerMinute
                 weightedSpan += trend.spanMinutes * trend.slopeMegabytesPerMinute
@@ -290,20 +329,35 @@ public struct MemberTrendStore: Sendable {
             slopeMegabytesPerMinute: slope,
             floorSlopeMegabytesPerMinute: floor,
             rSquared: weight > 0 ? weightedFit / weight : 0,
-            spanMinutes: weight > 0 ? weightedSpan / weight : 0
+            spanMinutes: weight > 0 ? weightedSpan / weight : 0,
+            persistentSlopeMegabytesPerMinute: persistent
         )
     }
 
-    /// Each member's growth: its long-term slope once watched ten minutes,
-    /// else its fine slope once mature. Shares are of positive growth.
+    /// Which slopes attribute a family's growth: the same horizon the
+    /// growth was proven on, so a helper warming up for two minutes never
+    /// takes the blame for a leak ninety minutes long.
+    enum GrowthHorizon: Sendable {
+        /// A slow leak: long-term slopes of members watched ten minutes or more.
+        case longTerm
+        /// Recent growth: the fine slope of every mature member.
+        case recent
+    }
+
+    /// Each member's growth on one horizon. Shares are of positive growth.
     /// Asked for only when the family is growing.
-    mutating func growth(of members: [ProcessMetrics]) -> [MemberGrowth] {
+    mutating func growth(of members: [ProcessMetrics], horizon: GrowthHorizon) -> [MemberGrowth] {
         var rows: [(identity: ProcessIdentity, name: String, slope: Double, rSquared: Double)] = []
         for member in members {
-            if let trend = longTerm(of: member.identity), trend.spanMinutes >= Self.longTermMinutes {
-                rows.append((member.identity, member.name, trend.slopeMegabytesPerMinute, trend.rSquared))
-            } else if let entry = series[member.identity], entry.isMature, let fine = Self.fineFit(entry.fine) {
-                rows.append((member.identity, member.name, fine.slope, fine.rSquared))
+            switch horizon {
+            case .longTerm:
+                if let trend = longTerm(of: member.identity), trend.spanMinutes >= Self.longTermMinutes {
+                    rows.append((member.identity, member.name, trend.slopeMegabytesPerMinute, trend.rSquared))
+                }
+            case .recent:
+                if let entry = series[member.identity], entry.isMature, let fine = Self.fineFit(entry.fine) {
+                    rows.append((member.identity, member.name, fine.slope, fine.rSquared))
+                }
             }
         }
         let positive = rows.reduce(0) { $0 + max(0, $1.slope) }

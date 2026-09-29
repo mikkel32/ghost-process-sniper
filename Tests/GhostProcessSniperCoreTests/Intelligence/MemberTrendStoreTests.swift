@@ -234,4 +234,36 @@ final class MemberTrendStoreTests: XCTestCase {
         let minutes = try XCTUnwrap(Int(span.dropFirst(4).dropLast(4)))
         XCTAssertTrue((20...25).contains(minutes), whyNow)
     }
+
+    /// A renderer leaking slowly for over an hour is the culprit even while
+    /// a new helper warms up fast for its first minutes.
+    func testAWarmingNewHelperDoesNotTakeTheBlameForASlowLeak() throws {
+        let app = "/Applications/Visual Studio Code.app/Contents"
+        let cadence: TimeInterval = 10
+        let leakTicks = Int(75 * 60 / cadence)
+        var checked = 0
+        _ = run(ticks: leakTicks + 18, cadence: cadence, world: { tick, date in
+            let minutes = Double(tick) * cadence / 60
+            var world = [
+                self.member(700, name: "Electron", path: "\(app)/MacOS/Electron", command: "\(app)/MacOS/Electron",
+                            megabytes: 400, at: date),
+                self.member(701, parent: 700, name: "Code Helper (Renderer)",
+                            path: "\(app)/Frameworks/Code Helper (Renderer).app/Contents/MacOS/Code Helper (Renderer)",
+                            command: "Code Helper (Renderer) --type=renderer", megabytes: 300 + 8 * minutes, at: date)
+            ]
+            if tick >= leakTicks {
+                let warm = Double(tick - leakTicks) * cadence / 60
+                world.append(self.member(702, parent: 700, name: "Code Helper (Plugin)",
+                                         path: "\(app)/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)",
+                                         command: "Code Helper (Plugin) --type=utility", megabytes: 100 + 100 * warm, at: date))
+            }
+            return world
+        }, inspect: { tick, _, families in
+            guard tick >= leakTicks, let editor = families.first(where: { $0.root.pid == 700 }) else { return }
+            checked += 1
+            XCTAssertNotEqual(editor.culprit?.identity.pid, 702, "tick \(tick - leakTicks) after the helper started")
+            XCTAssertFalse(editor.suggestions.contains { $0.title.hasPrefix("Stop only Code Helper (Plugin)") })
+        })
+        XCTAssertEqual(checked, 18)
+    }
 }

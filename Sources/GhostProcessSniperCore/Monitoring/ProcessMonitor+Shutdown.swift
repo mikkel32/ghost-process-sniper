@@ -14,6 +14,7 @@ extension ProcessMonitor {
         if settingsSavePending {
             await saveSettingsIfLoaded()
         }
+        await worker.syncEnergyHistory(now: Date(), force: true)
         await store?.close()
     }
 

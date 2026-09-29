@@ -39,9 +39,9 @@ struct PerformanceSettingsTab: View {
                     SettingsSlider(
                         title: "Refresh",
                         value: $monitor.settings.refreshInterval,
-                        range: 0.5...5,
+                        range: ThresholdSettings.refreshIntervalRange,
                         step: 0.5,
-                        display: String(format: "%.1f sec", monitor.settings.refreshInterval)
+                        display: String(format: "%.1f sec", monitor.settings.watchedInterval)
                     )
                 }
             }

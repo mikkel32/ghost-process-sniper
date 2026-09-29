@@ -12,6 +12,8 @@ struct KillPreviewSheet: View {
     @Environment(\.appearsActive) private var appearsActive
 
     @State private var isKilling = false
+    /// One look at the result's survivors is under way.
+    @State private var isRechecking = false
     @State private var report: KillReport?
     @State private var reportedAt: Date?
     @State private var canForceSurvivors = false
@@ -84,6 +86,8 @@ struct KillPreviewSheet: View {
             if active, report == nil, !isKilling, Date().timeIntervalSince(pending.preparedAt) > 20 {
                 offersUpdate = true
             }
+            // Back from answering a save prompt in the app: it may have quit.
+            if active { recheckSurvivors() }
         }
         .onChange(of: preview.riskAssessment.forceNeedsConfirmation) { _, needs in
             if needs { skipForce = true }
@@ -194,16 +198,21 @@ struct KillPreviewSheet: View {
             } else {
                 KillTargetRows(rows: rows)
             }
-            if !preview.scopePreview.nearbyCandidates.isEmpty {
-                KillNearbyPanel(candidates: preview.scopePreview.nearbyCandidates)
+            // A child in the same process group is already a row above.
+            let leftBehind = Set(preview.leftBehind.map(\.identity))
+            let nearby = preview.scopePreview.nearbyCandidates.filter { !leftBehind.contains($0.identity) }
+            if !nearby.isEmpty {
+                KillNearbyPanel(candidates: nearby)
             }
         }
     }
 
-    /// Everything the preview sorted, one row per process.
+    /// Everything the preview sorted, one row per process, then the children
+    /// a single-process stop leaves running.
     private var planRows: [KillTarget] {
         var seen = Set<ProcessIdentity>()
         let all = preview.targets + preview.lockedTargets + preview.staleTargets + preview.recycledTargets + preview.exitedTargets
+            + preview.leftBehind
         return all.filter { seen.insert($0.identity).inserted }
     }
 
@@ -216,8 +225,9 @@ struct KillPreviewSheet: View {
         return KillResultPanel(
             report: report,
             canForceSurvivors: canForceSurvivors,
-            isBusy: isKilling || session.isPreparingIntervention,
+            isBusy: isKilling || isRechecking || session.isPreparingIntervention,
             forceSurvivors: { forceSurvivors(of: report) },
+            checkAgain: recheckSurvivors,
             stopRestarter: restarter.map { alternative in
                 (title: "\(alternative.title)\u{2026}", action: { session.prepareKill(pending.family, plan: alternative.plan) })
             },
@@ -225,6 +235,13 @@ struct KillPreviewSheet: View {
             stopPortHolder: { pid in
                 session.dismissStopSheetForFollowUp()
                 session.prepareKill(portHolder: pid)
+            },
+            canStopLeftRunning: { target in
+                session.monitor.sampledProcesses.contains { $0.identity == target.identity && $0.userID == geteuid() }
+            },
+            stopLeftRunning: { target in
+                session.dismissStopSheetForFollowUp()
+                session.prepareKill(processIdentity: target.identity, name: target.name)
             }
         )
     }
@@ -315,6 +332,24 @@ struct KillPreviewSheet: View {
         let session = session
         run(from: KillOutcomeRows.make(report: finished)) { sink in
             await session.forceSurvivors(pending, report: finished, eventSink: sink) ?? finished
+        }
+    }
+
+    /// One look at what the result lists as still running: after the wait
+    /// the user may have answered the save prompt and the app quit. It only
+    /// looks, once per return to Ghost or click, and never signals.
+    private func recheckSurvivors() {
+        guard !isKilling, !isRechecking, let finished = report, !finished.survivorPIDs.isEmpty else { return }
+        isRechecking = true
+        let killer = session.killer
+        Task {
+            let settled = await killer.recheck(finished)
+            isRechecking = false
+            // A force follow-up may have replaced the result meanwhile.
+            guard !isKilling, report?.operationID == finished.operationID, settled != finished else { return }
+            report = settled
+            session.settleStopResult(settled, of: pending)
+            AccessibilityNotification.Announcement(settled.narrative.headline).post()
         }
     }
 

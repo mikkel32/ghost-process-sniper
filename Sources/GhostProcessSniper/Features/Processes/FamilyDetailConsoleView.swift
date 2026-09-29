@@ -36,6 +36,8 @@ struct FamilyDetailConsoleView: View {
     /// the time it was built.
     let lastScoredAt: Date?
     let forensicsFreshness: Date?
+    /// Live energy figures; read only by the strip, so a scan redraws nothing else.
+    var monitor: ProcessMonitor?
 
     @State private var selectedTab: FamilyDetailTab = .overview
 
@@ -130,6 +132,9 @@ struct FamilyDetailConsoleView: View {
                 level: panel.level
             )
             .equatable()
+            if let monitor {
+                FamilyEnergyStrip(monitor: monitor, familyKey: panel.familyKey)
+            }
         case .evidence:
             FamilyScorePanel(components: panel.scoreComponents)
                 .equatable()

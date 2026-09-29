@@ -353,7 +353,7 @@ public struct RadarIntelligence: Sendable {
     /// the tree, through the single-process stop path.
     private func culpritSuggestion(for family: ProcessFamily, now: Date) -> [RadarActionSuggestion] {
         guard let culprit = family.culprit, culprit.identity != family.root.identity, family.hasCredibleLeak,
-              family.ownedIdentities.contains(culprit.identity)
+              family.canStopIndividually(culprit.identity)
         else {
             return []
         }
@@ -453,6 +453,7 @@ public struct RadarIntelligence: Sendable {
         }
 
         if let cpuAnomaly = BaselineCPUAnomaly(baseline: baseline, cpuPercent: family.totalCPUPercent) {
+            let familyLimit = CPUBehaviorAnalyzer.familyCPULimit(settings: settings, processorCount: forecaster.processorCount)
             let impact = min(12, cpuAnomaly.multiple * 3)
             value += impact
             reasons.insert(cpuAnomaly.reason, at: 0)
@@ -462,7 +463,7 @@ public struct RadarIntelligence: Sendable {
                 title: cpuAnomaly.reason,
                 detail: "CPU use is well above this family's learned normal",
                 impact: impact,
-                level: cpuAnomaly.multiple >= 5 ? .hot : .watch
+                level: cpuAnomaly.level(cpuPercent: family.totalCPUPercent, familyLimit: familyLimit)
             ))
         }
 

@@ -94,13 +94,17 @@ public struct CompactSidebarRowModel: Identifiable, Equatable, Sendable {
     public let forecastState: ForecastState
     public let forecastConfidence: Double
     public let helpText: String
+    public let memoryBytes: UInt64
+    public let radarSector: LiveRadarSector
+    public let isWatchedForSizeOnly: Bool
+    public let needsReview: Bool
 
     public init(item: FamilyTriageViewModel) {
         familyKey = item.familyKey
         statusText = item.assessment.status
         signature = item.signature
         title = item.displayName
-        subtitle = item.assessment.cause
+        subtitle = item.assessment.reason
         metricText = item.gpuPercent > 0.5 ? "\(item.memoryText) · CPU \(item.cpuText) · GPU \(item.gpuText)" : "\(item.memoryText) · CPU \(item.cpuText)"
         scoreText = item.scoreText
         scoreValue = item.score
@@ -110,8 +114,12 @@ public struct CompactSidebarRowModel: Identifiable, Equatable, Sendable {
         level = item.level
         forecastState = item.forecastState
         forecastConfidence = item.forecastConfidence
+        memoryBytes = item.memoryBytes
+        isWatchedForSizeOnly = item.isWatchedForSizeOnly
+        needsReview = item.needsReview
+        radarSector = LiveRadarSector.of(kind: item.kind, path: item.signature.canonicalPath)
         let gpuHelp = item.gpuPercent > 0.5 ? ", GPU \(item.gpuText)" : ""
-        helpText = "\(item.assessment.cause). \(item.assessment.evidence)\n\(item.memoryText), \(item.cpuText)\(gpuHelp), \(item.leakText)"
+        helpText = "\(item.assessment.reason). \(item.assessment.evidence)\n\(item.memoryText), \(item.cpuText)\(gpuHelp), \(item.leakText)"
     }
 
     private static func icon(for level: GhostLevel) -> String {
@@ -175,7 +183,7 @@ public struct OverviewCommandCenterModel: Equatable, Sendable {
                              destination: .families, actionTitle: "Browse all"),
             FamilyMetricCard(title: "Needs review", value: "\(summary.hotCount)", systemImage: "flame",
                              level: summary.hotCount > 0 ? .hot : .quiet,
-                             destination: .attention, actionTitle: "Review activity"),
+                             destination: .review, actionTitle: "Review activity"),
             FamilyMetricCard(title: "Leaks", value: "\(summary.leakingCount)", systemImage: "chart.line.uptrend.xyaxis",
                              level: summary.leakingCount > 0 ? .watch : .quiet,
                              destination: .leaking, actionTitle: "Inspect growth"),
@@ -252,35 +260,20 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         warmingRows: [CompactSidebarRowModel],
         detailPanels: [String: FamilyDetailPanelModel]
     ) -> RadarIntelligenceBrief {
-        // Confirmed trouble outranks a hotter spike that may still settle.
+        // Confirmed trouble outranks a hotter spike that may still settle. A
+        // family that is only watched for its size is not an early warning:
+        // with nothing else to announce, the verdict is calm.
         let confirmed = topRiskRows.first { detailPanels[$0.familyKey]?.heatConfirmed == true }
-        guard let row = confirmed ?? topRiskRows.first ?? warmingRows.first,
+        guard let row = confirmed ?? topRiskRows.first ?? warmingRows.first(where: { !$0.isWatchedForSizeOnly }),
               let panel = detailPanels[row.familyKey]
         else {
             // Built from a finished sample, so no families means nothing in
             // scope, not a scan still running (that is `.empty`).
-            let hasFamilies = summary.familyCount > 0
-            return RadarIntelligenceBrief(
-                eyebrow: "Live guidance",
-                title: hasFamilies ? "No credible problems right now" : "Nothing to watch right now",
-                detail: hasFamilies
-                    ? "Current readings and trends show no credible leak, runaway load, or forgotten process tree."
-                    : "The last scan found nothing in the radar's scope: no developer tools, and nothing heavy or duplicated.",
-                recommendation: hasFamilies
-                    ? "Keep working normally. The radar will surface a clear next step if behavior changes."
-                    : "Nothing to do. To watch more of your Mac, widen the scope to Heavy or All in Settings.",
-                confidenceText: "Continuous",
-                evidence: hasFamilies ? ["Current readings", "Trend shape", "Host pressure"] : [],
-                familyKey: nil,
-                familyName: nil,
-                actionTitle: "Review",
-                systemImage: "checkmark.seal",
-                level: .quiet
-            )
+            return calm(summary: summary, warmingRows: warmingRows)
         }
 
         let evidence = panel.heatEvidence.isEmpty
-            ? panel.scoreComponents.sorted { $0.impact > $1.impact }.prefix(3).map(\.title)
+            ? panel.scoreComponents.filter(\.explainsFlag).sorted { $0.impact > $1.impact }.prefix(3).map(\.title)
             : Array(panel.heatEvidence.prefix(3))
         let hasCredibleForecastEscalation = row.forecastState >= .leaking && row.forecastConfidence >= 0.55
         let isConfirmedUrgent = row.level >= .hot && panel.heatConfirmed
@@ -317,7 +310,7 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
 
         return RadarIntelligenceBrief(
             eyebrow: eyebrow,
-            title: "\(row.title): \(panel.assessment.cause.lowercased())",
+            title: "\(row.title): \(panel.assessment.reasonInSentence)",
             detail: panel.assessment.evidence,
             recommendation: recommendation,
             confidenceText: confidenceText,
@@ -341,19 +334,20 @@ public struct RadarIntelligenceBrief: Equatable, Sendable {
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
-    /// Mirrors the stop planner's strategy choice for the cases it takes
-    /// from the risk assessment alone.
+    /// Names where the hero's first button goes: the family's page. Stopping is
+    /// the Quick Stop's job, so no title promises a stop; the kind of workload
+    /// only says what the page will be about. A supervised server is
+    /// "Review family" too: the button opens the server's page, not the
+    /// supervisor's, and the recommendation already names the supervisor.
     private static func actionTitle(for risk: KillRiskAssessment) -> String {
         if risk.appQuitPID != nil {
-            return "Quit app"
+            return "Review app"
         }
-        if risk.kind == .dataStore || risk.kind == .containerRuntime {
-            return "Stop safely"
+        switch risk.kind {
+        case .dataStore: return "Review database"
+        case .containerRuntime: return "Review containers"
+        default: return "Review family"
         }
-        if risk.supervisor != nil || risk.risks.contains(where: { $0.kind == .respawn }) {
-            return "Review supervisor"
-        }
-        return "Review family"
     }
 }
 
@@ -368,6 +362,9 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
     /// False only before the first sample. Empty rows after it mean nothing
     /// in scope, which views must show as quiet rather than as a scan.
     public let hasSampled: Bool
+    /// Every family that needs review; `topRiskRows` keeps the first eight.
+    /// It is the number the hero and the Needs review card give.
+    public let riskCount: Int
 
     public static let empty = CompactConsoleSnapshot(
         commandCenter: .empty,
@@ -388,7 +385,8 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
         warmingRows: [CompactSidebarRowModel],
         duplicateCount: Int = 0,
         intelligenceBrief: RadarIntelligenceBrief = .empty,
-        hasSampled: Bool = true
+        hasSampled: Bool = true,
+        riskCount: Int? = nil
     ) {
         self.commandCenter = commandCenter
         self.engineStatus = engineStatus
@@ -398,6 +396,7 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
         self.duplicateCount = duplicateCount
         self.intelligenceBrief = intelligenceBrief
         self.hasSampled = hasSampled
+        self.riskCount = riskCount ?? topRiskRows.count
     }
 
     public static func build(
@@ -442,7 +441,8 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
             topRiskRows: Array(topRiskRows.prefix(8)),
             warmingRows: Array(warmingRows.prefix(6)),
             duplicateCount: duplicateCount,
-            intelligenceBrief: intelligenceBrief
+            intelligenceBrief: intelligenceBrief,
+            riskCount: topRiskRows.count
         )
     }
 
@@ -450,9 +450,7 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
     /// must always have a prepared panel, even when most panels are deferred.
     static func priorityRows(from rows: [CompactSidebarRowModel]) -> (risk: [CompactSidebarRowModel], warming: [CompactSidebarRowModel]) {
         let topRiskRows = rows
-            .filter { row in
-                row.level >= .hot || (row.forecastState >= .leaking && row.forecastConfidence >= 0.55)
-            }
+            .filter(\.needsReview)
             .sorted { lhs, rhs in
                 if lhs.level != rhs.level { return lhs.level > rhs.level }
                 if lhs.heatValue != rhs.heatValue { return lhs.heatValue > rhs.heatValue }
@@ -461,10 +459,14 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
                 return lhs.id < rhs.id
             }
         let riskIDs = Set(topRiskRows.map(\.id))
-        let warmingRows = rows.filter { row in
+        let warming = rows.filter { row in
             !riskIDs.contains(row.id) &&
                 (row.level == .watch || (row.forecastState >= .warming && row.forecastConfidence >= 0.42))
         }
+        // Families with something against them come first, each group in its
+        // own order: the guidance target and the first rows are early
+        // warnings, and it is always inside the prepared panels.
+        let warmingRows = warming.filter { !$0.isWatchedForSizeOnly } + warming.filter(\.isWatchedForSizeOnly)
         return (topRiskRows, warmingRows)
     }
 
@@ -478,7 +480,8 @@ public struct CompactConsoleSnapshot: Equatable, Sendable {
             warmingRows: warmingRows,
             duplicateCount: duplicateCount,
             intelligenceBrief: intelligenceBrief,
-            hasSampled: hasSampled
+            hasSampled: hasSampled,
+            riskCount: riskCount
         )
     }
 

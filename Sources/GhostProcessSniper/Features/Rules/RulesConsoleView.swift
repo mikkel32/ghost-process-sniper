@@ -56,7 +56,7 @@ struct RulesConsoleView: View {
             InfoTip(tip: RadarTip(
                 title: "Rules",
                 message: "Advisory automations that match families by command, path, level, or leak rate. Your snoozes and ignores are listed first: Unsnooze or Stop Ignoring undoes one. Nothing destructive ever runs without an explicit confirmation.",
-                shortcut: "⌘6"
+                shortcut: "⌘7"
             ))
             RadarChip(title: "Matches", value: "\(matchCount)", systemImage: "scope")
                 .frame(width: 150)

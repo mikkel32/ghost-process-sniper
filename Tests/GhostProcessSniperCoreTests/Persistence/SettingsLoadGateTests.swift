@@ -204,6 +204,7 @@ final class SettingsLoadGateTests: XCTestCase {
         edited.detectionMode = .custom
         edited.sensitivity = .proactive
         edited.adaptivePerformance = false
+        edited.notifications = NotificationPreferences(families: false, energy: false, security: .dangerousOnly)
         XCTAssertEqual(edited.edits(since: .smart, appliedTo: stored), edited)
 
         var one = ThresholdSettings.smart
@@ -211,6 +212,15 @@ final class SettingsLoadGateTests: XCTestCase {
         var expected = stored
         expected.groupFamilies = false
         XCTAssertEqual(one.edits(since: .smart, appliedTo: stored), expected)
+    }
+
+    func testANotificationChoiceMadeBeforeTheSettingsLoadedSurvivesTheMerge() {
+        let stored = customSettings()
+        var edited = ThresholdSettings.smart
+        edited.notifications.energy = false
+        var expected = stored
+        expected.notifications.energy = false
+        XCTAssertEqual(edited.edits(since: .smart, appliedTo: stored), expected)
     }
 
     private func customSettings() -> ThresholdSettings {

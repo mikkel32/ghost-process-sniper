@@ -19,13 +19,14 @@ public struct CPUMinuteBucket: Equatable, Sendable {
 }
 
 /// A family's CPU over the last twenty minutes, plus when any member last
-/// did work.
+/// did work. Both moments are moved forward past time nobody observed (the
+/// Mac asleep), so idleness counts observed time only.
 public struct FamilyCPUActivity: Equatable, Sendable {
     /// Oldest first; the last bucket is the minute in progress.
     public let buckets: [CPUMinuteBucket]
     public let lastActiveAt: Date?
     /// Since when the ledger has measured any member's CPU, from its first
-    /// of two fresh reads; idleness is only claimed for time measured, never
+    /// of two usage reads; idleness is only claimed for time measured, never
     /// for a member outside the rich-read budget.
     public let measuredSince: Date?
 
@@ -69,6 +70,9 @@ public struct ActivityLedger: Sendable {
     /// Jitter between a read's span and the tick's wall time before the read
     /// counts as spanning time the tick never saw.
     static let spanSlack: TimeInterval = 5
+    /// Scans are at most 8 s apart while Ghost runs, so a longer gap than
+    /// this is time nobody observed: the Mac slept or Ghost was suspended.
+    static let unobservedGap: TimeInterval = 300
 
     private struct ProcessEntry {
         var cpuSeconds: TimeInterval
@@ -92,16 +96,33 @@ public struct ActivityLedger: Sendable {
     private var families: [String: FamilyEntry] = [:]
     private var tick: UInt64 = 0
     private var lastPrune: Date?
+    private var lastScan: Date?
+    /// Stretches between scans nobody observed, oldest first. Idleness is
+    /// measured in observed time: waking from a night's sleep must not make
+    /// every quiet process "idle for 8 h".
+    private var unobserved: [(start: Date, end: Date)] = []
 
     public init() {}
 
     public mutating func recordProcesses(_ current: [ProcessMetrics], now: Date) {
         tick += 1
+        if let lastScan, now.timeIntervalSince(lastScan) > Self.unobservedGap {
+            unobserved.append((lastScan, now))
+        }
+        lastScan = max(lastScan ?? now, now)
         for process in current {
             let freshAt: Date? = process.cpuMeasurementStatus == .fresh ? process.sampledAt : nil
             guard var entry = processes[process.identity] else {
+                // The sampler's CPU tracker has nothing to compare a new
+                // process with, so its first scan reads usage but reports no
+                // rate. That read is still a real baseline: counting from it
+                // credits the second scan's interval, as the sampler's own
+                // percent does, instead of the third's. A denied read has no
+                // total to count from.
+                let baselineAt = freshAt ?? (process.measurementStatus == .fresh
+                    && process.cpuMeasurementStatus == .unavailable ? process.sampledAt : nil)
                 processes[process.identity] = ProcessEntry(
-                    cpuSeconds: process.totalProcessorSeconds, measuredAt: freshAt, firstSeen: now,
+                    cpuSeconds: process.totalProcessorSeconds, measuredAt: baselineAt, firstSeen: now,
                     measuredSince: nil, lastActiveAt: nil, lastSeen: now, tickDelta: 0, tickSpan: 0, deltaTick: 0
                 )
                 continue
@@ -128,6 +149,7 @@ public struct ActivityLedger: Sendable {
         if lastPrune.map({ now.timeIntervalSince($0) >= 30 }) ?? true {
             processes = processes.filter { now.timeIntervalSince($0.value.lastSeen) <= Self.retention }
             families = families.filter { now.timeIntervalSince($0.value.lastRecordedAt) <= Self.retention }
+            unobserved.removeAll { now.timeIntervalSince($0.end) > Self.retention }
             lastPrune = now
         }
     }
@@ -196,7 +218,19 @@ public struct ActivityLedger: Sendable {
         family.members = identities
         family.lastRecordedAt = now
         families[key] = family
-        return FamilyCPUActivity(buckets: family.buckets, lastActiveAt: lastActiveAt, measuredSince: measuredSince)
+        return FamilyCPUActivity(buckets: family.buckets, lastActiveAt: observed(lastActiveAt),
+                                 measuredSince: observed(measuredSince))
+    }
+
+    /// Moves a moment forward by the unobserved time after it, so the time
+    /// since it counts only what was observed.
+    private func observed(_ date: Date?) -> Date? {
+        guard let date else { return nil }
+        var shifted = date
+        for gap in unobserved where gap.end > date {
+            shifted += gap.end.timeIntervalSince(max(gap.start, date))
+        }
+        return shifted
     }
 
     /// When a process last did work, and since when it has been watched.

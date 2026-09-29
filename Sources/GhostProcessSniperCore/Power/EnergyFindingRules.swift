@@ -1,0 +1,193 @@
+import Foundation
+
+/// Decides which energy observations deserve a finding. Thresholds come from
+/// macOS's own resource limits where it has one; a finding that is showing
+/// stays until its measure falls below 80% of the threshold, so it does not
+/// flicker at the edge.
+struct EnergyFindingRules: Sendable {
+    /// The kernel's wake-ups monitor flags a process above 150 wake-ups a
+    /// second averaged over five minutes.
+    static let wakeupsPerSecond = 150.0
+    static let busyWakeupsPerSecond = 500.0
+    /// Wake-ups matter when the process is otherwise nearly idle.
+    static let wakeupCoreLimit = 0.25
+    /// About 1.7 MB/s for ten minutes.
+    static let diskBytesPerTenMinutes = 1_073_741_824.0
+    static let heavyDiskBytesPerSecond = 20_000_000.0
+    static let keepAwakeSeconds: TimeInterval = 30 * 60
+    static let longKeepAwakeSeconds: TimeInterval = 2 * 3_600
+    static let drainMinimumWatts = 1.5
+    static let drainShare = 0.2
+    static let drainMinutes = 20.0
+    static let hysteresis = 0.8
+    /// Workloads whose job is writing a lot: builds, tests, databases, VMs, model downloads.
+    static let expectedWriters: Set<DevProcessKind> = [.swiftBuild, .testRunner, .buildWatcher, .dataStore,
+                                                       .containerRuntime, .localModelRunner]
+
+    private var since: [String: Date] = [:]
+
+    mutating func evaluate(
+        consumers: [EnergyConsumer], blockers: [SleepBlocker], battery: BatteryOutlook?, now: Date
+    ) -> [EnergyFinding] {
+        var findings: [EnergyFinding] = []
+        let byID = Dictionary(consumers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // One finding per app or job: keeping the Mac and its display awake is one problem, not two.
+        for held in Dictionary(grouping: blockers, by: \.holderID).values {
+            if let finding = keepsAwake(held, consumer: held[0].consumerID.flatMap { byID[$0] },
+                                        battery: battery, now: now) {
+                findings.append(finding)
+            }
+        }
+        for consumer in consumers where Self.judges(consumer) {
+            if let finding = wakeups(consumer, battery: battery, now: now) { findings.append(finding) }
+            if let finding = diskWrites(consumer, now: now) { findings.append(finding) }
+            if let finding = drain(consumer, battery: battery, now: now) { findings.append(finding) }
+        }
+        let live = Set(findings.map(\.id))
+        since = since.filter { live.contains($0.key) }
+        return findings.sorted { lhs, rhs in
+            if lhs.severity != rhs.severity { return lhs.severity > rhs.severity }
+            if lhs.since != rhs.since { return lhs.since < rhs.since }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private func active(_ id: String) -> Bool { since[id] != nil }
+
+    private func threshold(_ value: Double, _ id: String) -> Double {
+        active(id) ? value * Self.hysteresis : value
+    }
+
+    // MARK: - What each rule looks at
+    // The Energy rows colour a figure with these same tests, so an orange figure and a
+    // finding cannot disagree. `holding` is the lower threshold of a finding that is showing.
+
+    /// Running work that is not macOS's own: the groups the rules judge.
+    static func judges(_ consumer: EnergyConsumer) -> Bool { consumer.isRunning && !consumer.isSystem }
+
+    /// A process wakes the processor above macOS's limit while its group is nearly idle. The limit is per
+    /// process, so the busiest member is judged, not the group's sum.
+    static func wakesProcessor(_ consumer: EnergyConsumer, holding: Bool = false) -> Bool {
+        guard judges(consumer), let busiest = consumer.busiestWakeups, consumer.observedSeconds >= 240,
+              consumer.averageCores < wakeupCoreLimit else { return false }
+        return busiest.perSecond >= wakeupsPerSecond * (holding ? hysteresis : 1)
+    }
+
+    /// The group has written at a sustained heavy rate, over ten minutes. Builds, databases and VMs
+    /// write for a living and have a much higher limit.
+    static func writesToDisk(_ consumer: EnergyConsumer, holding: Bool = false) -> Bool {
+        guard judges(consumer), consumer.knownSource == nil, consumer.tenMinuteObservedSeconds >= 480 else { return false }
+        let expected = consumer.devKind.map { expectedWriters.contains($0) } ?? false
+        let limit = expected ? heavyDiskBytesPerSecond : diskBytesPerTenMinutes / 600
+        return consumer.tenMinuteDiskWriteBytesPerSecond >= limit * (holding ? hysteresis : 1)
+    }
+
+    private mutating func finding(
+        _ kind: EnergyFindingKind, consumerID: String, name: String, familyKey: String?,
+        severity: EnergyFindingSeverity, headline: String, detail: String, advice: String, now: Date
+    ) -> EnergyFinding {
+        let id = "\(kind.rawValue)|\(consumerID)"
+        let start = since[id] ?? now
+        since[id] = start
+        return EnergyFinding(id: id, kind: kind, severity: severity, consumerID: consumerID, displayName: name,
+                             familyKey: familyKey, headline: headline, detail: detail, advice: advice, since: start)
+    }
+
+    // MARK: - Rules
+
+    /// `held` is everything one app or job holds, at most one assertion per effect. The one held longest
+    /// leads the finding, and the other only adds a sentence, once it too has held long enough.
+    private mutating func keepsAwake(_ held: [SleepBlocker], consumer: EnergyConsumer?, battery: BatteryOutlook?,
+                                     now: Date) -> EnergyFinding? {
+        guard let holder = held.first?.holderID else { return nil }
+        let limit = threshold(Self.keepAwakeSeconds, "\(EnergyFindingKind.keepsMacAwake.rawValue)|\(holder)")
+        let long: [(blocker: SleepBlocker, seconds: TimeInterval)] = held.compactMap { blocker in
+            guard !blocker.isSystem, !blocker.isIntentional, blocker.isIdle,
+                  let seconds = blocker.heldFor(at: now), seconds >= limit else { return nil }
+            return (blocker, seconds)
+        }
+        // On a tie the one that keeps the whole Mac awake leads.
+        guard let lead = long.max(by: { lhs, rhs in
+            lhs.seconds != rhs.seconds ? lhs.seconds < rhs.seconds
+                : lhs.blocker.effect == .displaySleep && rhs.blocker.effect == .systemSleep
+        }) else { return nil }
+        let blocker = lead.blocker
+        let name = blocker.displayName
+        let what = blocker.effect == .displaySleep ? "kept your display on" : "kept your Mac awake"
+        let duration = EnergyFormat.duration(lead.seconds)
+        var detail = "\(blocker.reason), and \(name) has used almost no CPU for the last 10 minutes."
+        if let via = blocker.viaProcessName { detail += " macOS (\(via)) holds it on \(name)\u{2019}s behalf." }
+        if let other = long.first(where: { $0.blocker.effect != blocker.effect }) {
+            detail += other.blocker.effect == .displaySleep ? " \(name) also keeps the display on."
+                : " \(name) also keeps the Mac awake."
+        }
+        let advice: String = if blocker.reason.hasPrefix("An audio") {
+            "Close the tab or window that played sound, or quit \(name). Your Mac can sleep again as soon as the stream closes."
+        } else if consumer?.kind == .job {
+            "If you no longer need it, stop it with Control-C in \(consumer?.hostAppName ?? "its terminal"), or use Stop\u{2026}."
+        } else {
+            "Quit \(name) if you\u{2019}re not using it. Your Mac can sleep again once it lets go."
+        }
+        let severity: EnergyFindingSeverity = lead.seconds >= Self.longKeepAwakeSeconds || battery?.isDischarging == true
+            ? .attention : .notable
+        return finding(.keepsMacAwake, consumerID: holder, name: name, familyKey: blocker.familyKey,
+                       severity: severity, headline: "\(name) has \(what) for \(duration)", detail: detail,
+                       advice: advice, now: now)
+    }
+
+    private mutating func wakeups(_ consumer: EnergyConsumer, battery: BatteryOutlook?, now: Date) -> EnergyFinding? {
+        let id = "\(EnergyFindingKind.wakeups.rawValue)|\(consumer.id)"
+        guard let busiest = consumer.busiestWakeups, Self.wakesProcessor(consumer, holding: active(id)) else { return nil }
+        let rate = busiest.perSecond
+        let cores = consumer.averageCores
+        let name = consumer.displayName
+        let severity: EnergyFindingSeverity = rate >= Self.busyWakeupsPerSecond ||
+            (battery?.isDischarging == true && rate >= 2 * Self.wakeupsPerSecond) ? .attention : .notable
+        let count = RadarFormat.fixed0(rate)
+        let advice = consumer.kind == .job || consumer.kind == .process
+            ? "Check whether \(name) polls in a tight loop, and stop it if it isn\u{2019}t needed."
+            : "Look for an animation, a spinning indicator or a busy page in \(name). Quitting and reopening it usually clears this."
+        let who = busiest.name == name ? "Averaged over about 5 minutes" :
+            "\(busiest.name), one of its processes, averaged this over about 5 minutes"
+        return finding(.wakeups, consumerID: consumer.id, name: name, familyKey: consumer.familyKey,
+                       severity: severity, headline: "\(name) wakes the processor \(count) times a second",
+                       detail: "\(who), while \(name) used \(RadarFormat.percent(cores * 100)) of one core. macOS itself reports a process above 150 a second: every wake-up stops the processor from resting, which costs battery.",
+                       advice: advice, now: now)
+    }
+
+    private mutating func diskWrites(_ consumer: EnergyConsumer, now: Date) -> EnergyFinding? {
+        let id = "\(EnergyFindingKind.heavyDiskWrites.rawValue)|\(consumer.id)"
+        guard Self.writesToDisk(consumer, holding: active(id)) else { return nil }
+        let rate = consumer.tenMinuteDiskWriteBytesPerSecond
+        let name = consumer.displayName
+        let perHour = EnergyFormat.bytes(rate * 3_600)
+        let advice = consumer.kind == .job || consumer.kind == .process
+            ? "If this is a log or cache that keeps growing, stop \(name) or turn its logging down."
+            : "Check whether \(name) is syncing, exporting or caching, and pause it if the work can wait."
+        return finding(.heavyDiskWrites, consumerID: consumer.id, name: name, familyKey: consumer.familyKey,
+                       severity: rate >= Self.heavyDiskBytesPerSecond ? .attention : .notable,
+                       headline: "\(name) is writing \(EnergyFormat.bytes(rate))/s to disk",
+                       detail: "It has kept this up for 10 minutes, about \(perHour) an hour. Writing without a break wears the SSD and slows other apps.",
+                       advice: advice, now: now)
+    }
+
+    private mutating func drain(_ consumer: EnergyConsumer, battery: BatteryOutlook?, now: Date) -> EnergyFinding? {
+        // The app's figure is a five-minute average, so the draw it is set against is too.
+        guard let battery, battery.isDischarging, let draw = battery.averageDrawWatts ?? battery.drawWatts, draw > 0,
+              let gained = consumer.batteryMinutesGained else { return nil }
+        let id = "\(EnergyFindingKind.batteryDrain.rawValue)|\(consumer.id)"
+        let watts = consumer.averageWatts
+        guard consumer.observedSeconds >= 240,
+              watts >= threshold(max(Self.drainMinimumWatts, Self.drainShare * draw), id),
+              gained >= threshold(Self.drainMinutes, id) else { return nil }
+        let name = consumer.displayName
+        let advice = consumer.kind == .app
+            ? "Close windows or tabs you aren\u{2019}t using, or quit \(name) until you\u{2019}re plugged in."
+            : "Let it finish once you\u{2019}re plugged in, or stop it if it can wait."
+        return finding(.batteryDrain, consumerID: consumer.id, name: name, familyKey: consumer.familyKey,
+                       severity: gained >= 60 ? .attention : .notable,
+                       headline: "\(name) is costing about \(EnergyFormat.duration(gained * 60)) of battery",
+                       detail: "It used \(EnergyFormat.watts(watts)) of the \(EnergyFormat.watts(draw)) your Mac is drawing, averaged over 5 minutes.",
+                       advice: advice, now: now)
+    }
+}

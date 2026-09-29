@@ -33,6 +33,8 @@ public struct ProcessMetrics: Identifiable, Equatable, Sendable {
     /// Process group, session, terminal and run state; `.unknown` when the
     /// sampler did not read them.
     public let session: ProcessSessionInfo
+    /// Energy, wake-ups and disk writes from the usage read.
+    public let power: ProcessPowerUsage
 
     public var measurementDate: Date? {
         date(for: measurementStatus)
@@ -81,7 +83,8 @@ public struct ProcessMetrics: Identifiable, Equatable, Sendable {
         measurementStatus: ProcessMeasurementStatus = .fresh,
         cpuMeasurementStatus: ProcessMeasurementStatus? = nil,
         gpuMeasurementStatus: ProcessMeasurementStatus? = nil,
-        session: ProcessSessionInfo = .unknown
+        session: ProcessSessionInfo = .unknown,
+        power: ProcessPowerUsage = .unmeasured
     ) {
         self.identity = identity
         self.parentPID = parentPID
@@ -104,5 +107,6 @@ public struct ProcessMetrics: Identifiable, Equatable, Sendable {
         self.gpuMeasurementStatus = gpuMeasurementStatus ?? measurementStatus
         self.forensics = forensics
         self.session = session
+        self.power = power
     }
 }

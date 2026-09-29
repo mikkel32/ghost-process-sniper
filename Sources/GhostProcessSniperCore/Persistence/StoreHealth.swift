@@ -70,12 +70,16 @@ public struct StoreWriteStats: Equatable, Sendable {
     public let baselinesDeferred: Int
     /// Flushes that had nothing due and skipped the transaction entirely.
     public let transactionsSkipped: Int
+    /// Incident rows written this session. It moves only when the incident
+    /// table did, so a reader of it can skip the flushes that changed nothing there.
+    public let incidentWrites: Int
 
     public static let empty = StoreWriteStats(baselineWrites: 0, baselinesDeferred: 0, transactionsSkipped: 0)
 
-    public init(baselineWrites: Int, baselinesDeferred: Int, transactionsSkipped: Int) {
+    public init(baselineWrites: Int, baselinesDeferred: Int, transactionsSkipped: Int, incidentWrites: Int = 0) {
         self.baselineWrites = baselineWrites
         self.baselinesDeferred = baselinesDeferred
         self.transactionsSkipped = transactionsSkipped
+        self.incidentWrites = incidentWrites
     }
 }

@@ -15,15 +15,31 @@ final class IncidentLedger {
     static let refreshInterval: TimeInterval = 30
     private static let chunkSize = 400
 
+    /// The episode's highest values. Every column the tracker writes is a
+    /// peak (SQL MAX), so a relaunch that restarts this at zero cannot lower a
+    /// stored row.
     struct Peak: Equatable {
         var level: GhostLevel
         var score: Double
         var memoryBytes: UInt64
+        var cpuPercent = 0.0
+        /// Proven growth in MB/min, never the raw slope.
+        var growthMegabytesPerMinute = 0.0
+
+        private static let physicalMemoryBytes = ProcessInfo.processInfo.physicalMemory
 
         mutating func absorb(_ family: ProcessFamily) {
             level = max(level, family.score.level)
             score = max(score, family.score.value)
             memoryBytes = max(memoryBytes, family.totalPhysicalFootprintBytes)
+            cpuPercent = max(cpuPercent, family.totalCPUPercent)
+            // What the scorer counts as growth: two close samples can make any
+            // jump look like thousands of MB/min, and the raw slope can be
+            // negative. A slow leak counts at its long-term slope.
+            growthMegabytesPerMinute = max(
+                growthMegabytesPerMinute,
+                PressureAttribution.credibleGrowth(of: family, physicalMemoryBytes: Self.physicalMemoryBytes)
+            )
         }
     }
 
@@ -64,6 +80,11 @@ final class IncidentLedger {
     private var stagedCountChanges: Set<String> = []
     private var stagedCountsReset = false
     static let countCacheLifetime: TimeInterval = 15 * 60
+    /// Row writes that reached the table, plus one whenever the file was
+    /// replaced. A reader of the incident table re-reads only when this moves;
+    /// a flush that wrote nothing here leaves it alone. Pruning old rows is
+    /// not counted: it removes nothing a reader still needs.
+    private(set) var writeCount = 0
 
     init(db: SQLiteDatabase, codec: StoreCodec) {
         self.db = db
@@ -150,7 +171,9 @@ final class IncidentLedger {
         // Identical instances share a signature, and so share one episode.
         var representatives: [String: ProcessFamily] = [:]
         var order: [String] = []
-        for family in families where family.score.heat.shouldRecordIncident {
+        // Being big is not an episode: an app at its usual size would
+        // otherwise log an incident every time it is open.
+        for family in families where family.score.heat.shouldRecordIncident && !family.hasOnlySizeAgainstIt {
             let signatureID = family.signature.id
             if let current = representatives[signatureID] {
                 if family.score.value > current.score.value {
@@ -160,6 +183,22 @@ final class IncidentLedger {
                 representatives[signatureID] = family
                 order.append(signatureID)
             }
+        }
+
+        // Close first, before this scan counts as activity. Scans are seconds
+        // apart, so a gap of `closeAfter` or more is time Ghost did not
+        // observe (a sleeping Mac): a family that is hot again must find its
+        // old episode already ended at its last sighting, not stretched across
+        // the gap. A return within `reopenWindow` then reopens it as a hit; a
+        // later one starts a new row, as after a relaunch.
+        for (signatureID, open) in episodes.open where date.timeIntervalSince(open.lastActiveAt) >= Self.closeAfter {
+            queueClose(open)
+            stagedCountChanges.insert(signatureID)
+            episodes.open[signatureID] = nil
+            episodes.recentlyClosed[signatureID] = ClosedIncident(id: open.id, resolvedAt: open.lastActiveAt, peak: open.peak)
+        }
+        episodes.recentlyClosed = episodes.recentlyClosed.filter {
+            date.timeIntervalSince($0.value.resolvedAt) < Self.reopenWindow
         }
 
         for signatureID in order {
@@ -181,15 +220,6 @@ final class IncidentLedger {
             }
         }
 
-        for (signatureID, open) in episodes.open where date.timeIntervalSince(open.lastActiveAt) >= Self.closeAfter {
-            queueClose(open)
-            stagedCountChanges.insert(signatureID)
-            episodes.open[signatureID] = nil
-            episodes.recentlyClosed[signatureID] = ClosedIncident(id: open.id, resolvedAt: open.lastActiveAt, peak: open.peak)
-        }
-        episodes.recentlyClosed = episodes.recentlyClosed.filter {
-            date.timeIntervalSince($0.value.resolvedAt) < Self.reopenWindow
-        }
         staged = episodes
     }
 
@@ -212,6 +242,7 @@ final class IncidentLedger {
             committed = staged
         }
         staged = nil
+        writeCount += pendingWrites.count
         pendingWrites.removeAll(keepingCapacity: true)
         stagedCountChanges.removeAll(keepingCapacity: true)
         stagedCountsReset = false
@@ -228,6 +259,7 @@ final class IncidentLedger {
     /// reloads the episodes from the new file.
     func reset() {
         committed = nil
+        writeCount += 1
         invalidateCounts()
         discardStaged()
     }
@@ -238,7 +270,8 @@ final class IncidentLedger {
         open.lastActiveAt = date
         let escalated = open.peak.level > previous.level
         // Small drifts wait for the periodic refresh; the tracked peak is exact
-        // and is what gets written then.
+        // and is what gets written then. CPU and growth never write on their
+        // own: they ride along with the next refresh or the close.
         let peakRose = escalated ||
             open.peak.score >= previous.score + 1 ||
             Double(open.peak.memoryBytes) >= Double(previous.memoryBytes) * 1.05
@@ -250,8 +283,8 @@ final class IncidentLedger {
             .text(open.peak.level.label),
             .double(open.peak.score),
             .int64(Int64(clamping: open.peak.memoryBytes)),
-            .double(family.totalCPUPercent),
-            .double(family.trend.memoryVelocityMegabytesPerMinute),
+            .double(open.peak.cpuPercent),
+            .double(open.peak.growthMegabytesPerMinute),
             .double(date.timeIntervalSince1970)
         ]
         // The reasons that explain the peak level, not the latest tick's.
@@ -274,8 +307,8 @@ final class IncidentLedger {
                 .text(peak.level.label),
                 .double(peak.score),
                 .int64(Int64(clamping: peak.memoryBytes)),
-                .double(family.totalCPUPercent),
-                .double(family.trend.memoryVelocityMegabytesPerMinute),
+                .double(peak.cpuPercent),
+                .double(peak.growthMegabytesPerMinute),
                 .text(closed.id.uuidString)
             ]
         ))
@@ -284,6 +317,8 @@ final class IncidentLedger {
 
     private func insert(_ family: ProcessFamily, at date: Date) throws -> OpenIncident {
         let id = UUID()
+        var peak = Peak(level: family.score.level, score: family.score.value, memoryBytes: family.totalPhysicalFootprintBytes)
+        peak.absorb(family)
         pendingWrites.append((
             RadarStoreQueries.insertIncident,
             [
@@ -296,14 +331,13 @@ final class IncidentLedger {
                 .text(family.score.level.label),
                 .double(family.score.value),
                 .int64(Int64(clamping: family.totalPhysicalFootprintBytes)),
-                .double(family.totalCPUPercent),
-                .double(family.trend.memoryVelocityMegabytesPerMinute),
+                .double(peak.cpuPercent),
+                .double(peak.growthMegabytesPerMinute),
                 .text(try codec.encode(family.score.reasons)),
                 .double(date.timeIntervalSince1970),
                 .double(date.timeIntervalSince1970)
             ]
         ))
-        let peak = Peak(level: family.score.level, score: family.score.value, memoryBytes: family.totalPhysicalFootprintBytes)
         return OpenIncident(id: id, peak: peak, lastActiveAt: date, lastWrittenAt: date)
     }
 
@@ -318,6 +352,8 @@ final class IncidentLedger {
                 .double(lastActive),
                 .double(open.peak.score),
                 .int64(Int64(clamping: open.peak.memoryBytes)),
+                .double(open.peak.cpuPercent),
+                .double(open.peak.growthMegabytesPerMinute),
                 .text(open.id.uuidString)
             ]
         ))

@@ -97,6 +97,21 @@ final class PrecisionTelemetryTests: XCTestCase {
         XCTAssertEqual(repeated.sampleCount, 1)
     }
 
+    /// 2.1's baselines describe each family without the launchd-started helpers that now belong to it
+    /// (Safari's tabs, an IDE's XPC services). Trusted as they were, an app that suddenly reads ten times
+    /// its "usual size" would stay flagged for good: far-above readings are never learned.
+    func testABaselineFromTheReleaseBeforeHelpersJoinedFamiliesIsRelearned() {
+        let f = family(root: process())
+        let released = FamilyBaseline(signature: f.signature, sampleCount: 500, meanMemoryBytes: 300 * 1_048_576,
+            peakMemoryBytes: 400 * 1_048_576, meanCPUPercent: 1, peakCPUPercent: 20, meanLeakVelocityMegabytesPerMinute: 0,
+            incidentCount: 0, firstSeenAt: now.addingTimeInterval(-86_400), lastSeenAt: now.addingTimeInterval(-1),
+            measurementVersion: 2, observedSeconds: 7_200)
+        XCTAssertFalse(released.isMeasurementTrusted, "the family's membership changed meaning")
+        let learned = FamilyBaselineLearner().updated(existing: released, family: f, now: now)
+        XCTAssertEqual(learned.sampleCount, 1, "learned again from scratch")
+        XCTAssertEqual(learned.measurementVersion, FamilyBaseline.currentMeasurementVersion)
+    }
+
     func testBaselineSchemaMigrationPreservesLegacyRowAndPersistsProvenance() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("radar-precision-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

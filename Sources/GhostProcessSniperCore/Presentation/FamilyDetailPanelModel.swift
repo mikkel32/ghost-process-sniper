@@ -29,7 +29,19 @@ public struct FamilyMetricCard: Identifiable, Equatable, Sendable {
 }
 
 public enum OverviewMetricDestination: Sendable, Equatable {
-    case families, attention, leaking, duplicates, memory
+    case families, review, leaking, duplicates, memory
+
+    /// The family list a card opens, so its count can be the list's length.
+    /// Nil for the cards that go elsewhere: Duplicates has its own page and
+    /// Memory sorts the list rather than filtering it.
+    public var filter: RadarFilter? {
+        switch self {
+        case .families: .all
+        case .review: .review
+        case .leaking: .leaking
+        case .duplicates, .memory: nil
+        }
+    }
 }
 
 public struct FamilyForensicsSummary: Equatable, Sendable {
@@ -85,6 +97,9 @@ public struct FamilyChangeSummary: Equatable, Sendable {
 public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
     public var id: String { familyKey }
 
+    /// How many processes the inspector lists before pointing to the Processes tab.
+    public static let inspectorTreeLimit = 10
+
     public let familyKey: String
     public let assessment: ProcessAssessment
     public let title: String
@@ -128,6 +143,9 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
     public let verdict: FamilyVerdict
     public let brief: FamilyDecisionBrief
     public let processTree: [FamilyProcessTreeRow]
+    /// The inspector's list, ranked once here so its view never sorts:
+    /// the root and the biggest processes, at most `inspectorTreeLimit`.
+    public let inspectorTree: [FamilyProcessTreeRow]
     public let forecastETASeconds: TimeInterval?
     public let scoreValue: Double
     public let isKillable: Bool
@@ -229,7 +247,17 @@ public struct FamilyDetailPanelModel: Identifiable, Equatable, Sendable {
         memoryPattern = patternAnalysis
         verdict = FamilyVerdict.synthesize(family: family, pattern: patternAnalysis)
         brief = FamilyDecisionBrief(family: family, verdict: verdict, assessment: assessment, pattern: patternAnalysis, culprit: culprit)
-        processTree = FamilyProcessTreeRow.build(members: family.members, root: family.root, ownedIdentities: family.ownedIdentities)
+        // Growth figures need history behind them; calling a member "leaking" needs the verdict
+        // that the "Stop only" suggestion uses, so the tree never contradicts the advice.
+        let leaking = family.hasCredibleLeak
+        let growing = leaking || family.trend.credibleMemoryVelocity > 0
+        // A linked helper is out of the family's own stop plan, not out of reach of its own Stop.
+        let tree = FamilyProcessTreeRow.build(members: family.members, root: family.root,
+                                              ownedIdentities: family.ownedIdentities + family.linkedIdentities,
+                                              growth: growing ? family.growth : [],
+                                              culprit: leaking ? family.culprit?.identity : nil)
+        processTree = tree
+        inspectorTree = FamilyProcessTreeRow.largest(tree, limit: Self.inspectorTreeLimit)
         forecastETASeconds = family.forecast.etaSeconds
         scoreValue = family.score.value
         isKillable = family.isKillable

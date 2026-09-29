@@ -76,6 +76,8 @@ public struct RefreshOutcome: Equatable, Sendable {
     public let processes: [ProcessMetrics]
     /// Security findings and the launch feed.
     public let sentinel: SentinelReport
+    /// Energy per app, the battery, and what keeps the Mac awake.
+    public let energy: EnergyReport
 
     public init(
         families: [ProcessFamily],
@@ -93,7 +95,8 @@ public struct RefreshOutcome: Equatable, Sendable {
         generatedAt: Date,
         thermalActivity: ThermalActivitySummary = .empty,
         processes: [ProcessMetrics] = [],
-        sentinel: SentinelReport = .empty
+        sentinel: SentinelReport = .empty,
+        energy: EnergyReport = .empty
     ) {
         self.families = families
         self.summary = summary
@@ -111,6 +114,7 @@ public struct RefreshOutcome: Equatable, Sendable {
         self.thermalActivity = thermalActivity
         self.processes = processes
         self.sentinel = sentinel
+        self.energy = energy
     }
 }
 
@@ -127,17 +131,25 @@ public actor RadarRefreshWorker {
     private var spikeRing = SpikeRingBuffer(limit: 8)
     private var thermalHistory = ThermalActivityHistory()
     private let sentinel: SentinelEngine?
+    private var energy: EnergyMonitor
+    private var responsibility: ResponsibleProcessLookup
 
     public init(
         sampler: ProcessSampling = NativeProcessSampler(),
         store: RadarStore? = nil,
         builder: ProcessFamilyBuilder = ProcessFamilyBuilder(),
         intelligence: RadarIntelligence = RadarIntelligence(),
-        sentinel: SentinelEngine? = nil
+        sentinel: SentinelEngine? = nil,
+        battery: (any BatterySource)? = IOKitBatterySource(),
+        sleepAssertions: (any SleepAssertionSource)? = IOKitSleepAssertionSource(),
+        responsibleQuery: (@Sendable (Int32) -> Int32?)? = nil
     ) {
+        // Tests stand in for the libSystem call, which answers for real pids only.
+        self.responsibility = ResponsibleProcessLookup(query: responsibleQuery ?? ResponsibleProcessLookup.system)
         self.sampler = sampler
         self.store = store
         self.sentinel = sentinel
+        self.energy = EnergyMonitor(battery: battery, assertions: sleepAssertions, persistsHistory: store != nil)
         self.pipeline = RadarPipeline(builder: builder, intelligence: intelligence)
     }
 
@@ -190,9 +202,13 @@ public actor RadarRefreshWorker {
         effectiveSettings: ThresholdSettings,
         systemPressure: SystemMemoryPressure
     ) async -> RefreshOutcome {
+        // Asked once per tick: the families place launchd-started helpers
+        // with it, and the energy attribution below reuses the same answers.
+        let responsible = responsibility.hints(for: batch.processes, now: request.now)
         let build = pipeline.buildCandidates(
             processes: batch.processes,
             settings: effectiveSettings,
+            responsible: responsible,
             now: request.now
         )
         let storeStart = Date()
@@ -285,7 +301,7 @@ public actor RadarRefreshWorker {
             uiVisible: request.uiVisible,
             power: scheduler.currentPower,
             thermalPressure: scheduler.currentPressure,
-            summaryLevel: summary.level,
+            summaryLevel: RadarScheduler.schedulingLevel(scored.families),
             hotSinceAlerted: hotSinceAlerted,
             currentRefreshMilliseconds: stats.totalMilliseconds,
             userIdleSeconds: request.uiVisible ? scheduler.userIdleSeconds() : 0
@@ -297,7 +313,7 @@ public actor RadarRefreshWorker {
             storeHealth: currentStoreHealth,
             nextInterval: nextInterval,
             scannerHealth: batch.scannerHealth,
-            duplicateClusterCount: build.duplicateClusters.filter { !$0.isInternalToSingleFamily }.count,
+            duplicateClusterCount: build.duplicateClusters.filter(\.isListed).count,
             promotedDuplicateCandidateCount: build.promotedDuplicateCandidateCount,
             duplicateDetectorMilliseconds: build.duplicateDetectorMilliseconds,
             hardwareOffenderCount: build.hardwareOffenderCount,
@@ -328,9 +344,13 @@ public actor RadarRefreshWorker {
             detailSignatures: request.focusedSignatureIDs.union(scored.families.prefix(8).map(\.familyKey)),
             processes: batch.processes
         )
+        var resolver = ThermalWorkloadResolver(processes: batch.processes, responsiblePIDs: responsible)
         let currentActivity = ThermalActivityAnalyzer.project(
-            processes: batch.processes, families: scored.families, now: request.now)
+            processes: batch.processes, families: scored.families, now: request.now, resolver: &resolver)
         let thermalActivity = thermalHistory.record(currentActivity, at: request.now)
+        let energyReport = energy.update(processes: batch.processes, families: scored.families,
+                                         resolver: &resolver, uiVisible: request.uiVisible, now: request.now)
+        await syncEnergyHistory(now: request.now)
         let sentinelReport = await sentinel?.ingest(
             processes: batch.processes, uiVisible: request.uiVisible, now: request.now) ?? .empty
 
@@ -350,8 +370,33 @@ public actor RadarRefreshWorker {
             generatedAt: request.now,
             thermalActivity: thermalActivity,
             processes: batch.processes,
-            sentinel: sentinelReport
+            sentinel: sentinelReport,
+            energy: energyReport
         )
+    }
+
+    /// Loads today's stored energy once, then adds what was measured every
+    /// five minutes; `force` writes whatever is pending, for quitting.
+    public func syncEnergyHistory(now: Date, force: Bool = false) async {
+        guard let store else { return }
+        if energy.needsHistoryLoad(now: now) {
+            do {
+                energy.loadHistory(try await store.energyHistory(days: EnergyHistory.dayCount, now: now), now: now)
+            } catch {
+                energy.noteHistoryLoadFailed(now: now)
+                RadarLogger.store.error("Energy history load failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        guard let batches = energy.takeHistoryFlush(now: now, force: force) else { return }
+        for (index, batch) in batches.enumerated() {
+            do {
+                try await store.recordEnergy(batch.usages, day: batch.day, now: now)
+            } catch {
+                energy.restoreHistory(Array(batches[index...]))
+                RadarLogger.store.error("Energy history write failed: \(error.localizedDescription, privacy: .public)")
+                return
+            }
+        }
     }
 
     private func metrics(

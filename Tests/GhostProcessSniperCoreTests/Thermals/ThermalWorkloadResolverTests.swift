@@ -4,6 +4,8 @@ import XCTest
 
 final class ThermalWorkloadResolverTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 2_000_200_000)
+    private let xcode = "/Applications/Xcode.app"
+    private var toolchain: String { "\(xcode)/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin" }
 
     func testBuildChildrenCollapseIntoOneJobNamedAfterItsRoot() throws {
         let processes = terminalShell() + [process(603, parent: 602, name: "make", path: "/usr/bin/make", cpu: 1)] +
@@ -171,6 +173,296 @@ final class ThermalWorkloadResolverTests: XCTestCase {
         XCTAssertEqual(spotlight.workloadSummary, "macOS background work")
         XCTAssertEqual(result.contributors.first { $0.knownSource == .windowServer }?.displayName, "Screen drawing")
         XCTAssertNil(ThermalKnownSource.matching(name: "com.apple.Virtua", executablePath: ""), "Too short to be unambiguous")
+    }
+
+    /// PROC_FLAG_SYSTEM marks only the kernel, so a daemon that runs as the user
+    /// (suggestd, cloudd, sharingd) used to read as an app: app advice, the app
+    /// icon and, when it repeated while hot, a Stop shortcut.
+    func testMacOSDaemonsRunningAsTheUserAreServices() throws {
+        let suggestd = "/System/Library/PrivateFrameworks/CoreSuggestions.framework/Versions/A/Support/suggestd"
+        let daemon = process(701, parent: 1, name: "suggestd", path: suggestd, cpu: 90)
+        let plist = process(710, parent: 602, name: "PlistBuddy", path: "/usr/libexec/PlistBuddy", cpu: 90)
+        let script = process(711, parent: 602, name: "python3", path: "/usr/bin/python3", cpu: 90)
+        let finder = process(720, parent: 1, name: "Finder",
+                             path: "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder", cpu: 90)
+        let family = RefreshPerformanceFixture.family(daemon)
+        let result = ThermalActivityAnalyzer.project(processes: terminalShell() + [daemon, plist, script, finder],
+                                                     families: [family], now: now, processorCount: 10)
+
+        let service = try XCTUnwrap(result.contributors.first { $0.displayName == "suggestd" })
+        XCTAssertTrue(service.isSystemProcess)
+        XCTAssertEqual(service.workloadSummary, "macOS service")
+        XCTAssertTrue(service.suggestedAction.contains("macOS service"), service.suggestedAction)
+        XCTAssertNil(ThermalStopTarget.resolve(for: service, family: family, ownPID: 1),
+                     "A macOS service is never offered for stopping")
+
+        XCTAssertEqual(result.contributors.first { $0.displayName == "PlistBuddy" }?.isSystemProcess, false,
+                       "A tool someone ran from a shell is their job, wherever it lives")
+        XCTAssertEqual(result.contributors.first { $0.displayName == "python3" }?.isSystemProcess, false)
+        XCTAssertEqual(result.contributors.first { $0.displayName == "Finder" }?.isSystemProcess, false,
+                       "Apple's own apps are still apps you use")
+    }
+
+    /// bird, cloudd and fileproviderd are one iCloud sync, not three anonymous
+    /// rows; the security daemons that vet a fresh build or download likewise.
+    func testDaemonsThatExplainHeatAreKnownSources() throws {
+        let frameworks = "/System/Library/PrivateFrameworks"
+        let result = projection([
+            process(60, parent: 1, name: "bird", path: "\(frameworks)/iCloudDriveCore.framework/Versions/A/Support/bird", cpu: 30),
+            process(61, parent: 1, name: "cloudd", path: "\(frameworks)/CloudKitDaemon.framework/Support/cloudd", cpu: 30),
+            process(62, parent: 1, name: "fileproviderd", path: "\(frameworks)/FileProvider.framework/Support/fileproviderd", cpu: 30),
+            process(63, parent: 1, name: "syspolicyd", path: "/usr/libexec/syspolicyd", cpu: 60),
+            process(64, parent: 1, name: "XprotectService", path: "", cpu: 40),
+            process(65, parent: 1, name: "softwareupdated",
+                    path: "/System/Library/CoreServices/Software Update.app/Contents/Resources/softwareupdated", cpu: 20)
+        ])
+        let cloud = try XCTUnwrap(result.contributors.first { $0.knownSource == .cloudSync })
+        XCTAssertEqual(cloud.displayName, "iCloud sync")
+        XCTAssertEqual(cloud.processCount, 3)
+        XCTAssertTrue(cloud.isSystemProcess)
+        XCTAssertEqual(cloud.suggestedAction, ThermalKnownSource.cloudSync.advice)
+        XCTAssertEqual(cloud.workloadSummary, "iCloud Drive, CloudKit and cloud-storage folders")
+        let security = try XCTUnwrap(result.contributors.first { $0.knownSource == .securityChecks })
+        XCTAssertEqual(security.displayName, "Security checks")
+        XCTAssertEqual(security.processCount, 2, "An unresolved path still matches a macOS daemon's name")
+        XCTAssertTrue(security.isSystemProcess)
+        XCTAssertEqual(security.suggestedAction, ThermalKnownSource.securityChecks.advice)
+        let update = try XCTUnwrap(result.contributors.first { $0.knownSource == .softwareUpdate })
+        XCTAssertEqual(update.displayName, "Software update")
+        XCTAssertEqual(update.processCount, 1, "The bundle path does not make it an app")
+        XCTAssertEqual(result.contributors.count, 3, "Six daemons, three explanations")
+
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(90), activity: result, at: now)
+        XCTAssertEqual(ThermalAppInsight.evaluate(activity: result, diagnosis: diagnosis, at: now).title,
+                       "Start with Security checks")
+    }
+
+    /// The iOS Simulator runs its own cloudd, trustd and installd under a path that
+    /// contains "/System/Library/", and people build tools with these names.
+    func testSharedDaemonNamesNeedMacOSsOwnFolder() {
+        let simulator = "/Library/Developer/CoreSimulator/Volumes/iOS_23F77/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.0.simruntime/Contents/Resources/RuntimeRoot/System/Library/PrivateFrameworks/CloudKitDaemon.framework/Support/cloudd"
+        XCTAssertNil(ThermalKnownSource.matching(name: "cloudd", executablePath: simulator))
+        XCTAssertNil(ThermalKnownSource.matching(name: "bird", executablePath: "/Users/me/bin/bird"))
+        XCTAssertNil(ThermalKnownSource.matching(name: "installd", executablePath: "/opt/homebrew/bin/installd"))
+        XCTAssertEqual(ThermalKnownSource.matching(name: "trustd", executablePath: "/usr/libexec/trustd"), .securityChecks)
+        XCTAssertEqual(ThermalKnownSource.matching(name: "trustd", executablePath: ""), .securityChecks)
+
+        let result = projection([process(70, parent: 1, name: "bird", path: "/Users/me/bin/bird", cpu: 90)])
+        XCTAssertEqual(result.contributors.first?.kind, .process)
+        XCTAssertNil(result.contributors.first?.knownSource)
+        XCTAssertFalse(result.contributors.first?.isSystemProcess ?? true)
+    }
+
+    /// A daemon whose path could not be read is still not something to stop.
+    func testAnExplainedDaemonWithoutAPathGetsNoStopShortcut() throws {
+        let daemon = process(80, parent: 1, name: "syspolicyd", path: "", cpu: 90)
+        let family = RefreshPerformanceFixture.family(daemon)
+        let result = ThermalActivityAnalyzer.project(processes: [daemon], families: [family], now: now, processorCount: 10)
+        let contributor = try XCTUnwrap(result.contributors.first)
+        XCTAssertEqual(contributor.knownSource, .securityChecks)
+        XCTAssertNil(ThermalStopTarget.resolve(for: contributor, family: family, ownPID: 1))
+    }
+
+    /// macOS keeps a terminal responsible for what it started, even once the job
+    /// is orphaned to launchd (nohup, a daemonized server, colima). That is a job
+    /// started in the terminal, not the terminal's own work.
+    func testAnOrphanedJobResponsibleToATerminalIsAJobInIt() throws {
+        let node = process(610, parent: 1, name: "node", path: "/opt/homebrew/bin/node", cpu: 80)
+        let child = process(611, parent: 610, name: "esbuild", path: "/opt/homebrew/bin/esbuild", cpu: 40)
+        let result = ThermalActivityAnalyzer.project(
+            processes: terminalShell() + [node, child], families: [], now: now, processorCount: 10,
+            responsiblePIDs: [node.identity: 600])
+        let job = try XCTUnwrap(result.contributors.first)
+        XCTAssertEqual(result.contributors.count, 1)
+        XCTAssertEqual(job.id, "job:610:2000199000.0")
+        XCTAssertEqual(job.displayName, "node")
+        XCTAssertEqual(job.kind, .job)
+        XCTAssertEqual(job.hostAppName, "Terminal")
+        XCTAssertEqual(job.processCount, 2)
+    }
+
+    /// A platform helper the terminal is responsible for (an open panel, a view
+    /// bridge) is still counted with the terminal, as before.
+    func testPlatformHelpersResponsibleToATerminalStayWithIt() {
+        let viewBridge = "/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/ViewBridgeAuxiliary.xpc/Contents/MacOS/ViewBridgeAuxiliary"
+        let bridge = process(620, parent: 1, name: "ViewBridgeAuxiliary", path: viewBridge, cpu: 60)
+        let service = process(621, parent: 1, name: "diagnosticd", path: "/usr/libexec/diagnosticd", cpu: 60)
+        var resolver = ThermalWorkloadResolver(processes: terminalShell() + [bridge, service],
+                                               responsiblePIDs: [bridge.identity: 600, service.identity: 600])
+        for helper in [bridge, service] {
+            let assignment = resolver.assignment(for: helper)
+            XCTAssertTrue(assignment.kind == .app, "\(helper.name) is \(assignment.kind)")
+            XCTAssertEqual(assignment.groupKey, "/System/Applications/Utilities/Terminal.app")
+        }
+    }
+
+    /// A pid reused after the responsible app quit would name a stranger.
+    func testAResponsibleAppThatStartedAfterTheJobIsARecycledPID() {
+        let editor = process(630, parent: 1, name: "Editor", path: "/Applications/Editor.app/Contents/MacOS/Editor",
+                             cpu: 0, start: 2_000_199_500)
+        let orphan = process(631, parent: 1, name: "worker", path: "/usr/local/bin/worker", cpu: 50)
+        var resolver = ThermalWorkloadResolver(processes: [editor, orphan], responsiblePIDs: [orphan.identity: 630])
+        let assignment = resolver.assignment(for: orphan)
+        XCTAssertEqual(assignment.kind, .process)
+        XCTAssertEqual(assignment.groupKey, "job:631:2000199000.0")
+    }
+
+    // MARK: - Shell scripts
+
+    /// `bash ./build.sh` typed at a prompt is one job named after the script. Its
+    /// tools run one after another, and a job per tool never built up any history.
+    func testShellScriptStepsAreOneJobNamedAfterTheScript() throws {
+        var history = ThermalActivityHistory()
+        var current = ThermalActivitySummary.empty
+        for (index, tool) in ["clang", "ld"].enumerated() {
+            let date = now.addingTimeInterval(Double(index) * 10)
+            let script = process(603, parent: 602, name: "bash", path: "/bin/bash", cpu: 0, at: date,
+                                 command: "bash ./scripts/build.sh --release")
+            let step = process(Int32(700 + index), parent: 603, name: tool, path: "/usr/bin/\(tool)", cpu: 180,
+                               start: 2_000_199_000 + UInt64(index * 10), at: date)
+            let summary = ThermalActivityAnalyzer.project(processes: terminalShell(at: date) + [script, step],
+                                                          families: [], now: date, processorCount: 10)
+            let job = try XCTUnwrap(summary.contributors.first)
+            XCTAssertEqual(summary.contributors.count, 1)
+            XCTAssertEqual(job.id, "job:603:2000199000.0")
+            XCTAssertEqual(job.displayName, "build.sh")
+            XCTAssertEqual(job.kind, .job)
+            XCTAssertEqual(job.hostAppName, "Terminal")
+            XCTAssertEqual(job.processCount, 2)
+            current = history.record(summary, at: date)
+        }
+        XCTAssertEqual(current.recentContributors.count, 1)
+        XCTAssertEqual(current.recentContributors.first?.activeSampleCount, 2)
+    }
+
+    func testNestedScriptsClimbToTheOutermostAndAPromptShellIsNotAScript() throws {
+        let nested = projection(terminalShell() + [
+            process(603, parent: 602, name: "bash", path: "/bin/bash", cpu: 0, command: "bash ./ci.sh"),
+            process(604, parent: 603, name: "bash", path: "/bin/bash", cpu: 0, command: "/bin/bash ./scripts/build.sh"),
+            process(700, parent: 604, name: "clang", path: "/usr/bin/clang", cpu: 95)
+        ])
+        XCTAssertEqual(nested.contributors.map(\.id), ["job:603:2000199000.0"])
+        XCTAssertEqual(nested.contributors.first?.displayName, "ci.sh")
+        XCTAssertEqual(nested.contributors.first?.processCount, 3)
+
+        // A command string or a prompt someone opened is a boundary, and the tool is the job.
+        let command = projection(terminalShell() + [
+            process(603, parent: 602, name: "bash", path: "/bin/bash", cpu: 0, command: "bash -c make"),
+            process(604, parent: 603, name: "make", path: "/usr/bin/make", cpu: 1),
+            process(700, parent: 604, name: "clang", path: "/usr/bin/clang", cpu: 95)
+        ])
+        XCTAssertEqual(command.contributors.map(\.id), ["job:604:2000199000.0"])
+        XCTAssertEqual(command.contributors.first?.displayName, "make")
+        let prompt = projection(terminalShell() + [
+            process(603, parent: 602, name: "bash", path: "/bin/bash", cpu: 0, command: "bash --rcfile /tmp/rc"),
+            process(700, parent: 603, name: "python3", path: "/usr/bin/python3", cpu: 95)
+        ])
+        XCTAssertEqual(prompt.contributors.map(\.id), ["job:700:2000199000.0"])
+        XCTAssertEqual(prompt.contributors.first?.displayName, "python3")
+    }
+
+    /// A script nothing above it explains keeps the shell's name and its process kind.
+    func testALoneScriptShellKeepsItsName() {
+        let result = projection([process(800, parent: 1, name: "bash", path: "/bin/bash", cpu: 90, command: "bash ./x.sh")])
+        XCTAssertEqual(result.contributors.first?.displayName, "bash")
+        XCTAssertEqual(result.contributors.first?.kind, .process)
+    }
+
+    // MARK: - Xcode's command-line tools
+
+    /// With Xcode selected, the xcrun shims for swift, clang, git, make and python3 run
+    /// programs from inside Xcode.app. Started from a shell they are that shell's job.
+    func testToolchainBinariesInsideXcodeStartedFromAShellAreTheShellsJob() throws {
+        let build = process(603, parent: 602, name: "swift-build", path: "\(toolchain)/swift-build", cpu: 40)
+        let frontends = (0..<4).map {
+            process(Int32(610 + $0), parent: 603, name: "swift-frontend", path: "\(toolchain)/swift-frontend", cpu: 98)
+        }
+        let result = projection(terminalShell() + [build] + frontends)
+        let job = try XCTUnwrap(result.contributors.first)
+        XCTAssertEqual(result.contributors.count, 1)
+        XCTAssertEqual(job.displayName, "swift-build")
+        XCTAssertEqual(job.kind, .job)
+        XCTAssertEqual(job.hostAppName, "Terminal")
+        XCTAssertNil(job.applicationPath)
+        XCTAssertEqual(job.processCount, 5)
+        let diagnosis = ThermalDiagnosis.evaluate(snapshot: snapshot(90), activity: result, at: now)
+        XCTAssertEqual(ThermalAppInsight.evaluate(activity: result, diagnosis: diagnosis, at: now).title,
+                       "Start with swift-build")
+    }
+
+    /// The python3 shim runs a Python.app nested in Xcode's frameworks, and make
+    /// runs each recipe through a `sh -c` that is not inside any app.
+    func testPythonAndMakeThroughTheXcodeShimsAreJobsToo() throws {
+        let python = "\(xcode)/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python"
+        var processes = terminalShell() + [
+            process(620, parent: 602, name: "Python", path: python, cpu: 90, command: "python3 train.py"),
+            process(603, parent: 602, name: "make", path: "\(xcode)/Contents/Developer/usr/bin/make", cpu: 1)
+        ]
+        for index in 0..<3 {
+            let shell = Int32(630 + index * 2)
+            let command = "clang -c file\(index).c"
+            processes.append(process(shell, parent: 603, name: "sh", path: "/bin/sh", cpu: 0, command: "/bin/sh -c \(command)"))
+            processes.append(process(shell + 1, parent: shell, name: "clang", path: "\(toolchain)/clang", cpu: 95, command: command))
+        }
+        let result = projection(processes)
+        XCTAssertEqual(result.contributors.count, 2)
+        let make = try XCTUnwrap(result.contributors.first { $0.displayName == "make" })
+        XCTAssertEqual(make.kind, .job)
+        XCTAssertEqual(make.processCount, 7)
+        XCTAssertEqual(make.hostAppName, "Terminal")
+        let script = try XCTUnwrap(result.contributors.first { $0.displayName == "Python" })
+        XCTAssertEqual(script.kind, .job)
+        XCTAssertEqual(script.hostAppName, "Terminal")
+    }
+
+    /// xcodebuild runs its work through XCBBuildService, which lives in Xcode.app too;
+    /// only Xcode's own main process owns a build as the app.
+    func testAShellsXcodebuildAndItsFrontendsAreOneJob() throws {
+        let service = "\(xcode)/Contents/SharedFrameworks/XCBuild.framework/PlugIns/XCBBuildService.bundle/Contents/MacOS/XCBBuildService"
+        let result = projection(terminalShell() + [
+            process(603, parent: 602, name: "xcodebuild", path: "\(xcode)/Contents/Developer/usr/bin/xcodebuild", cpu: 5),
+            process(604, parent: 603, name: "XCBBuildService", path: service, cpu: 5),
+            process(610, parent: 604, name: "swift-frontend", path: "\(toolchain)/swift-frontend", cpu: 98),
+            process(611, parent: 604, name: "swift-frontend", path: "\(toolchain)/swift-frontend", cpu: 98)
+        ])
+        let job = try XCTUnwrap(result.contributors.first { $0.displayName == "xcodebuild" })
+        XCTAssertEqual(job.kind, .job)
+        XCTAssertEqual(job.hostAppName, "Terminal")
+        XCTAssertEqual(job.processCount, 3, "xcodebuild and the frontends it ran through its build service")
+    }
+
+    /// An editor's language server or git call is the editor's, wherever the tool lives.
+    func testToolsAnEditorStartsAreTheEditorsNotXcodes() {
+        let git = process(510, parent: 501, name: "git", path: "\(xcode)/Contents/Developer/usr/bin/git", cpu: 120)
+        let result = projection(editor() + [git])
+        XCTAssertEqual(result.contributors.map(\.displayName), ["Visual Studio Code"])
+        XCTAssertEqual(result.contributors.first?.kind, .app)
+        XCTAssertEqual(result.contributors.first?.processCount, 3)
+    }
+
+    /// Guards: what Xcode itself runs, and apps started from a shell, stay apps.
+    func testXcodesOwnWorkAndAppsStartedFromAShellStayApps() {
+        let service = "\(xcode)/Contents/SharedFrameworks/XCBuild.framework/PlugIns/XCBBuildService.bundle/Contents/MacOS/XCBBuildService"
+        let xcodeWork = [
+            process(700, parent: 1, name: "Xcode", path: "\(xcode)/Contents/MacOS/Xcode", cpu: 10),
+            process(701, parent: 700, name: "XCBBuildService", path: service, cpu: 5),
+            process(702, parent: 701, name: "swift-frontend", path: "\(toolchain)/swift-frontend", cpu: 98),
+            // A run-script build phase goes through a shell too.
+            process(703, parent: 701, name: "sh", path: "/bin/sh", cpu: 0, command: "/bin/sh -c run-script.sh"),
+            process(704, parent: 703, name: "clang", path: "\(toolchain)/clang", cpu: 98),
+            // launchd starts SourceKit's service and the debugger.
+            process(705, parent: 1, name: "SourceKitService",
+                    path: "\(toolchain)/../lib/sourcekitd/SourceKitService.xpc/Contents/MacOS/SourceKitService", cpu: 30),
+            // A GUI tool inside Xcode, started from a shell, is not a command-line job.
+            process(706, parent: 602, name: "Simulator", path: "\(xcode)/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator", cpu: 30),
+            process(707, parent: 602, name: "Foo", path: "/Applications/Foo.app/Contents/MacOS/Foo", cpu: 30),
+            process(708, parent: 707, name: "Foo Helper", path: "/Applications/Foo.app/Contents/Frameworks/Foo Helper.app/Contents/MacOS/Foo Helper", cpu: 30)
+        ]
+        let result = projection(terminalShell() + xcodeWork)
+        XCTAssertTrue(result.contributors.allSatisfy { $0.kind == .app }, "\(result.contributors.map(\.displayName))")
+        XCTAssertEqual(Set(result.contributors.map(\.displayName)), ["Xcode", "Foo"])
+        XCTAssertEqual(result.contributors.first { $0.displayName == "Foo" }?.processCount, 2)
+        XCTAssertEqual(result.contributors.first { $0.displayName == "Xcode" }?.processCount, 7)
     }
 
     func testProjectionDoesNotDependOnInputOrder() {

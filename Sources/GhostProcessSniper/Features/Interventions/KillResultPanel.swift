@@ -9,12 +9,20 @@ struct KillResultPanel: View {
     let canForceSurvivors: Bool
     let isBusy: Bool
     let forceSurvivors: () -> Void
+    /// Looks again at what is still running, for an app that quit after the
+    /// wait ended; it never stops anything.
+    let checkAgain: () -> Void
     /// Stops what restarted the family, when the advisor found it.
     let stopRestarter: (title: String, action: () -> Void)?
     /// Whether the radar knows the process still holding a port, so it can
     /// be previewed and stopped too.
     let canStopPortHolder: (Int32) -> Bool
     let stopPortHolder: (Int32) -> Void
+    /// Whether a process the stop left running is the user's own, and one the
+    /// radar still sees, so it can be previewed and stopped too.
+    let canStopLeftRunning: (KillTarget) -> Bool
+    /// Previews stopping it; only its own confirmation stops it.
+    let stopLeftRunning: (KillTarget) -> Void
 
     var body: some View {
         let narrative = report.narrative
@@ -56,6 +64,10 @@ struct KillResultPanel: View {
                 ports
             }
 
+            if !report.leftRunning.isEmpty {
+                leftRunning
+            }
+
             if !rows.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Outcome by process")
@@ -70,10 +82,11 @@ struct KillResultPanel: View {
         report.succeeded ? .green : .orange
     }
 
-    /// The narrative's facts, less the port lines the chips below show.
+    /// The narrative's facts, less the port lines the chips below show and
+    /// the left-running line the list below names.
     private func facts(_ narrative: KillOutcomeNarrative) -> [String] {
         let portLines = Set(report.portOutcomes.map(\.text))
-        return narrative.details.filter { !portLines.contains($0) }
+        return narrative.details.filter { !portLines.contains($0) && !$0.hasPrefix(KillOutcomeNarrator.leftRunningPrefix) }
     }
 
     private func tags(_ rows: [KillTarget]) -> [String] {
@@ -95,18 +108,29 @@ struct KillResultPanel: View {
                 }
                 .disabled(!canForceSurvivors || isBusy)
                 .help("Sends SIGKILL now to the \(survivors == 1 ? "process" : "\(survivors) processes") still running.")
+                checkAgainButton
                 if !canForceSurvivors {
                     Text("Open a new preview to force-stop.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
+        } else if survivors > 0 {
+            checkAgainButton
         } else if !report.respawnedPIDs.isEmpty, let stopRestarter {
             Button(action: stopRestarter.action) {
                 Label(stopRestarter.title, systemImage: "arrow.uturn.up")
             }
             .disabled(isBusy)
         }
+    }
+
+    private var checkAgainButton: some View {
+        Button(action: checkAgain) {
+            Label("Check Again", systemImage: "arrow.clockwise")
+        }
+        .disabled(isBusy)
+        .help("Looks again at what is still running, such as after you answered a save prompt. Nothing is stopped.")
     }
 
     private var ports: some View {
@@ -142,6 +166,36 @@ struct KillResultPanel: View {
             }
         }
     }
+
+    /// What the stop left running without its parent, each one to stop too.
+    private var leftRunning: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Left running")
+                .font(.headline)
+            ForEach(report.leftRunning.prefix(Self.leftRunningRows)) { target in
+                HStack(spacing: 8) {
+                    Text("\(target.name) (PID \(String(target.pid)))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if canStopLeftRunning(target) {
+                        Button("Stop It Too") { stopLeftRunning(target) }
+                            .controlSize(.small)
+                            .disabled(isBusy)
+                            .accessibilityLabel("Stop \(target.name), PID \(String(target.pid)), too")
+                    }
+                }
+            }
+            if report.leftRunning.count > Self.leftRunningRows {
+                Text("and \(report.leftRunning.count - Self.leftRunningRows) more")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private static let leftRunningRows = 6
 
     private func chipText(_ outcome: KillPortOutcome) -> String {
         switch outcome {

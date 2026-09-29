@@ -9,6 +9,8 @@ struct SpawnCapture: Sendable {
     let name: String
     let executablePath: String
     let commandLine: String
+    /// Shells put each pipeline in a group of its own: `curl … | sh` shares one.
+    let processGroupID: Int32
     let at: Date
     /// The watched app at the top of the chain, for context and alerts.
     let rootRole: SpawnWatcher.RootRole
@@ -62,6 +64,7 @@ final class SpawnWatcher: @unchecked Sendable {
             }
             for (pid, role) in pids where roots[pid] == nil {
                 watch(pid, depth: 0, role: role, path: probe.executablePath(pid))
+                adoptOpenShells(under: pid, role: role)
             }
             roots = pids
         }
@@ -107,6 +110,26 @@ final class SpawnWatcher: @unchecked Sendable {
         watchInfo[pid] = (depth, role, path)
         knownChildren[pid] = Set(childPIDs(of: pid))
         source.resume()
+        // A child forked between listing the children and arming the
+        // source raised no event; one look now catches it.
+        handleFork(of: pid)
+    }
+
+    /// Shells already open when watching starts (a terminal with tabs, or
+    /// Ghost relaunched) are followed too, without being reported: only the
+    /// commands they start from now on are news. Before, a tab opened before
+    /// Ghost was invisible.
+    private func adoptOpenShells(under root: Int32, role: RootRole) {
+        var frontier: [(pid: Int32, depth: Int)] = [(root, 0)]
+        while let (pid, depth) = frontier.popLast(), depth < Self.maxDepth, sources.count < Self.maxWatched {
+            for child in childPIDs(of: pid) {
+                guard let capture = read(child, role: role),
+                      SentinelCatalog.isCommandRunner(capture.name, path: capture.executablePath) ||
+                        ShellRole.isSessionHost(capture.name) else { continue }
+                watch(child, depth: depth + 1, role: role, path: capture.executablePath)
+                frontier.append((child, depth + 1))
+            }
+        }
     }
 
     private func stopWatching(_ pid: Int32) {
@@ -193,6 +216,7 @@ final class SpawnWatcher: @unchecked Sendable {
             name: name.isEmpty ? URL(fileURLWithPath: path).lastPathComponent : name,
             executablePath: path,
             commandLine: probe.commandLine(pid) ?? path,
+            processGroupID: Int32(info.pbi_pgid),
             at: Date(),
             rootRole: role
         )

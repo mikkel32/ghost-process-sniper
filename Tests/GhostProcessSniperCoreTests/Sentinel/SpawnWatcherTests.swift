@@ -57,3 +57,42 @@ final class SpawnWatcherTests: XCTestCase {
         XCTAssertTrue(watcher.drain().isEmpty)
     }
 }
+
+final class SpawnWatcherCoverageTests: XCTestCase {
+    /// A terminal tab opened before Ghost started: what it runs next is caught.
+    func testAShellOpenBeforeWatchingIsFollowed() throws {
+        let marker = "sentinel-adopt-\(UUID().uuidString.prefix(8))"
+        let shell = Process()
+        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+        shell.arguments = ["-c", "sleep 0.6; /bin/echo \(marker) >/dev/null; sleep 0.2"]
+        try shell.run()
+        Thread.sleep(forTimeInterval: 0.15)
+
+        let watcher = SpawnWatcher()
+        watcher.setRoots([ProcessInfo.processInfo.processIdentifier: .terminal])
+        shell.waitUntilExit()
+        Thread.sleep(forTimeInterval: 0.2)
+        let captures = watcher.drain()
+        XCTAssertTrue(captures.contains { $0.commandLine.contains(marker) }, "captures: \(captures.map(\.commandLine))")
+        XCTAssertFalse(captures.contains { $0.identity.pid == shell.processIdentifier }, "the open shell itself is not news")
+    }
+
+    /// A pipeline's members share one process group, which is how Sentinel
+    /// puts `curl … | sh` back together.
+    func testPipelineMembersShareAProcessGroup() throws {
+        let watcher = SpawnWatcher()
+        watcher.setRoots([ProcessInfo.processInfo.processIdentifier: .terminal])
+        Thread.sleep(forTimeInterval: 0.2)
+        let shell = Process()
+        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+        shell.arguments = ["-c", "set -m; /bin/sleep 0.3 | /bin/cat; /usr/bin/true"]
+        try shell.run()
+        shell.waitUntilExit()
+        Thread.sleep(forTimeInterval: 0.3)
+        let captures = watcher.drain()
+        let sleep = try XCTUnwrap(captures.first { $0.executablePath == "/bin/sleep" }, "\(captures.map(\.commandLine))")
+        let cat = try XCTUnwrap(captures.first { $0.executablePath == "/bin/cat" })
+        XCTAssertEqual(sleep.processGroupID, cat.processGroupID)
+        XCTAssertEqual(sleep.parentPID, cat.parentPID)
+    }
+}

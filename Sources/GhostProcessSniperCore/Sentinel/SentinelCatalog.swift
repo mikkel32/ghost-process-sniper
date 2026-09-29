@@ -48,6 +48,20 @@ public enum SentinelCatalog {
         "hyper", "tabby", "rio", "wave",
     ]
 
+    /// Coding assistants: they build programs and run them through a shell on
+    /// someone's behalf. Bundle names (lowercased) and process names.
+    static let codingAgentApps: Set<String> = ["claude", "codex"]
+    static let codingAgentNames: Set<String> = ["claude", "codex"]
+    /// Installs whose executable is named by version, not by product
+    /// (`~/.local/share/claude/versions/2.1.5`, Claude Desktop's embedded CLI).
+    static let codingAgentFolders: [String] = ["/claude-code/", "/.local/share/claude/"]
+    /// Where the real tools install, under the user's home. A file that only
+    /// carries an assistant's name, anywhere else, is not the assistant.
+    static let codingAgentHomeFolders: [String] = [
+        "/applications/", "/library/application support/claude/", "/.local/share/claude/", "/.local/bin/",
+        "/.claude/", "/.codex/", "/.npm-global/", "/.npm/", "/.nvm/", "/.bun/", "/.volta/", "/.pnpm/", "/.yarn/",
+    ]
+
     /// Programs that turn text into actions: the usual second step of an attack.
     static let commandRunners: Set<String> = [
         "sh", "bash", "zsh", "dash", "fish", "tcsh", "csh", "ksh",
@@ -84,6 +98,8 @@ public enum SentinelCatalog {
         "/.oh-my-zsh/", "/.tmux/", "/.zinit/", "/.fzf/", "/.gem/", "/.swiftpm/", "/.mint/", "/.proto/",
         "/.moon/", "/.go/", "/go/bin/", "/.kube/", "/.terraform", "/.pulumi/", "/.config/", "/.git/",
         "/.build/", "/.venv/", "/venv/", "/.tox/", "/.conda/", "/miniconda3/", "/anaconda3/", "/.pixi/",
+        "/.foundry/", "/.rvm/", "/.pub-cache/", "/.flutter/", "/.android/", "/.gemini/", "/.opencode/", "/.lmstudio/",
+        "/.npm-global/",
     ]
 
     /// Temporary locations nothing should normally be *installed* in.
@@ -121,6 +137,29 @@ public enum SentinelCatalog {
         return terminalApps.contains(name.lowercased())
     }
 
+    /// Claude or Codex, by bundle, process name or install folder, and only
+    /// from where such tools install (`isInAgentInstallPlace`): a file that
+    /// merely carries the name is not one, whether in /tmp or in ~/Documents.
+    static func isCodingAgent(path: String, name: String) -> Bool {
+        guard isInAgentInstallPlace(path) else { return false }
+        if let app = appName(forPath: path)?.lowercased(), codingAgentApps.contains(app) { return true }
+        if codingAgentNames.contains(programName(name, path: path)) || codingAgentNames.contains(name.lowercased()) { return true }
+        let lower = path.lowercased()
+        return codingAgentFolders.contains(where: lower.contains)
+    }
+
+    /// /Applications, Homebrew and /usr/local, or one of the home-folder places
+    /// the tools' installers use, directly under the user's home.
+    static func isInAgentInstallPlace(_ path: String) -> Bool {
+        let lower = path.lowercased()
+        if lower.hasPrefix("/applications/") || lower.hasPrefix("/opt/homebrew/") || lower.hasPrefix("/usr/local/") { return true }
+        guard lower.hasPrefix("/users/") else { return false }
+        let afterUser = lower.dropFirst("/users/".count)
+        guard let slash = afterUser.firstIndex(of: "/") else { return false }
+        let inHome = afterUser[slash...]
+        return codingAgentHomeFolders.contains { inHome.hasPrefix($0) }
+    }
+
     /// The bare program name: "-zsh" → "zsh", "python3.12" → "python3".
     static func programName(_ name: String, path: String) -> String {
         // Plain string slicing: URL(fileURLWithPath:) would stat the file.
@@ -137,7 +176,24 @@ public enum SentinelCatalog {
         guard commandRunners.contains(program) else { return false }
         // A runner inside an app bundle is the app's own copy (Electron's
         // node, a bundled python), part of the app rather than a new program.
-        return !path.contains(".app/Contents/")
+        // Python's own framework app is the exception: the interpreter.
+        return !path.contains(".app/Contents/") || isFrameworkInterpreter(path)
+    }
+
+    /// python3 from Xcode, the Command Line Tools, python.org and Homebrew execs
+    /// `…/Python.framework/Versions/x/Resources/Python.app/Contents/MacOS/Python`,
+    /// so that bundle path is what the kernel reports for the interpreter. Judged
+    /// by shape and owner (Python's own bundle, or Xcode's), not by a bundle named
+    /// "Python": Xcode's copy sits inside Xcode.app. An app's embedded Python
+    /// framework stays the app's own runner.
+    static func isFrameworkInterpreter(_ path: String) -> Bool {
+        let lower = path.lowercased()
+        guard lower.hasSuffix("/resources/python.app/contents/macos/python"), lower.contains(".framework/versions/") else {
+            return false
+        }
+        // Xcode.app, Xcode-beta.app, Xcode_26.1.app …
+        let outer = appName(forPath: path)?.lowercased() ?? ""
+        return outer == "python" || outer.hasPrefix("xcode")
     }
 
     static func isSystemLocation(_ path: String) -> Bool {

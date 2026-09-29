@@ -8,6 +8,7 @@ public enum RadarFocusedSelection: Hashable, Sendable {
     case incidents
     case rules
     case security
+    case energy
 
     public var familyKey: String? {
         if case let .family(familyKey) = self {
@@ -25,6 +26,7 @@ public enum RadarFocusedSelection: Hashable, Sendable {
         case .incidents: "incidents"
         case .rules: "rules"
         case .security: "security"
+        case .energy: "energy"
         }
     }
 
@@ -39,6 +41,7 @@ public enum RadarFocusedSelection: Hashable, Sendable {
         case "incidents": self = .incidents
         case "rules": self = .rules
         case "security": self = .security
+        case "energy": self = .energy
         // The Engine screen moved to Settings; a saved "engine" lands on Overview.
         default: self = .overview
         }
@@ -111,20 +114,28 @@ public struct IncidentQuery: Equatable, Sendable {
     public var ascending: Bool
     public var limit: Int
 
-    public static let `default` = IncidentQuery(text: "", filter: .all, sort: .recent, limit: 80)
+    public static let `default` = IncidentQuery(text: "", filter: .all, sort: .recent, limit: IncidentHistory.publishedWindow)
 
     public init(
         text: String = "",
         filter: RadarIncidentFilter = .all,
         sort: RadarIncidentSort = .recent,
         ascending: Bool = false,
-        limit: Int = 80
+        limit: Int = IncidentHistory.publishedWindow
     ) {
         self.text = text
         self.filter = filter
         self.sort = sort
         self.ascending = ascending
         self.limit = limit
+    }
+
+    /// Whether the answer depends on incidents older than the newest published
+    /// ones: a search, or a filter on how an incident ended or peaked. Active
+    /// incidents are always among the newest rows, so that filter needs none.
+    public var reachesHistory: Bool {
+        if !ProcessSearchQuery(text).terms.isEmpty { return true }
+        return filter == .resolved || filter == .critical
     }
 
     private func matches(_ incident: RadarIncident, query: ProcessSearchQuery) -> Bool {
@@ -282,8 +293,18 @@ public struct RadarCommandRouter: Sendable {
     ) -> RadarCommandAvailability {
         let family = selectedFamily(selection: selection, families: families)
         switch command {
-        case .refresh, .openConsole, .toggleInspector, .copyReport, .copyDiagnostics, .find:
+        case .refresh, .openConsole, .copyReport, .copyDiagnostics, .find:
             return RadarCommandAvailability(command: command, isEnabled: true)
+        case .toggleInspector:
+            // Only family pages have an inspector. The key is what counts, as
+            // for the toolbar button: the page of a family that just exited
+            // is still a family page, and its inspector can still be closed.
+            let enabled = selection.familyKey != nil
+            return RadarCommandAvailability(
+                command: command,
+                isEnabled: enabled,
+                reason: enabled ? nil : "Open a family to use the inspector."
+            )
         case .nextFamily, .previousFamily:
             return RadarCommandAvailability(
                 command: command,

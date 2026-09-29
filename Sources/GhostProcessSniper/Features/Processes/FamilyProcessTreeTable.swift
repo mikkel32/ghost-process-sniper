@@ -16,12 +16,11 @@ struct FamilyProcessTreeTable: View {
                     Text(row.name)
                         .lineLimit(1)
                     if row.isRoot {
-                        Text("root")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(.quaternary, in: Capsule())
+                        FamilyMemberTag(text: "root")
+                    }
+                    if row.isGrowthCulprit {
+                        FamilyMemberTag(text: "leaking", tint: .orange)
+                            .help("Most of this family's memory growth comes from this process")
                     }
                 }
                 .help(row.commandLine)
@@ -41,6 +40,17 @@ struct FamilyProcessTreeTable: View {
                     .monospacedDigit()
             }
             .width(min: 64, ideal: 80)
+            .alignment(.trailing)
+
+            // Always present and empty for most rows, so the column never
+            // appears or vanishes as the family's growth comes and goes.
+            TableColumn("Growth") { row in
+                Text(row.growthText ?? "")
+                    .monospacedDigit()
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+            }
+            .width(96)
             .alignment(.trailing)
 
             TableColumn("CPU") { row in
@@ -77,6 +87,21 @@ struct FamilyProcessTreeTable: View {
                 actions.copyPIDs(selected.map(\.pid).sorted())
             }
         }
+    }
+}
+
+/// A small capsule beside a process name: "root", "leaking".
+struct FamilyMemberTag: View {
+    let text: String
+    var tint: Color?
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(tint ?? Color.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(tint.map { AnyShapeStyle($0.opacity(0.15)) } ?? AnyShapeStyle(.quaternary), in: Capsule())
     }
 }
 

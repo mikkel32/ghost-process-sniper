@@ -5,11 +5,21 @@ import Foundation
 /// descendants a root owns.
 struct ProcessTree {
     let byPID: [Int32: ProcessMetrics]
+    /// By the pid a process climbs to: its parent, or for a helper the app
+    /// it works for.
     let children: [Int32: [ProcessMetrics]]
     let facts: [Int32: ProcessStaticFacts]
     let classifications: [Int32: DevClassification]
+    /// Launchd-started services, by pid, with the app process macOS holds
+    /// responsible for each. Their parent is launchd, so without this each
+    /// stands alone, however much of the app's memory it holds.
+    let helperOwners: [Int32: Int32]
 
-    init(processes: [ProcessMetrics], facts processFacts: [ProcessStaticFacts]) {
+    /// - Parameter responsible: the app pid macOS reports for a launchd-started
+    ///   process, by identity (`ResponsibleProcessLookup`). Empty draws the
+    ///   boundaries from parent links alone.
+    init(processes: [ProcessMetrics], facts processFacts: [ProcessStaticFacts],
+         responsible: [ProcessIdentity: Int32] = [:]) {
         var byPID: [Int32: ProcessMetrics] = [:]
         var children: [Int32: [ProcessMetrics]] = [:]
         var facts: [Int32: ProcessStaticFacts] = [:]
@@ -20,14 +30,19 @@ struct ProcessTree {
         classifications.reserveCapacity(processes.count)
         for (process, processFacts) in zip(processes, processFacts) {
             byPID[process.pid] = process
-            children[process.parentPID, default: []].append(process)
             facts[process.pid] = processFacts
             classifications[process.pid] = processFacts.classification
+        }
+        // Needs every process's facts, so it cannot join the loop above.
+        let owners = Self.helperOwners(responsible: responsible, byPID: byPID, facts: facts)
+        for process in processes {
+            children[owners[process.pid] ?? process.parentPID, default: []].append(process)
         }
         self.byPID = byPID
         self.children = children
         self.facts = facts
         self.classifications = classifications
+        self.helperOwners = owners
     }
 
     func confidence(_ pid: Int32) -> Double {
@@ -37,7 +52,7 @@ struct ProcessTree {
     func root(for process: ProcessMetrics) -> ProcessMetrics {
         var current = process
         var visited = Set<Int32>()
-        while let parent = byPID[current.parentPID], !visited.contains(parent.pid) {
+        while let parent = byPID[helperOwners[current.pid] ?? current.parentPID], !visited.contains(parent.pid) {
             visited.insert(current.pid)
             guard parent.userID == current.userID else { break }
             if shouldClimb(from: current, to: parent) {
@@ -82,7 +97,7 @@ struct ProcessTree {
                     continue
                 }
                 let childFacts = facts[child.pid]
-                let related = rootIsDevFamily ||
+                let related = helperOwners[child.pid] != nil || rootIsDevFamily ||
                     confidence(child.pid) >= 0.2 ||
                     Self.sameAppBundle(childFacts, rootFacts) ||
                     Self.samePathNeighborhood(childFacts, rootFacts)
@@ -98,6 +113,25 @@ struct ProcessTree {
             if rhs.identity == root.identity { return false }
             return lhs.pid < rhs.pid
         }
+    }
+
+    /// The members that belong to the family only through a helper link, and
+    /// the processes below them: what a signal or a tree walk from the root
+    /// never reaches, because the app is not their parent.
+    func linkedMembers(of members: [ProcessMetrics], root: ProcessMetrics) -> Set<ProcessIdentity> {
+        guard members.contains(where: { helperOwners[$0.pid] != nil }) else { return [] }
+        var childrenByParent: [Int32: [Int32]] = [:]
+        for member in members where member.identity != root.identity && helperOwners[member.pid] == nil {
+            childrenByParent[member.parentPID, default: []].append(member.pid)
+        }
+        var reached: Set<Int32> = [root.pid]
+        var stack = [root.pid]
+        while let pid = stack.popLast() {
+            for child in childrenByParent[pid, default: []] where reached.insert(child).inserted {
+                stack.append(child)
+            }
+        }
+        return Set(members.lazy.filter { !reached.contains($0.pid) }.map(\.identity))
     }
 
     /// For each family whose root was launched by a member of another
@@ -134,9 +168,12 @@ struct ProcessTree {
     }
 
     private func shouldClimb(from child: ProcessMetrics, to parent: ProcessMetrics) -> Bool {
+        if helperOwners[child.pid] == parent.pid {
+            return true
+        }
         let childFacts = facts[child.pid]
         let parentFacts = facts[parent.pid]
-        if Self.isOwnWorkload(childFacts), Self.isWorkloadHost(parentFacts), !Self.isSameApp(childFacts, parentFacts) {
+        if Self.isSeparateWorkload(childFacts, of: parentFacts) {
             return false
         }
         if confidence(parent.pid) >= 0.35 {
@@ -146,6 +183,47 @@ struct ProcessTree {
             return true
         }
         return parentFacts?.isHelperNamed == true && Self.samePathNeighborhood(childFacts, parentFacts)
+    }
+
+    /// Launchd-started services that macOS reports as working for an app in
+    /// this sample: service pid to app pid. Every safeguard must hold, so a
+    /// job that merely ran from an app never joins it:
+    /// - the service is launchd's child, of the app's user, and a service by
+    ///   its path (an orphaned `node server.js` is not), and not an app itself;
+    /// - the app is a main binary, not a terminal, and started no later than
+    ///   the service (a reused pid would name a stranger);
+    /// - the service is not a workload the app runs for itself, such as a
+    ///   language server: those stay their own families.
+    private static func helperOwners(
+        responsible: [ProcessIdentity: Int32],
+        byPID: [Int32: ProcessMetrics],
+        facts: [Int32: ProcessStaticFacts]
+    ) -> [Int32: Int32] {
+        var owners: [Int32: Int32] = [:]
+        for (identity, ownerPID) in responsible {
+            guard let helper = byPID[identity.pid], helper.identity == identity, helper.parentPID <= 1,
+                  let owner = byPID[ownerPID], owner.pid != helper.pid, owner.userID == helper.userID,
+                  facts[owner.pid]?.isAppMainBinary == true, facts[helper.pid]?.isAppMainBinary != true,
+                  !ThermalWorkloadResolver.isTerminalApp(owner.executablePath),
+                  ThermalWorkloadResolver.startedNoLater(owner.identity, than: helper.identity),
+                  isService(helper, facts[helper.pid]),
+                  !isSeparateWorkload(facts[helper.pid], of: facts[owner.pid])
+            else { continue }
+            owners[helper.pid] = owner.pid
+        }
+        return owners
+    }
+
+    /// An XPC service or a daemon launchd runs on purpose, judged by its path.
+    private static func isService(_ process: ProcessMetrics, _ facts: ProcessStaticFacts?) -> Bool {
+        if facts?.isLaunchdManaged == true { return true }
+        let path = process.executablePath.lowercased()
+        return path.contains(".xpc/") || path.contains("/xpcservices/")
+    }
+
+    /// A workload the parent runs for itself, which is a family of its own.
+    private static func isSeparateWorkload(_ child: ProcessStaticFacts?, of parent: ProcessStaticFacts?) -> Bool {
+        isOwnWorkload(child) && isWorkloadHost(parent) && !isSameApp(child, parent)
     }
 
     /// Servers, kernels and test or build workers an editor launches are

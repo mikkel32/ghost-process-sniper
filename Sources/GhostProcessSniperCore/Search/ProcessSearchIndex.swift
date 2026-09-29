@@ -52,12 +52,12 @@ public struct ProcessSearchIndex: Sendable {
             if process.isSystemProcess { flags.insert(.system) }
             let subject = SearchSubject(
                 root: text(for: process, live: &live),
-                measurements: SearchMeasurements(
+                measurements: SearchMeasurements(power: [process], base: SearchMeasurements(
                     cpuPercent: process.cpuPercent,
                     memoryBytes: Double(process.memoryForScoringBytes),
                     gpuPercent: process.gpuUsagePercent,
                     threads: Double(process.threadCount)
-                ),
+                )),
                 flags: flags
             )
             untracked.append(Untracked(process: process, subject: subject))
@@ -103,9 +103,11 @@ public struct ProcessSearchIndex: Sendable {
             if family.root.isSystemProcess { flags.insert(.system) }
             if let cluster = family.duplicateCluster, !cluster.isInternalToSingleFamily { flags.insert(.duplicate) }
         } else {
+            // The process name, as for a live family: a retitled family
+            // (a simulator) is still found by it, and highlights fit it.
             root = SearchableProcess(
                 pid: row.familyID.pid,
-                name: row.displayName,
+                name: row.signature.displayName,
                 commandLine: row.subtitle,
                 executablePath: row.signature.canonicalPath,
                 ownerName: ""
@@ -115,14 +117,14 @@ public struct ProcessSearchIndex: Sendable {
             root: root,
             helpers: helpers,
             kindLabel: row.kindText,
-            measurements: SearchMeasurements(
+            measurements: SearchMeasurements(power: family?.members ?? [], base: SearchMeasurements(
                 cpuPercent: row.cpuPercent,
                 memoryBytes: Double(row.memoryBytes),
                 gpuPercent: row.gpuPercent,
                 threads: Double(threads),
                 leakMegabytesPerMinute: row.leakVelocity,
                 children: Double(row.childCount)
-            ),
+            )),
             flags: flags
         )
     }

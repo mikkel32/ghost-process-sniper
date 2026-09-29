@@ -4,7 +4,7 @@ import Foundation
 /// What kind of work a stop interrupts. It decides how politely to stop it
 /// and what could go wrong.
 public enum KillWorkloadKind: String, Codable, Sendable {
-    case app, editor, dataStore, containerRuntime, versionControl, packageManager, build, devServer, modelRunner, general
+    case app, editor, dataStore, containerRuntime, versionControl, packageManager, build, devServer, modelRunner, simulator, general
 
     public var label: String {
         switch self {
@@ -17,6 +17,7 @@ public enum KillWorkloadKind: String, Codable, Sendable {
         case .build: "Build"
         case .devServer: "Dev server"
         case .modelRunner: "Model runner"
+        case .simulator: "Simulator"
         case .general: "Process"
         }
     }
@@ -30,7 +31,7 @@ public enum KillRiskSeverity: Int, Codable, Comparable, Sendable {
 
 public enum KillRiskKind: String, Codable, Sendable {
     case unsavedWork, dataIntegrity, stopsContainers, lockFile, partialInstall, interruptedBuild,
-         respawn, stopsSiblings, unloadsModels, freesPorts, orphaned
+         respawn, stopsSiblings, unloadsModels, freesPorts, orphaned, leavesChildren, appHelper
 }
 
 public struct KillRisk: Identifiable, Equatable, Sendable {
@@ -197,18 +198,27 @@ public struct KillRiskAssessor: Sendable {
             risks.append(KillRisk(kind: .unloadsModels, severity: .info, title: "Models unloaded",
                                   detail: "Loaded models leave memory; the next request reloads them, which is slow."))
             headline = "Stops \(root.name) and unloads its models; the next request reloads them."
+        case .simulator:
+            let simulator = KillSimulatorRisk.risk(commandLine: root.commandLine)
+            risks.append(simulator.card)
+            grace = KillSimulatorRisk.graceSeconds
+            headline = simulator.headline
         case .general:
             break
         }
 
         if let supervisor {
             risks.append(Self.restartRisk(supervisor, launchdJob: workload.launchdJob))
-        } else if workload.parentIsLaunchd, workload.launchdJob == nil, !isAppMain,
+        } else if workload.parentIsLaunchd, workload.launchdJob == nil, !isAppMain, !rootPrint.isXPCService,
                   kind == .devServer || kind == .build || kind == .general {
             // Never for a launchd job, even one without KeepAlive: launchd
-            // started it on purpose, so it is no orphan.
+            // started it on purpose, so it is no orphan. Nor for an XPC
+            // service, which an app may start again whenever it needs it.
             risks.append(KillRisk(kind: .orphaned, severity: .info, title: "Orphaned",
                                   detail: "Its terminal or parent is gone, so nothing will restart it."))
+        }
+        if let helper = KillHelperContext(root: root, ancestors: workload.ancestors) {
+            risks.append(helper.risk)
         }
         if !ports.isEmpty {
             risks.append(KillRisk(kind: .freesPorts, severity: .info,
@@ -235,6 +245,8 @@ public struct KillRiskAssessor: Sendable {
     // MARK: - Classification
 
     private func classify(root: Fingerprint, processes: [Fingerprint]) -> KillWorkloadKind {
+        // The root alone: one device's launchd, not Simulator or its services.
+        if root.isSimulatorDevice { return .simulator }
         let all = [root] + processes
         if all.contains(where: \.isContainerRuntime) { return .containerRuntime }
         if all.contains(where: \.isDataStore) { return .dataStore }
@@ -270,7 +282,9 @@ public struct KillRiskAssessor: Sendable {
                 return KillSupervisor(pid: ancestor.pid, name: print.supervisorName ?? ancestor.name, kind: kind)
             }
         }
-        if workload.parentIsLaunchd, rootPrint.isLaunchdManagedService {
+        // An XPC service sits under launchd too, but the app that uses it
+        // starts it on demand; launchd does not keep it alive.
+        if workload.parentIsLaunchd, rootPrint.isLaunchdManagedService, !rootPrint.isXPCService {
             return KillSupervisor(pid: nil, name: "launchd", kind: .launchd)
         }
         return nil
@@ -377,8 +391,16 @@ private struct Fingerprint {
         return !nested.contains(where: path.includes) && !name.includes("helper")
     }
 
+    var isXPCService: Bool {
+        path.includes(".xpc/")
+    }
+
+    var isSimulatorDevice: Bool {
+        named(["launchd_sim"])
+    }
+
     var isEditorApp: Bool {
-        let editors = ["xcode", "visual studio code", "code", "cursor", "windsurf", "zed", "sublime text", "textedit",
+        let editors = ["visual studio code", "code", "cursor", "windsurf", "zed", "sublime text", "textedit",
                        "pages", "numbers", "keynote", "microsoft word", "microsoft excel", "microsoft powerpoint",
                        "bbedit", "nova", "coteditor", "intellij idea", "pycharm", "webstorm", "goland", "rider",
                        "clion", "phpstorm", "rubymine", "android studio", "fleet", "photoshop", "illustrator",
@@ -386,7 +408,8 @@ private struct Fingerprint {
                        "garageband", "blender", "davinci resolve", "obsidian", "scrivener", "ulysses", "notes",
                        "notion", "script editor", "libreoffice"]
         guard let app = appBundleName?.lowercased() else { return false }
-        return editors.contains { app == $0 || app.hasPrefix($0 + " ") }
+        // Xcode's beta and versioned copies go by other names.
+        return WorkloadCatalog.isXcodeBundle(app) || editors.contains { app == $0 || app.hasPrefix($0 + " ") }
     }
 
     // Workloads: the radar's catalog names them, so a VM the radar calls a

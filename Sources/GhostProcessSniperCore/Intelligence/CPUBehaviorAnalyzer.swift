@@ -12,6 +12,9 @@ public enum CPUBehaviorKind: String, Codable, Sendable {
     case idleServiceBurning
     /// Most of every core on the Mac, for minutes.
     case machineSaturation
+    /// Several cores held at one steady level for ten minutes or more, below
+    /// the family limit that scales with the Mac: a multi-threaded loop.
+    case steadyBurn
 }
 
 public struct CPUBehavior: Codable, Equatable, Sendable {
@@ -43,6 +46,8 @@ public enum CPUBehaviorAnalyzer {
     static let saturationMinutes = 3
     static let sustainedMinutes = 2
     static let runawayMinutes = 5
+    static let steadyBurnMinutes = 10
+    static let steadyBurnCores = 1.5
 
     /// The limit a family's total CPU is judged against. The automatic
     /// profiles' limit is a share of one core per two cores, so a busy app
@@ -60,7 +65,8 @@ public enum CPUBehaviorAnalyzer {
         memberCount: Int,
         baseline: FamilyBaseline?,
         processorCount: Int,
-        cpuThreshold: Double
+        cpuThreshold: Double,
+        isUnattended: Bool = false
     ) -> CPUBehavior {
         let minutes = activity.recentMinutes
         let cores = Double(max(1, processorCount))
@@ -96,7 +102,28 @@ public enum CPUBehaviorAnalyzer {
                                isSustained: true, isRunaway: hot.count >= runawayMinutes,
                                reason: "CPU above its \(Int(cpuThreshold.rounded()))% limit for \(hot.count) min")
         }
-        return .none
+        return steadyBurn(minutes, cores: cores, isUnattended: isUnattended) ?? .none
+    }
+
+    /// The family limit scales with the Mac so an app using a few cores of a
+    /// big one is not held to a small one's limit, which left a loop holding
+    /// three cores for hours unnoticed. Several cores at one level, with no
+    /// children coming or going, for ten minutes is evidence; it is a runaway
+    /// when nobody is attending the process (a job whose terminal closed, an
+    /// orphan). An encode in a terminal you are watching stays evidence.
+    private static func steadyBurn(_ minutes: [CPUMinuteBucket], cores: Double, isUnattended: Bool) -> CPUBehavior? {
+        guard let run = trailing(minutes, where: { $0.cores >= steadyBurnCores && $0.memberChanges == 0 }),
+              run.count >= steadyBurnMinutes else { return nil }
+        let values = run.map(\.cores)
+        let average = mean(values)
+        let deviation = (values.reduce(0) { $0 + ($1 - average) * ($1 - average) } / Double(values.count)).squareRoot()
+        guard deviation / average < 0.15 else { return nil }
+        let level = RadarFormat.fixed1(average)
+        return CPUBehavior(kind: .steadyBurn, minutes: run.count, averageCores: average, machineShare: average / cores,
+                           isSustained: true, isRunaway: isUnattended,
+                           reason: isUnattended
+                               ? "holding \(level) cores steadily for \(run.count) min with nobody attending it"
+                               : "holding \(level) cores steadily for \(run.count) min")
     }
 
     private static func expectedBurst(_ minutes: [CPUMinuteBucket], cores: Double, cpuThreshold: Double) -> CPUBehavior {

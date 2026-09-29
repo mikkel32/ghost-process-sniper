@@ -38,7 +38,7 @@ extension RadarConsoleSession {
     private func killPlan(for family: ProcessFamily, member: ProcessIdentity?) async -> KillPlan? {
         let plan = await monitor.killPlan(for: family)
         guard let member else { return plan }
-        guard family.ownedIdentities.contains(member),
+        guard family.canStopIndividually(member),
               let process = family.members.first(where: { $0.identity == member }),
               !process.isSystemProcess else {
             return nil
@@ -204,6 +204,14 @@ extension RadarConsoleSession {
         )
         recordResult(forced, of: pending)
         return forced
+    }
+
+    /// The open sheet looked at its result again and found the app gone:
+    /// closing it now behaves as after a clean stop, and the family's page
+    /// remembers the settled result. The stop was already learned from.
+    func settleStopResult(_ settled: KillReport, of pending: PendingKill) {
+        guard lastStopResult?.pendingID == pending.id else { return }
+        recordResult(settled, of: pending)
     }
 
     /// Closing the sheet after this report returns the user and shows its

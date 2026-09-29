@@ -37,10 +37,13 @@ public actor SentinelEngine {
         var evaluation: SentinelEvaluation
         let firstSeen: Date
         var provenanceApplied = false
+        var provenance: ExecutableProvenance?
         var signing: CodeSigningSummary?
         var downloadedFrom: [String] = []
         /// Evidence from outside the rules: the signature, the download mark, the microphone.
         var extraSignals: [SentinelSignal] = []
+        /// The pipeline this stdin runner belongs to, once its siblings were seen.
+        var pipeline: PipelineCorrelator.Pipeline?
     }
 
     static let feedCapacity = 300
@@ -61,10 +64,17 @@ public actor SentinelEngine {
     private var persistenceGeneration: UInt64 = .max
     private var records: [ProcessIdentity: Record] = [:]
     private var findings: [ProcessIdentity: SentinelFinding] = [:]
+    /// Who was running at the last scan.
+    private var alive: Set<ProcessIdentity> = []
     private var launches: [LaunchEvent] = []
     private var launchTimes: [Date] = []
     private var dismissed: Set<String> = []
-    private var trustedPaths: Set<String> = []
+    private var trust: SentinelTrust
+    private let trustStore: SentinelTrustStore?
+    /// Numbers feed entries: an exec keeps its process's identity, so one
+    /// process can appear twice with different commands.
+    private var launchSequence: UInt64 = 0
+    private var pipelines = PipelineCorrelator()
     private var sensors = PrivacySensorState.unknown
     private var watchedAppNames: [String] = []
     private var ticks: UInt64 = 0
@@ -73,9 +83,11 @@ public actor SentinelEngine {
     private var lastConnectionRead: Date?
 
     public init(live: Live = .full, ownPID: Int32 = ProcessInfo.processInfo.processIdentifier,
-                onUrgentSpawn: @escaping @Sendable () -> Void = {}) {
+                trustStore: SentinelTrustStore? = nil, onUrgentSpawn: @escaping @Sendable () -> Void = {}) {
         self.live = live
         self.ownPID = ownPID
+        self.trustStore = trustStore
+        trust = SentinelTrust(trustStore?.load() ?? [])
         watcher = live.watchesSpawns ? SpawnWatcher(onRunnerFromContentApp: onUrgentSpawn) : nil
         inspector = live.inspectsSignatures ? CodeSignatureInspector() : nil
         persistence = live.watchesStartupItems ? PersistenceMonitor(onNewItem: onUrgentSpawn) : nil
@@ -93,13 +105,33 @@ public actor SentinelEngine {
         report = buildReport(now: Date())
     }
 
-    /// Never flags this executable again (a tool you know and use).
-    public func setTrustedPaths(_ paths: Set<String>) {
-        guard paths != trustedPaths else { return }
-        trustedPaths = paths
-        findings = findings.filter { !paths.contains($0.value.executablePath) }
+    /// Trusts what the finding's Trust item offers: the program's signer,
+    /// its exact build or file, or one script or command of a shell or tool.
+    @discardableResult
+    public func trust(findingID: String) -> SentinelTrustEntry? {
+        guard let record = records.first(where: { SentinelFinding.key(for: $0.key) == findingID })?.value,
+              let entry = SentinelTrust.offer(for: record.subject, provenance: record.provenance, now: Date(),
+                                              commandText: record.pipeline?.text)
+        else { return nil }
+        trust.insert(entry)
+        trustChanged(path: entry.path)
+        return entry
+    }
+
+    public func revokeTrust(id: String) {
+        guard let entry = trust.entries.first(where: { $0.id == id }), trust.remove(id: id) else { return }
+        trustChanged(path: entry.path)
+    }
+
+    /// Saves, and judges every known process at the path again.
+    private func trustChanged(path: String) {
+        trustStore?.save(trust.entries)
+        let now = Date()
+        for (identity, record) in records where record.subject.executablePath == path {
+            upsertFinding(for: identity, running: alive.contains(identity), now: now)
+        }
         revision &+= 1
-        report = buildReport(now: Date())
+        report = buildReport(now: now)
     }
 
     public var currentReport: SentinelReport { report }
@@ -116,6 +148,7 @@ public actor SentinelEngine {
             byPID[process.pid] = SentinelSubject(process)
         }
         let alive = Set(processes.map(\.identity))
+        self.alive = alive
         let own = Self.family(of: ownPID, in: processes)
 
         // Spawns caught between scans come first, in the order they started.
@@ -123,7 +156,8 @@ public actor SentinelEngine {
             let subject = SentinelSubject(
                 identity: capture.identity, parentPID: capture.parentPID, userID: capture.userID,
                 name: capture.name, executablePath: capture.executablePath, commandLine: capture.commandLine,
-                isSystemProcess: SentinelCatalog.isSystemLocation(capture.executablePath))
+                isSystemProcess: SentinelCatalog.isSystemLocation(capture.executablePath),
+                processGroupID: capture.processGroupID)
             if byPID[subject.identity.pid] == nil { byPID[subject.identity.pid] = subject }
             if let record = records[subject.identity], record.subject.commandLine == subject.commandLine { continue }
             let exited = !alive.contains(subject.identity)
@@ -179,50 +213,84 @@ public actor SentinelEngine {
 
     private func judge(_ subject: SentinelSubject, byPID: [Int32: SentinelSubject], at: Date, source: LaunchEventSource,
                        feed: Bool, running: Bool, now: Date) {
-        let ancestors = Self.ancestors(of: subject, in: byPID)
+        let previous = records[subject.identity]
+        // Judged again (late arguments, new ports): a parent that has exited since is gone from this
+        // scan, and launchd has adopted the process. The chain seen first is what launched it.
+        let fresh = Self.ancestors(of: subject, in: byPID)
+        let kept = previous?.ancestors ?? []
+        let ancestors = kept.count > fresh.count ? kept : fresh
         let lineage = (ancestors.reversed() + [subject]).map {
             SentinelLineageNode(pid: $0.identity.pid, name: $0.name, executablePath: $0.executablePath)
         }
-        let previous = records[subject.identity]
-        // Judged again (late arguments, new ports): what is known about the
-        // same file still holds; an exec into another program starts over.
+        // What is known about the same file still holds; an exec into another program starts over.
         let known = previous.flatMap { $0.subject.executablePath == subject.executablePath ? $0 : nil }
-        let evaluation = SentinelRules.evaluate(subject, ancestors: ancestors, signing: known?.signing)
+        let evaluation = SentinelRules.evaluate(subject, ancestors: ancestors, signing: known?.signing, pipeline: previous?.pipeline)
         // System binaries are Apple's; only third-party programs get a signature check.
         let needsProvenance = !subject.isSystemLocation && subject.executablePath.hasPrefix("/")
             && known?.provenanceApplied != true
         records[subject.identity] = Record(
             subject: subject, ancestors: ancestors, lineage: lineage, evaluation: evaluation,
-            firstSeen: previous?.firstSeen ?? at, provenanceApplied: !needsProvenance, signing: known?.signing,
-            downloadedFrom: known?.downloadedFrom ?? [], extraSignals: known?.extraSignals ?? [])
+            firstSeen: previous?.firstSeen ?? at, provenanceApplied: !needsProvenance, provenance: known?.provenance,
+            signing: known?.signing,
+            downloadedFrom: known?.downloadedFrom ?? [], extraSignals: known?.extraSignals ?? [], pipeline: previous?.pipeline)
         if needsProvenance { pendingProvenance.insert(subject.identity) }
+        for pipeline in pipelines.observe(subject, now: now) {
+            correlate(pipeline, running: pipeline.runner == subject.identity ? running : nil, now: now)
+        }
 
         if feed, Self.belongsInFeed(subject, parent: ancestors.first, severity: evaluation.severity),
            !launches.contains(where: { $0.identity == subject.identity && $0.commandLine == subject.commandLine }) {
+            launchSequence &+= 1
             launches.append(LaunchEvent(
                 at: at, identity: subject.identity, name: subject.name, executablePath: subject.executablePath,
                 commandLine: String(subject.commandLine.prefix(2_048)), lineage: lineage, severity: evaluation.severity,
                 signalKinds: evaluation.signals.filter { $0.severity >= .notable }.map(\.kind),
                 source: source, isSystem: subject.isSystemLocation,
-                exitedAfter: running ? nil : max(0, now.timeIntervalSince(at))))
+                exitedAfter: running ? nil : max(0, now.timeIntervalSince(at)), sequence: launchSequence))
             if launches.count > Self.feedCapacity { launches.removeFirst(launches.count - Self.feedCapacity) }
             launchTimes.append(at)
         }
         upsertFinding(for: subject.identity, running: running, now: now)
     }
 
+    /// A stdin runner turned out to be the end of `curl … | sh`: judged again
+    /// as the whole pipeline, whichever member arrived last.
+    private func correlate(_ pipeline: PipelineCorrelator.Pipeline, running: Bool?, now: Date) {
+        guard var record = records[pipeline.runner], record.pipeline != pipeline else { return }
+        record.pipeline = pipeline
+        record.evaluation = SentinelRules.evaluate(record.subject, ancestors: record.ancestors, signing: record.signing,
+                                                   pipeline: pipeline)
+        records[pipeline.runner] = record
+        upsertFinding(for: pipeline.runner, running: running ?? alive.contains(pipeline.runner), now: now)
+    }
+
     /// Rebuilds a finding from the record: the rules' verdict plus the
     /// evidence gathered since (signature, download mark, microphone).
     private func upsertFinding(for identity: ProcessIdentity, running: Bool, now: Date) {
-        guard let record = records[identity], !trustedPaths.contains(record.subject.executablePath) else { return }
+        guard let record = records[identity] else { return }
+        var trustSignals: [SentinelSignal] = []
+        switch trust.match(record.subject, provenance: record.provenance, commandText: record.pipeline?.text) {
+        case .trusted, .pending:
+            // A trusted program waits for its signature rather than flash an alarm.
+            findings[identity] = nil
+            return
+        case .changed(let entry):
+            trustSignals.append(SentinelSignal(.trustedProgramChanged, .suspicious,
+                "You trusted \(entry.name) \(entry.trustedAs); \(SentinelTrust.describe(record.provenance)).",
+                evidence: record.provenance?.signing.label))
+        case .none:
+            break
+        }
         let previous = findings[identity]
         var signals = record.evaluation.signals
-        signals += record.extraSignals.filter { !signals.contains($0) }
+        signals += (record.extraSignals + trustSignals).filter { !signals.contains($0) }
         signals.sort { $0.severity > $1.severity }
         guard (signals.map(\.severity).max() ?? .info) >= .notable else {
             findings[identity] = nil
             return
         }
+        // An exited finding keeps the time it was last seen running: judging it again (a trust decision
+        // for a sibling) must not renew its half hour on the page.
         var finding = SentinelFinding(
             identity: identity, name: record.subject.name, executablePath: record.subject.executablePath,
             commandLine: String(record.subject.commandLine.prefix(4_096)), lineage: record.lineage, signals: signals,
@@ -230,9 +298,13 @@ public actor SentinelEngine {
                                               contentAncestor: record.evaluation.contentAncestor,
                                               fromTerminal: record.evaluation.fromTerminal),
             recommendation: SentinelRules.recommendation(for: signals, fromTerminal: record.evaluation.fromTerminal),
-            firstSeen: previous?.firstSeen ?? record.firstSeen, lastSeen: now, isRunning: running,
+            firstSeen: previous?.firstSeen ?? record.firstSeen, lastSeen: running ? now : (previous?.lastSeen ?? now),
+            isRunning: running,
             signing: record.signing, downloadedFrom: record.downloadedFrom)
         finding.connections = previous?.connections ?? []
+        // Offered again at every judgement: once the signature arrives the offer can name the signer.
+        finding.trustOffer = SentinelTrust.offer(for: record.subject, provenance: record.provenance, now: now,
+                                                 commandText: record.pipeline?.text)
         findings[identity] = finding
     }
 
@@ -252,10 +324,18 @@ public actor SentinelEngine {
         }
         let before = findings.count
         findings = findings.filter { $0.value.isRunning || now.timeIntervalSince($0.value.lastSeen) < Self.findingRetention }
+        // A dismissal lives as long as its finding, so the count stays true.
+        let dismissedBefore = dismissed.count
+        dismissed.formIntersection(findings.values.map(\.id))
+        changed = changed || dismissed.count != dismissedBefore
+        // An exited process's record stays while its finding is listed: the card still offers Trust,
+        // and trusting needs the record. The filter above has just dropped an expired finding.
         for (identity, record) in records
-        where !alive.contains(identity) && now.timeIntervalSince(record.firstSeen) >= Self.exitedRecordRetention {
+        where !alive.contains(identity) && findings[identity] == nil
+            && now.timeIntervalSince(record.firstSeen) >= Self.exitedRecordRetention {
             records[identity] = nil
         }
+        pipelines.prune(now: now)
         return changed || findings.count != before
     }
 
@@ -283,10 +363,15 @@ public actor SentinelEngine {
             guard var record = records[identity], let provenance = known[record.subject.executablePath] else { continue }
             let before = record.evaluation.severity
             record.provenanceApplied = true
+            record.provenance = provenance
             record.signing = provenance.signing
+            if trust.bindEarlierVersion(path: record.subject.executablePath, provenance: provenance, now: now) {
+                trustStore?.save(trust.entries)
+            }
             record.downloadedFrom = provenance.downloadedFrom
             // Rules that weigh the signer (a shared folder, a listener) run again now that it is known.
-            record.evaluation = SentinelRules.evaluate(record.subject, ancestors: record.ancestors, signing: provenance.signing)
+            record.evaluation = SentinelRules.evaluate(record.subject, ancestors: record.ancestors, signing: provenance.signing,
+                                                       pipeline: record.pipeline)
             let oddly = record.evaluation.signals.contains {
                 [.temporaryLocation, .hiddenLocation, .deletedExecutable, .downloadedExecutable].contains($0.kind) && $0.severity >= .notable
             }
@@ -294,7 +379,8 @@ public actor SentinelEngine {
             record.extraSignals = record.extraSignals.filter { !provenanceKinds.contains($0.kind) } + extra
             records[identity] = record
             let meaningful = extra.contains { $0.severity >= .notable } || record.evaluation.severity != before
-            guard meaningful || findings[identity] != nil else { continue }
+            // A trusted program's finding was held for this signature.
+            guard meaningful || findings[identity] != nil || trust.hasEntries(for: record.subject.executablePath) else { continue }
             upsertFinding(for: identity, running: alive.contains(identity), now: now)
             changed = true
         }
@@ -463,6 +549,7 @@ public actor SentinelEngine {
             watchedAppNames: watchedAppNames,
             launchesLastMinute: launchTimes.count,
             dismissedCount: dismissed.count,
+            trusted: trust.entries,
             revision: revision
         )
     }

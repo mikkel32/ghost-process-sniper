@@ -54,7 +54,10 @@ public actor RadarStore {
     private var salvage: StoreSalvage?
     private var lastErrorMessage: String?
     private var droppedModelCount = 0
+    private var incidentHistoryReads: UInt64 = 0
     private var isClosed = false
+    /// The user's leak limit, so the baseline learner judges growth by it.
+    private var leakVelocityLimit = ThresholdSettings.smart.leakVelocityMegabytesPerMinute
     var lastKillOperationSummary: String?
 
     public init(url: URL = RadarStore.defaultURL()) {
@@ -156,6 +159,7 @@ public actor RadarStore {
     /// saveSettings alone, so a queued model cannot overwrite a newer edit.
     public func enqueue(model: RadarModel, settings: ThresholdSettings, now: Date = Date()) throws -> StoreHealth {
         pendingModels.append(model)
+        leakVelocityLimit = settings.leakVelocityMegabytesPerMinute
         if shouldFlush(now: now, settings: settings) {
             try flush(now: now)
         }
@@ -192,7 +196,7 @@ public actor RadarStore {
         do {
             let db = try ensureOpen()
             for model in models {
-                try baselineBook.learn(from: model.families, at: model.generatedAt)
+                try baselineBook.learn(from: model.families, at: model.generatedAt, leakVelocityLimit: leakVelocityLimit)
                 try incidentLedger.stage(model.families, at: model.generatedAt)
             }
             baselineBook.stagePersist(now: modelNow, force: force)
@@ -255,7 +259,8 @@ public actor RadarStore {
             writeStats: StoreWriteStats(
                 baselineWrites: baselineBook.writeCount,
                 baselinesDeferred: baselineBook.deferredCount,
-                transactionsSkipped: transactionsSkipped
+                transactionsSkipped: transactionsSkipped,
+                incidentWrites: incidentLedger.writeCount
             ),
             rulesCacheHitCount: ruleBook.cacheHitCount,
             errorMessage: lastErrorMessage,
@@ -265,9 +270,25 @@ public actor RadarStore {
         )
     }
 
-    public func recentIncidents(limit: Int = 80) throws -> [RadarIncident] {
+    public func recentIncidents(limit: Int = IncidentHistory.publishedWindow) throws -> [RadarIncident] {
         try ensureOpen()
         return try incidentLedger.recent(limit: limit)
+    }
+
+    /// The newest `limit` incidents with the write count they were read at,
+    /// for search and filters that must reach past the published window. It
+    /// asks for one row more than `limit`, which is how it knows whether the
+    /// table held more.
+    public func incidentHistory(limit: Int = IncidentHistory.readLimit) throws -> IncidentHistory {
+        try ensureOpen()
+        let rows = try incidentLedger.recent(limit: limit + 1)
+        incidentHistoryReads += 1
+        return IncidentHistory(
+            incidents: Array(rows.prefix(limit)),
+            revision: incidentHistoryReads,
+            writeCount: incidentLedger.writeCount,
+            isTruncated: rows.count > limit
+        )
     }
 
     public func loadRules(includeBuiltIns: Bool = true, settings: ThresholdSettings = .aggressive) throws -> [RadarRule] {
@@ -452,6 +473,10 @@ extension RadarStore {
 
     func execute(_ sql: String, _ values: BindingValue...) throws {
         try ensureOpen().execute(sql, values: values)
+    }
+
+    func query(_ sql: String, _ values: [BindingValue] = [], row: (SQLiteRow) throws -> Void) throws {
+        try ensureOpen().query(sql, values, row: row)
     }
 
     func prepare(_ sql: String) throws -> OpaquePointer? {

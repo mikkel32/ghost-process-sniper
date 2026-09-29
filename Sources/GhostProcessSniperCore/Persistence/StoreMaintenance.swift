@@ -10,6 +10,7 @@ final class StoreMaintenance {
     static let baselineRetention: TimeInterval = 90 * 24 * 60 * 60
     static let calibrationRetention: TimeInterval = 180 * 24 * 60 * 60
     static let cacheIdleLimit: TimeInterval = 24 * 60 * 60
+    static let energyHistoryDays = 35
 
     private let db: SQLiteDatabase
     private let ruleBook: RuleBook
@@ -53,6 +54,8 @@ final class StoreMaintenance {
                 "DELETE FROM kill_calibration_aggregates WHERE updated_at < ?",
                 .double(now.addingTimeInterval(-Self.calibrationRetention).timeIntervalSince1970)
             )
+            try db.execute("DELETE FROM energy_days WHERE day < ?",
+                           .text(EnergyHistory.dayKey(for: now.addingTimeInterval(-Double(Self.energyHistoryDays) * 86_400))))
             try ruleBook.pruneExpired(now: now)
         }
         // Housekeeping pragmas must run outside a transaction; failing one

@@ -51,6 +51,8 @@ public struct FamilyScoringCache: Sendable {
         if context.systemPressure.level >= .warning {
             let share = context.pressureShare(for: family)
             hasher.combine(Int((share.contribution * 20).rounded()))
+            // A trickle's boost follows its rate, not only its share.
+            hasher.combine(Int((share.boostScale * 5).rounded()))
             hasher.combine(share.corroboratesPressure)
         }
         // The host-wide ETA moves nearly every tick under pressure; only this
@@ -82,6 +84,8 @@ public struct FamilyScoringCache: Sendable {
         }
         hasher.combine(Int(family.trend.credibleMemoryVelocity.rounded()))
         hasher.combine(Int(family.root.sampledAt.timeIntervalSince1970 / 300))
+        // The launch grace ends on the clock alone, with nothing else changed.
+        hasher.combine(StartupGrace.isStarting(root: family.root, now: now))
         hasher.combine(family.score.value.rounded())
         if let baseline = context.baselines[family.signature.id] {
             hasher.combine(baseline.measurementVersion)

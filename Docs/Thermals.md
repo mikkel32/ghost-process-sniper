@@ -41,6 +41,8 @@ Views re-render when the monitor publishes and, between publishes, only at the i
 | Other Apple chips (M5 and later) | One SMC enumeration (at most 4,096 keys): float `Tp`/`Te` keys as CPU and `Tg` as GPU when they read 20–110 °C, at most 24 each | Best effort; the card says so |
 | Anything else | None | Unavailable, with the reason shown |
 
+**Fan speed** is read the same way (read commands only): `FNum` (fan count, at most 4), then `F<n>Ac` (current rpm) and `F<n>Mx` (maximum rpm), `flt ` or, on older Intel Macs, `fpe2`. These key names and types come from the widely documented Stats registry and are **unverified on this project's hardware**. A value outside 0 to 20,000 rpm is dropped; if the count is missing or any fan's speed is unreadable the snapshot has no fans and nothing is shown (one unreadable fan never lets the others claim idle). The thermal card shows "Fans idle" (every fan under 100 rpm) or the fastest fan's speed and its share of its maximum. Fans are display-only context: they never feed the review band, the diagnosis or the Overview's heat layout.
+
 The chip generation is parsed as a whole number from the brand string ("Apple M1 Pro" → 1), so a future "Apple M10" never matches the M1 table. SMC is not a public API; future hardware or macOS changes can break any map.
 
 ## Review bands, trend and persistence
@@ -63,10 +65,12 @@ These are this app's review bands, not Apple operating limits or a hardware faul
 
 `ThermalActivitySummary.build` deduplicates PID + start-time identities, drops invalid readings and readings older than 12 s, and groups processes by what owns them (`ThermalWorkloadResolver` walks the process tree):
 
-1. Known macOS and virtualization sources (Spotlight, Photos analysis, Time Machine, WindowServer, Linux VMs) become one row each and count as system work.
-2. Processes inside an `.app` bundle, or launched by an app that is not a terminal, join that app.
-3. Work started from a shell or a terminal becomes one command-line job, named after the process the shell started and noting the terminal it runs in, so `make -j10` reads as one build rather than ten compiler rows.
+1. Known macOS and virtualization sources (Spotlight, Photos analysis, Time Machine, WindowServer, Linux VMs, **iCloud sync** (`bird`, `cloudd`, `fileproviderd`), **security checks** (`syspolicyd`, `XprotectService`, `amfid`, `trustd`) and **software update** (`softwareupdated`, `installd`)) become one row each and count as system work. The daemon names match only when the executable path is empty (the read is deadline-bound) or starts with `/System/`, `/usr/libexec/`, `/usr/sbin/`, `/sbin/` or `/Library/Apple/`: the iOS Simulator runs its own `cloudd`, `trustd` and `installd` from a path that contains `/System/Library/`. Any other lone process running from those macOS folders reads as a **macOS service**, is never offered a Stop shortcut, and gets service advice; jobs a shell started and app bundles are never services, and a daemon with children forms a job group and stays unclassified.
+2. Processes inside an `.app` bundle, or launched by an app that is not a terminal, join that app, except command-line tools in the bundle's `Contents/Developer` folder (not `Contents/Developer/Applications`) that a shell started: `swift`, `clang`, `git`, `make` and `python3` run through Xcode's shims from Terminal are that shell's job, named for the tool the shell started ("swift-build", "xcodebuild"). Xcode's main process, a run-script phase's shell, or nothing above the tool keeps it as Xcode.
+3. Work started from a shell or a terminal becomes one command-line job, named after the process the shell started and noting the terminal it runs in, so `make -j10` reads as one build rather than ten compiler rows. A shell script run from an interactive shell, a tmux pane or another script (`bash ./build.sh`) is one job named after the script file; `bash -c`, `-i`, login shells and prompts stay boundaries, and a lone script under launchd keeps its shell name. A job orphaned to launchd (`nohup`, a daemonized server, colima) that macOS holds a terminal responsible for is "Job in Terminal" instead of disappearing into the terminal's own total.
 4. Other process trees become one job under their topmost ancestor; a lone process stands alone.
+
+The responsible-app lookup (`ResponsibleProcessLookup`, asked once per scan and shared with the family builder) never moves a process to an app that started after it, so a recycled pid cannot hand a process's energy to an unrelated app. The history key for the daemons above is `known:<source>` (it was `name:<daemon>`).
 
 Native CPU counters (`proc_pid_rusage` and `PROC_PIDTASKINFO`) count Mach absolute-time ticks. `Sampling/ProcessCPUTime.swift` converts them with `mach_timebase_info` (125/3 on the tested Apple silicon Mac) before adding them; without it CPU work was understated about 42 times and attribution collapsed.
 

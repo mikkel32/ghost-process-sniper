@@ -15,6 +15,9 @@ final class FakeProbeSource: ProcessProbeSource, @unchecked Sendable {
         var arguments: String?
         var cpuSeconds: Double = 0
         var footprint: UInt64 = 64 << 20
+        var energyNanojoules: UInt64 = 0
+        var wakeups: UInt64 = 0
+        var diskBytesWritten: UInt64 = 0
         var threads = 4
         var ports: Set<Int> = []
         var sessionID: Int32?
@@ -117,7 +120,8 @@ final class FakeProbeSource: ProcessProbeSource, @unchecked Sendable {
             calls.usage += 1
             guard let process = usageImpostors[pid] ?? find(pid), !process.usageDenied else { return nil }
             return ProbeUsage(cpuSeconds: process.cpuSeconds, physicalFootprintBytes: process.footprint,
-                residentBytes: process.footprint, wakeups: 0, diskBytesWritten: 0,
+                residentBytes: process.footprint, wakeups: process.wakeups,
+                diskBytesWritten: process.diskBytesWritten, energyNanojoules: process.energyNanojoules,
                 processStartAbsoluteTime: process.startStamp != 0 ? process.startStamp : UInt64(process.start) &* 7)
         }
     }

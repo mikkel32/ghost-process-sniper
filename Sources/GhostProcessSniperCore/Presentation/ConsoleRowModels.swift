@@ -11,6 +11,7 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
     public let leakText: String
     public let occurrenceText: String
     public let timeRangeText: String
+    public let durationText: String
     public let reasons: [String]
     public let isActive: Bool
     /// Sort keys for table columns.
@@ -20,12 +21,26 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
     /// The concrete family key of a running family with this incident's
     /// signature; nil once it has exited.
     public let liveFamilyKey: String?
+    /// Its signature's other episodes in the list this row was drawn from;
+    /// nil for a lone episode, and for a row built without the list.
+    public let recurrence: IncidentPattern?
+
+    /// Growth that reads as at least 1 MB/min. Rows written before peaks were
+    /// tracked can still hold a raw, negative slope; it counts as none.
+    public static func hasGrowth(_ megabytesPerMinute: Double) -> Bool {
+        megabytesPerMinute >= 0.5
+    }
+
+    /// The episode's peak growth, or "none".
+    public static func growthText(_ megabytesPerMinute: Double) -> String {
+        hasGrowth(megabytesPerMinute) ? RadarFormat.leak(megabytesPerMinute) : "none"
+    }
 
     public init(incident: RadarIncident) {
         self.init(incident: incident, liveFamilyKey: nil)
     }
 
-    public init(incident: RadarIncident, liveFamilyKey: String?) {
+    public init(incident: RadarIncident, liveFamilyKey: String?, recurrence: IncidentPattern? = nil) {
         id = incident.id
         familyName = incident.familyName
         isActive = incident.resolvedAt == nil
@@ -35,13 +50,21 @@ public struct IncidentRowViewModel: Identifiable, Equatable, Sendable {
         memoryBytes = incident.memoryBytes
         occurrenceCount = incident.occurrenceCount
         self.liveFamilyKey = liveFamilyKey
+        self.recurrence = recurrence
         scoreText = "\(Int(incident.maxScore.rounded()))"
         memoryText = RadarFormat.bytes(incident.memoryBytes)
         cpuText = RadarFormat.percent(incident.cpuPercent)
-        leakText = RadarFormat.leak(incident.leakVelocityMegabytesPerMinute)
+        leakText = Self.growthText(incident.leakVelocityMegabytesPerMinute)
         occurrenceText = "\(incident.occurrenceCount)"
         timeRangeText = "\(incident.startedAt.formatted(date: .abbreviated, time: .shortened)) - \(incident.lastSeenAt.formatted(date: .abbreviated, time: .shortened))"
+        durationText = Self.durationText(of: incident)
         reasons = incident.reasons
+    }
+
+    /// Whole units only ("27 h", not "26.9h"), so no decimal separator can
+    /// disagree with the reader's locale.
+    private static func durationText(of incident: RadarIncident) -> String {
+        EnergyFormat.duration((incident.resolvedAt ?? incident.lastSeenAt).timeIntervalSince(incident.startedAt))
     }
 }
 

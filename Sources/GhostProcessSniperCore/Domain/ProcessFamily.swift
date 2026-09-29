@@ -17,6 +17,12 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public let trend: TrendMetrics
     public private(set) var score: GhostScore
     public let ownedIdentities: [ProcessIdentity]
+    /// Same-user members outside the root's own process tree, in the family
+    /// because macOS holds the root's app responsible for them: a browser's
+    /// tab, graphics and network processes, which launchd started. They exit
+    /// with the app, so the family's stop plan leaves them out, but each can
+    /// be stopped alone.
+    public let linkedIdentities: [ProcessIdentity]
     public let protectedPIDs: [Int32]
     public let signature: ProcessSignature
     public private(set) var baseline: FamilyBaseline?
@@ -55,9 +61,17 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         growth.first.flatMap { $0.isCulprit ? $0 : nil }
     }
 
-    public var displayName: String { root.name }
+    /// What lists, stop previews and notifications call the family: the
+    /// root's process name, or a simulator's runtime. Built once, as sorts read it.
+    public let displayName: String
     public var childCount: Int { max(0, members.count - 1) }
     public var isKillable: Bool { !ownedIdentities.isEmpty && protectedPIDs.isEmpty }
+
+    /// Whether one member may be previewed and stopped by itself: the family's
+    /// own processes, and the helpers linked in by their app.
+    public func canStopIndividually(_ identity: ProcessIdentity) -> Bool {
+        ownedIdentities.contains(identity) || linkedIdentities.contains(identity)
+    }
 
     public init(
         root: ProcessMetrics,
@@ -72,6 +86,7 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         score: GhostScore,
         ownedIdentities: [ProcessIdentity],
         protectedPIDs: [Int32],
+        linkedIdentities: [ProcessIdentity] = [],
         signature: ProcessSignature? = nil,
         baseline: FamilyBaseline? = nil,
         forensics: ProcessForensics? = nil,
@@ -95,6 +110,7 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         growth: [MemberGrowth] = []
     ) {
         self.root = root
+        self.displayName = FamilyTitle.name(for: root)
         self.members = members
         self.totalResidentMemoryBytes = totalResidentMemoryBytes
         self.totalPhysicalFootprintBytes = totalPhysicalFootprintBytes
@@ -105,6 +121,7 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         self.trend = trend
         self.score = score
         self.ownedIdentities = ownedIdentities
+        self.linkedIdentities = linkedIdentities
         self.protectedPIDs = protectedPIDs
         let signature = signature ?? ProcessSignature.from(root: root)
         self.signature = signature
@@ -148,6 +165,25 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     /// One concrete instance of a signature: the signature plus the root.
     public static func key(signature: ProcessSignature, root: ProcessIdentity) -> String {
         "\(signature.id)|pid:\(root.pid)|start:\(root.startTimeSeconds).\(root.startTimeMicroseconds)"
+    }
+
+    /// The signature id inside a family key, that is the key without the
+    /// `|pid:N|start:S.U` instance suffix `key(signature:root:)` adds. Anything
+    /// that does not end in that suffix (a signature id already) comes back
+    /// unchanged. A family that exited, or restarted under a new pid, no
+    /// longer has its key in the scan; its signature is what a rule can hold
+    /// on to, and it is what the restarted copy carries too.
+    public static func signatureID(fromFamilyKey key: String) -> String {
+        guard let marker = key.range(of: "|pid:", options: .backwards) else { return key }
+        let suffix = key[marker.upperBound...].split(separator: "|", omittingEmptySubsequences: false)
+        guard suffix.count == 2, isASCIIDigits(suffix[0]), suffix[1].hasPrefix("start:") else { return key }
+        let start = suffix[1].dropFirst("start:".count).split(separator: ".", omittingEmptySubsequences: false)
+        guard start.count == 2, isASCIIDigits(start[0]), isASCIIDigits(start[1]) else { return key }
+        return String(key[..<marker.lowerBound])
+    }
+
+    private static func isASCIIDigits(_ token: Substring) -> Bool {
+        !token.isEmpty && token.utf8.allSatisfy { $0 >= 48 && $0 <= 57 }
     }
 
     mutating func attribute(growth: [MemberGrowth]) {

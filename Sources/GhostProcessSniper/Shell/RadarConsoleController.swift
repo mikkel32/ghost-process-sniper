@@ -14,13 +14,19 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         monitor: ProcessMonitor,
         killer: ProcessKiller,
         quickStops: QuickStopAdvisor,
+        welcome: Bool = false,
         openSettings: @escaping () -> Void
     ) {
         self.monitor = monitor
         if let window {
+            // Ordering front alone may leave a minimized console in the Dock,
+            // with the engine believing it is on screen.
+            if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
             NSApp.activate()
-            monitor.setConsoleVisible(true)
+            // A window still leaving the Dock has not settled; its
+            // deminiaturize delegate call reports the visibility then.
+            monitor.setConsoleVisible(!window.isMiniaturized)
             return
         }
 
@@ -30,6 +36,7 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         if let key = session.state.focusedSelection.familyKey, session.family(forKey: key) == nil {
             session.state.focusedSelection = .overview
         }
+        if welcome { session.showWelcome = true }
         let rootView = RadarConsoleView(session: session)
         let hosting = NSHostingController(rootView: rootView)
         // The console owns its window dimensions. A lazy process list must not
@@ -69,16 +76,17 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         RadarLogger.ui.info("Opened radar console")
     }
 
-    /// Stop needs a selected family with processes you own; snooze and
-    /// ignore need any selected family. Menu validation is rare, so the
-    /// answer is computed fresh rather than read from presentation state.
-    /// A closed console keeps its session, but its selection is not on
-    /// screen, so nothing may act on it.
-    func canActOnSelection(stop: Bool) -> Bool {
-        guard window != nil, let session, session.state.focusedSelection.familyKey != nil else {
-            return false
+    /// What a menu command may do right now, from the rules the toolbar uses,
+    /// so the menu and the visible buttons agree about the selection and the
+    /// filtered list. Menu validation is rare, so the answer is computed fresh
+    /// rather than read from presentation state. A closed console keeps its
+    /// session, but its selection is not on screen, so nothing may act on it:
+    /// nil then, and the caller decides for commands that open the console.
+    func availability(_ command: RadarCommand) -> RadarCommandAvailability? {
+        guard window != nil, let session else {
+            return nil
         }
-        return stop ? session.selectedFamily?.ownedIdentities.isEmpty == false : true
+        return session.availability(command)
     }
 
     @discardableResult
@@ -203,6 +211,8 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
         if session?.cullRun?.isRunning != true { session?.cullRun = nil }
         session?.toast = nil
         session?.showQuickGuide = false
+        // Never resurfaces: the launch recorded it as shown before opening.
+        session?.showWelcome = false
         window = nil
         RadarLogger.ui.info("Closed radar console")
     }
@@ -217,6 +227,7 @@ final class RadarConsoleController: NSObject, NSWindowDelegate {
     }
 
     private func showIfNeeded() {
+        if let window, window.isMiniaturized { window.deminiaturize(nil) }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }

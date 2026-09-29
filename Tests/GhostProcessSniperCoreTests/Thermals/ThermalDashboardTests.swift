@@ -47,7 +47,7 @@ final class ThermalDashboardTests: XCTestCase {
     }
 
     func testSystemServicesAreExplainedWithoutAStopRecommendation() {
-        let result = projection([process(1, cpu: 400, path: "/usr/libexec/syspolicyd", system: true)])
+        let result = projection([process(1, cpu: 400, path: "/usr/libexec/rapportd", system: true)])
         XCTAssertEqual(result.contributors.first?.isSystemProcess, true)
         XCTAssertTrue(result.contributors.first?.suggestedAction.contains("does not recommend stopping") == true)
     }

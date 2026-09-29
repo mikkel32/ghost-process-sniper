@@ -210,7 +210,7 @@ public struct InterventionPolicyEngine: Sendable {
                 strategy: .quitApp,
                 confidence: max(0.82, decisionScore.confidence),
                 reasons: ["\(risk.kind.label): quitting lets it save state and close its own helpers."],
-                previewText: "Quit like \u{2318}Q, then SIGTERM leftover helpers; SIGKILL only for same-identity survivors."
+                previewText: "Quit like \u{2318}Q, then SIGTERM what the app left behind once it has gone; SIGKILL only for same-identity survivors."
             ), forecast(.quitApp))
         }
         if risk.kind == .dataStore || risk.kind == .containerRuntime {
@@ -305,8 +305,10 @@ public struct InterventionPolicyEngine: Sendable {
             KillSignalPhase(order: 0, label: ask("Terminate runaway"), action: .signal(SIGTERM), waitAfterSeconds: grace, reach: first),
             KillSignalPhase(order: 1, label: "Force verified survivors", action: .signal(SIGKILL), waitAfterSeconds: 0.25)
         ]
-        // The app itself is never sent SIGTERM: it would close past a
-        // save prompt. Only its leftover helpers are, and the app is forced.
+        // The app itself is never sent SIGTERM: it would close past a save
+        // prompt, and its helpers hold what the prompt is about. Only what
+        // it left behind once it had gone is; force alone reaches an app
+        // that never answers.
         case .quitApp: [
             KillSignalPhase(order: 0, label: "Ask the app to quit, like \u{2318}Q", action: .quitRequest, waitAfterSeconds: grace),
             KillSignalPhase(order: 1, label: "Terminate leftover helpers", action: .signal(SIGTERM), waitAfterSeconds: 1.5),

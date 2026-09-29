@@ -132,6 +132,43 @@ final class KillTargetAdvisorTests: XCTestCase {
         XCTAssertNotEqual(helperPreview.strategyRecommendation.strategy, .quitApp, "a helper is not asked to quit like the app")
     }
 
+    func testAHelperTheSnapshotDidNotMeasureCanStillBeTheDominantOne() async throws {
+        let table = FakeProcessTable()
+        let mebibyte: UInt64 = 1_048_576
+        let app = KillProcessLite.fake(pid: 920, name: "Code", memory: 50 * mebibyte)
+        let gpu = KillProcessLite.fake(pid: 921, parent: 920, name: "Code Helper (GPU)", memory: 120 * mebibyte)
+        // Past the kill snapshot's read budget in a big tree, its own row says 0.
+        let renderer = KillProcessLite.fake(pid: 922, parent: 920, name: "Code Helper (Renderer)", memory: 0)
+        [app, gpu, renderer].forEach { table.add($0) }
+        let root = "/Applications/Visual Studio Code.app/Contents"
+        let workload = KillWorkloadProfile(
+            processes: [
+                KillWorkloadProcess(pid: 920, parentPID: 1, name: "Code", executablePath: "\(root)/MacOS/Code",
+                                    commandLine: "\(root)/MacOS/Code", isRoot: true, identity: app.identity,
+                                    memoryBytes: 50 * mebibyte),
+                KillWorkloadProcess(pid: 921, parentPID: 920, name: "Code Helper (GPU)",
+                                    executablePath: "\(root)/Frameworks/Code Helper (GPU).app/Contents/MacOS/Code Helper (GPU)",
+                                    commandLine: "Code Helper (GPU) --type=gpu-process", identity: gpu.identity,
+                                    memoryBytes: 120 * mebibyte),
+                KillWorkloadProcess(pid: 922, parentPID: 920, name: "Code Helper (Renderer)",
+                                    executablePath: "\(root)/Frameworks/Code Helper (Renderer).app/Contents/MacOS/Code Helper (Renderer)",
+                                    commandLine: "Code Helper (Renderer) --type=renderer", identity: renderer.identity,
+                                    memoryBytes: 900 * mebibyte)
+            ],
+            ancestors: [],
+            parentIsLaunchd: true
+        )
+        let plan = KillPlan(rootIdentity: app.identity, targetIdentities: [app, gpu, renderer].map(\.identity), protectedPIDs: [],
+                            displayName: "Visual Studio Code", workload: workload)
+
+        let preview = await killer(table).preview(plan: plan, forceKillDelay: 2)
+
+        let alternative = try XCTUnwrap(preview.alternatives.first { $0.kind == .stopHelperOnly })
+        XCTAssertEqual(alternative.identity, renderer.identity, "not the small helper the snapshot happened to measure")
+        XCTAssertEqual(alternative.detail, "Stop only Code Helper (Renderer): frees \(RadarFormat.bytes(900 * mebibyte)) of "
+                       + "\(RadarFormat.bytes(1_070 * mebibyte)); the app stays open.")
+    }
+
     func testBalancedFamilyGetsNoHelperOnlyStop() async {
         let table = FakeProcessTable()
         let root = KillProcessLite.fake(pid: 910, name: "server", memory: 400 * 1_048_576)

@@ -298,9 +298,22 @@ public struct FamilyVerdict: Equatable, Sendable {
         let evidence = family.score.heat.evidence
         let headline: String
         let systemImage: String
+        var observed = evidence.first.map { sentence($0) + " " } ?? ""
         if evidence.contains(GhostHeat.memoryAboveLimitEvidence) {
-            headline = "Using a lot of memory now"
             systemImage = "memorychip"
+            // "Using a lot of memory now" is also true of a family at 0.7x
+            // its usual size on a Mac short of memory, and reads as a verdict
+            // on the app: name what it was compared with, or what is short.
+            switch AttentionReason(family: family)?.kind {
+            case let .aboveUsual(_, usual):
+                headline = "Bigger than usual for it"
+                observed = "\(RadarFormat.bytes(family.totalPhysicalFootprintBytes)) against a usual \(RadarFormat.bytes(usual)). "
+            case let .hostPressure(detail):
+                headline = "Memory is tight on this Mac"
+                observed = sentence(detail) + " "
+            default:
+                headline = "Using a lot of memory now"
+            }
         } else if evidence.contains(GhostHeat.sustainedCPUEvidence) || evidence.contains(GhostHeat.instantCPUEvidence) {
             headline = "CPU busy now"
             systemImage = "cpu"
@@ -308,7 +321,6 @@ public struct FamilyVerdict: Equatable, Sendable {
             headline = "Heavy right now"
             systemImage = "flame"
         }
-        let observed = evidence.first.map { sentence($0) + " " } ?? ""
         return FamilyVerdict(
             headline: headline,
             detail: observed + "Not confirmed as a leak yet.",

@@ -44,6 +44,7 @@ public struct ProcessFamilyBuilder: Sendable {
     private let evidenceScorer = FamilyEvidenceScorer()
     private let directories: DirectoryExistenceCache
     private let processorCount: Int
+    private let physicalMemoryBytes: UInt64
     private let defaultHistory = LockedRadarHistory()
 
     public init(
@@ -56,21 +57,27 @@ public struct ProcessFamilyBuilder: Sendable {
         self.classifier = classifier
         self.currentUserID = currentUserID
         self.processorCount = max(1, processorCount)
+        self.physicalMemoryBytes = physicalMemoryBytes
         self.directories = DirectoryExistenceCache(check: directoryExists)
         self.duplicateDetector = DuplicateClusterDetector(classifier: classifier, currentUserID: currentUserID)
         self.hardwareDetector = HardwareOffenderDetector(currentUserID: currentUserID, physicalMemoryBytes: physicalMemoryBytes)
     }
 
+    /// - Parameter responsible: the app macOS holds responsible for each
+    ///   launchd-started helper (`ResponsibleProcessLookup`); such helpers
+    ///   join that app's family. Empty draws families from parent links alone.
     public func buildFamilies(
         from processes: [ProcessMetrics],
         settings: ThresholdSettings,
         trendWindow: inout TrendWindow,
+        responsible: [ProcessIdentity: Int32] = [:],
         now: Date
     ) -> [ProcessFamily] {
         buildFamiliesWithDuplicates(
             from: processes,
             settings: settings,
             trendWindow: &trendWindow,
+            responsible: responsible,
             now: now
         ).families
     }
@@ -80,11 +87,13 @@ public struct ProcessFamilyBuilder: Sendable {
         from processes: [ProcessMetrics],
         settings: ThresholdSettings,
         trendWindow: inout TrendWindow,
+        responsible: [ProcessIdentity: Int32] = [:],
         now: Date
     ) -> ProcessFamilyBuildResult {
         var window = trendWindow
         let result = defaultHistory.withHistory { history in
-            buildFamiliesWithDuplicates(from: processes, settings: settings, trendWindow: &window, history: &history, now: now)
+            buildFamiliesWithDuplicates(from: processes, settings: settings, trendWindow: &window, history: &history,
+                                        responsible: responsible, now: now)
         }
         trendWindow = window
         return result
@@ -95,9 +104,11 @@ public struct ProcessFamilyBuilder: Sendable {
         settings: ThresholdSettings,
         trendWindow: inout TrendWindow,
         history: inout RadarHistory,
+        responsible: [ProcessIdentity: Int32] = [:],
         now: Date
     ) -> ProcessFamilyBuildResult {
-        let tree = ProcessTree(processes: processes, facts: staticFacts.facts(for: processes, make: makeStaticFacts))
+        let tree = ProcessTree(processes: processes, facts: staticFacts.facts(for: processes, make: makeStaticFacts),
+                               responsible: responsible)
         history.activity.recordProcesses(processes, now: now)
 
         let duplicateSet: DuplicateClusterSet
@@ -160,10 +171,17 @@ public struct ProcessFamilyBuilder: Sendable {
         // Membership first, so duplicates are resolved against the real
         // families before any family is scored against them.
         let rootIdentities = Set(roots.map(\.identity))
-        let memberships = roots.compactMap { root -> (familyKey: String, root: ProcessMetrics, members: [ProcessMetrics])? in
-            let members = tree.members(of: root, rootIdentities: rootIdentities)
-            guard !members.isEmpty else { return nil }
-            return (ProcessFamily.key(signature: signature(of: root, in: tree), root: root.identity), root, members)
+        var memberships = roots.compactMap { membership(of: $0, in: tree, rootIdentities: rootIdentities) }
+        // Heavy mode counts an app by what its helpers add up to, so an app
+        // with no heavy process of its own still gets a family.
+        if settings.groupFamilies, settings.radarMode == .heavy {
+            let covered = Set(memberships.lazy.flatMap { $0.members }.map(\.pid))
+            let groups = tree.groupRoots(of: processes, userID: currentUserID, memoryGate: settings.memoryBytes / 2,
+                                         covered: covered, rootIdentities: rootIdentities)
+            if !groups.isEmpty {
+                let boundaries = rootIdentities.union(groups.map(\.identity))
+                memberships += groups.compactMap { membership(of: $0, in: tree, rootIdentities: boundaries) }
+            }
         }
         let resolvedClusters = DuplicateFamilyResolver.resolve(
             duplicateSet.clusters,
@@ -202,7 +220,9 @@ public struct ProcessFamilyBuilder: Sendable {
             )
             // Attribution only matters for a family that is growing.
             if live.count > 1, family.trend.credibleMemoryVelocity > 0 || step.longTerm.slopeMegabytesPerMinute > 0 {
-                family.attribute(growth: history.memberTrends.growth(of: live))
+                let horizon: MemberTrendStore.GrowthHorizon =
+                    step.longTerm.isSlowLeak(physicalMemoryBytes: physicalMemoryBytes) ? .longTerm : .recent
+                family.attribute(growth: history.memberTrends.growth(of: live, horizon: horizon))
             }
             return family
         }
@@ -252,6 +272,16 @@ public struct ProcessFamilyBuilder: Sendable {
             isHardwareEligible: hardwareDetector.isEligibleForGenericHardwareDetection(process),
             duplicateKey: duplicateDetector.candidateKey(for: process, tokens: tokens, classification: classification)
         )
+    }
+
+    private func membership(
+        of root: ProcessMetrics,
+        in tree: ProcessTree,
+        rootIdentities: Set<ProcessIdentity>
+    ) -> (familyKey: String, root: ProcessMetrics, members: [ProcessMetrics])? {
+        let members = tree.members(of: root, rootIdentities: rootIdentities)
+        guard !members.isEmpty else { return nil }
+        return (ProcessFamily.key(signature: signature(of: root, in: tree), root: root.identity), root, members)
     }
 
     private func signature(of root: ProcessMetrics, in tree: ProcessTree) -> ProcessSignature {
@@ -342,14 +372,23 @@ public struct ProcessFamilyBuilder: Sendable {
             zombieChildCount: zombieChildren,
             cpuBehavior: CPUBehaviorAnalyzer.analyze(activity: activity, classification: familyClassification,
                                                      memberCount: live.count, baseline: nil,
-                                                     processorCount: processorCount, cpuThreshold: cpuLimit),
+                                                     processorCount: processorCount, cpuThreshold: cpuLimit,
+                                                     isUnattended: forgotten.launchContext.isUnattended),
             cpuLimit: cpuLimit,
             settings: settings,
             now: now
         )
 
+        // A stop of the root reaches its process tree. Helpers linked in by
+        // the app they work for are outside it and leave when the app quits,
+        // so the family's plan must not name them: the preflight would lock
+        // each as outside the family's tree. Each stays stoppable alone.
+        let linked = tree.linkedMembers(of: members, root: root)
         let owned = killOrder(for: members, root: root)
-            .filter { $0.userID == currentUserID }
+            .filter { $0.userID == currentUserID && !linked.contains($0.identity) }
+            .map(\.identity)
+        let linkedIdentities = members
+            .filter { $0.userID == currentUserID && linked.contains($0.identity) }
             .map(\.identity)
         let protected = members
             .filter { $0.userID != currentUserID }
@@ -369,6 +408,7 @@ public struct ProcessFamilyBuilder: Sendable {
             score: score,
             ownedIdentities: owned,
             protectedPIDs: protected,
+            linkedIdentities: linkedIdentities,
             signature: signature,
             forensics: forensics,
             classification: familyClassification,

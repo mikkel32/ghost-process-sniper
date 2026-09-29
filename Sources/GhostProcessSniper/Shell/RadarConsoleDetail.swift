@@ -30,9 +30,14 @@ struct RadarConsoleDetail: View {
                         ),
                         actions: FamilyPageActions(session: session, family: family),
                         lastScoredAt: family.lastScoredAt,
-                        forensicsFreshness: family.forensicsFreshness
+                        forensicsFreshness: family.forensicsFreshness,
+                        monitor: session.monitor
                     )
-                } else if let report = session.recentStops[familyKey] {
+                } else if let remembered = session.recentStops[familyKey] {
+                    // The family has left the scan, but only its root need have
+                    // gone: what the stop listed as still running counts as
+                    // gone only where no process with that identity runs now.
+                    let report = remembered.settlingSurvivors(stillRunning: Set(session.monitor.sampledProcesses.map(\.identity)))
                     RecentStopView(
                         report: report,
                         browse: { session.browseFamilies() },
@@ -59,6 +64,8 @@ struct RadarConsoleDetail: View {
                 RulesConsoleView(session: session)
             case .security:
                 SentinelConsoleView(session: session)
+            case .energy:
+                EnergyConsoleView(session: session)
             }
         }
         // The column's hosting view re-asks for its minimum size on every
@@ -78,6 +85,7 @@ private extension RadarFocusedSelection {
         case .incidents: "Incidents"
         case .rules: "Rules"
         case .security: "Security"
+        case .energy: "Energy"
         }
     }
 }

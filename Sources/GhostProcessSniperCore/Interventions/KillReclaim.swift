@@ -27,7 +27,9 @@ public struct KillReclaimEstimator: Sendable {
     /// Memory from the fresh targets. A kill snapshot cannot measure CPU,
     /// so a target without it takes the radar's last reading for that
     /// exact process; a reused PID is someone else.
-    public func estimate(plan: KillPlan, targets: [KillTarget]) -> KillReclaimEstimate {
+    /// - Parameter usedRadarMemory: some targets' memory is the radar's,
+    ///   from `takingRadarMemory`, so the source says so.
+    public func estimate(plan: KillPlan, targets: [KillTarget], usedRadarMemory: Bool = false) -> KillReclaimEstimate {
         let radar = Self.radarCPU(plan)
         let targetMemory = targets.reduce(UInt64(0)) { $0 + $1.memoryBytes }
         var usedRadar = false
@@ -37,11 +39,13 @@ public struct KillReclaimEstimator: Sendable {
             return total + reading
         }
         if targetMemory > 0 || targetCPU > 0 {
+            let memory = usedRadarMemory ? "Memory now (some from the last scan)" : "Memory now"
             return KillReclaimEstimate(
                 memoryBytes: targetMemory,
                 cpuPercent: targetCPU,
                 confidence: 0.82,
-                sourceText: usedRadar ? "Memory now, CPU from the last scan" : "Current owned target footprint"
+                sourceText: usedRadar ? "\(memory), CPU from the last scan"
+                    : usedRadarMemory ? memory : "Current owned target footprint"
             )
         }
         if !targets.isEmpty, plan.scope == .ownedFamily, plan.approvedIdentities == nil, let metadata = plan.familyMetadata {
@@ -59,6 +63,28 @@ public struct KillReclaimEstimator: Sendable {
     static func radarCPU(_ plan: KillPlan) -> [ProcessIdentity: Double] {
         Dictionary((plan.workload?.processes ?? []).compactMap { process in process.identity.map { ($0, process.cpuPercent) } },
                    uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The radar's memory per exact process.
+    static func radarMemory(_ plan: KillPlan) -> [ProcessIdentity: UInt64] {
+        Dictionary((plan.workload?.processes ?? []).compactMap { process in process.identity.map { ($0, process.memoryBytes) } },
+                   uniquingKeysWith: { first, _ in first })
+    }
+
+    /// A kill snapshot reads memory for a bounded number of processes, in
+    /// PID order, so in a big tree the rest say 0. Those take the radar's
+    /// last reading for that exact process, like CPU does, before the
+    /// estimate, the advisor and the report read them; measured memory is
+    /// never replaced.
+    func takingRadarMemory(_ targets: [KillTarget], plan: KillPlan) -> (targets: [KillTarget], usedRadar: Bool) {
+        let radar = Self.radarMemory(plan)
+        var usedRadar = false
+        let patched = targets.map { target -> KillTarget in
+            guard target.memoryBytes == 0, let reading = radar[target.identity], reading > 0 else { return target }
+            usedRadar = true
+            return target.updating(memoryBytes: reading)
+        }
+        return (patched, usedRadar)
     }
 
     /// Memory of the targets that are gone, less what a supervisor took

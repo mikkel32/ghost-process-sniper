@@ -90,9 +90,12 @@ public struct TrendMetrics: Equatable, Sendable {
 }
 
 public struct FamilyBaseline: Codable, Equatable, Sendable {
+    /// Version 3: a family also holds the launchd-started helpers macOS reports
+    /// for its app (Safari's tabs, an IDE's XPC services), so its size means
+    /// more than in version 2, which learned it without them.
     /// Version 2: a time-constant EWMA with variance and observed time.
     /// Older rows learned per refresh and are relearned.
-    public static let currentMeasurementVersion = 2
+    public static let currentMeasurementVersion = 3
 
     public let signature: ProcessSignature
     public var sampleCount: Int
@@ -171,8 +174,7 @@ public struct FamilyBaseline: Codable, Equatable, Sendable {
     /// a few megabytes into a huge score.
     public func memoryZScore(for bytes: UInt64) -> Double {
         guard isMeasurementTrusted else { return 0 }
-        let scale = max(memoryStandardDeviation, meanMemoryBytes * 0.05, 32 * 1_048_576)
-        return (Double(bytes) - meanMemoryBytes) / scale
+        return (Double(bytes) - meanMemoryBytes) / memoryScale
     }
 
     /// A normally idle family's ratio is as meaningful as a busy one's; the
@@ -203,7 +205,12 @@ public struct FamilyBaselineLearner: Sendable {
     static let maximumStep: TimeInterval = 300
     static let sessionGap: TimeInterval = 1_800
 
-    public init() {}
+    /// For telling a slow leak, which must not be learned, from normal size.
+    let physicalMemoryBytes: UInt64
+
+    public init(physicalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory) {
+        self.physicalMemoryBytes = physicalMemoryBytes
+    }
 
     public func updated(
         existing: FamilyBaseline?,
@@ -216,7 +223,7 @@ public struct FamilyBaselineLearner: Sendable {
             family.forecast.confidence >= 0.55 &&
             family.trend.sampleCount >= 4
         // An estimated total is fine to score but not to learn from.
-        let isIncidentSample = family.score.heat.shouldRecordIncident || trustedForecastIncident ||
+        let isIncidentSample = (family.score.heat.shouldRecordIncident && !family.hasOnlySizeAgainstIt) || trustedForecastIncident ||
             !family.measurementCoverage(at: now).isComplete
         let currentLeak = family.trend.credibleMemoryVelocity
         let memory = Double(family.totalPhysicalFootprintBytes)
@@ -242,7 +249,13 @@ public struct FamilyBaselineLearner: Sendable {
 
         // Incident bookkeeping is independent of measurement freshness.
         baseline.incidentCount = family.recentIncidentCount
-        guard let measuredAt = family.measurementDate, measuredAt > baseline.lastSeenAt else { return baseline }
+        guard let measuredAt = family.measurementDate else { return baseline }
+        // A baseline stamped while the clock ran ahead would otherwise stop
+        // learning until that moment comes round again.
+        if baseline.lastSeenAt > now.addingTimeInterval(Self.maximumStep) {
+            baseline.lastSeenAt = measuredAt.addingTimeInterval(-1)
+        }
+        guard measuredAt > baseline.lastSeenAt else { return baseline }
         let gap = measuredAt.timeIntervalSince(baseline.lastSeenAt)
         baseline.lastSeenAt = measuredAt
         if gap > Self.sessionGap {
@@ -265,12 +278,20 @@ public struct FamilyBaselineLearner: Sendable {
             baseline.meanLeakVelocityMegabytesPerMinute = currentLeak
             return baseline
         }
-        let alpha = 1 - exp(-step / Self.timeConstant)
+        // Time-weighted and cumulative until the window has filled, then
+        // exponential. An exponential average seeded with the first reading
+        // still gave it 85% of the weight when the baseline became trusted at
+        // twenty minutes, with the variance a sixth filled in: a language
+        // server first seen idle then "burned CPU against its normal" at
+        // every routine burst.
+        let alpha = max(1 - exp(-step / Self.timeConstant), baseline.observedSeconds > 0 ? step / baseline.observedSeconds : 1)
         baseline.sampleCount += 1
-        // Credible sustained growth is never allowed to become "normal".
+        // Credible sustained growth is never allowed to become "normal":
+        // fast growth the short trend proves, or a slow leak the long one does.
         let trend = family.trend
         let isGrowing = trend.hasSustainedHistory && trend.memoryFitQuality >= 0.6 &&
-            trend.memoryVelocityMegabytesPerMinute >= leakVelocityLimit * 0.35
+            trend.memoryVelocityMegabytesPerMinute >= leakVelocityLimit * 0.35 ||
+            family.longTermTrend.isSlowLeak(physicalMemoryBytes: physicalMemoryBytes)
         if !isGrowing {
             Self.learn(memory, alpha: alpha, mean: &baseline.meanMemoryBytes, variance: &baseline.memoryVariance)
             baseline.peakMemoryBytes = max(baseline.peakMemoryBytes, family.totalPhysicalFootprintBytes)

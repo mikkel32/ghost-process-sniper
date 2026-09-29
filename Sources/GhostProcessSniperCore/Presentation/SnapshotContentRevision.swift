@@ -66,6 +66,9 @@ struct SnapshotContentBaseline: Equatable, Sendable {
             facts.combine(family.score.level)
             facts.combine(family.hasRecentMeasurements(at: family.lastScoredAt ?? family.root.sampledAt))
             facts.combine(family.trend.hasSustainedHistory)
+            // Slow growth or a new duplicate moves no gauge by a tolerance,
+            // yet ends "big and nothing else", which the verdict names or not.
+            facts.combine(family.isWatchedForSizeOnly)
             // Which pressures a family causes, not how many members cross
             // which step: members near a threshold flap between levels.
             facts.combine(Set(family.hardwareSignals.map(\.kind)))
@@ -100,6 +103,9 @@ struct SnapshotContentBaseline: Equatable, Sendable {
             facts.combine(cluster.id)
             facts.combine(cluster.memberCount)
             facts.combine(cluster.independentRootCount)
+            // Crossing the listing floor adds or drops a row, however little
+            // the memory or CPU behind it moved.
+            facts.combine(cluster.addsUp)
             facts.combine(cluster.representativePIDs)
             facts.combine(cluster.relatedFamilyKeys)
             clusterSum &+= facts.finalize()

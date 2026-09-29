@@ -19,6 +19,8 @@ final class RadarConsoleSession {
     var searchFocusToken = 0
     var familyQueryResetToken = 0
     var showQuickGuide = false
+    /// The first-run welcome sheet, set once by the launch that decided on it.
+    var showWelcome = false
     private(set) var isRefreshing = false
     /// Drives the Stop toolbar button and menu item without making them
     /// depend on `monitor.families`, which changes every sample.
@@ -27,15 +29,27 @@ final class RadarConsoleSession {
     /// what happened instead of "no longer running".
     private(set) var recentStops: [String: KillReport] = [:]
     private(set) var memoryPulse: [MemoryPulseSample] = []
+    /// Where each family sat on the Live Radar over the last five minutes.
+    private(set) var radarHistory = LiveRadarHistory()
     /// Set from the moment a stop is requested until its preview is ready.
     var preparingStop: PreparingStop?
     /// The open "Stop the extras" run. It lives here, not on the Duplicates
     /// page, so its sheet survives moving to another page mid-run.
     var cullRun: DuplicateCullRun?
+    /// The Incidents page has asked for the whole log and its rows are not the
+    /// log's yet. See `incidentHistoryForProjection`.
+    var isSearchingIncidentLog = false
     /// Changes only when the thermal panel should move on the Overview.
     var overviewThermalBand: OverviewThermalBand = .normal
+    /// Changes only when the two queues collapse into the all-clear strip or
+    /// come back out of it.
+    var overviewQueueLayout: OverviewQueueLayout = .allClear
     var history = NavigationHistory()
     @ObservationIgnored var thermalBandTracker = OverviewThermalBandTracker()
+    /// The incident log read past the published 80 while the Incidents page is
+    /// searched or filtered; nothing while it is not.
+    @ObservationIgnored var incidentHistoryTracker = IncidentHistoryTracker()
+    @ObservationIgnored var queueLayoutTracker = OverviewQueueTracker()
     /// The last confirmed stop, so closing its sheet can return the user.
     @ObservationIgnored var lastStopResult: (pendingID: UUID, report: KillReport)?
 
@@ -106,6 +120,11 @@ final class RadarConsoleSession {
         currentDerivedSnapshot().incidentRows
     }
 
+    /// Which incidents `incidentRows` were drawn from.
+    var incidentScope: IncidentListScope {
+        currentDerivedSnapshot().incidentScope
+    }
+
     var duplicateRows: [DuplicateClusterViewModel] {
         currentDerivedSnapshot().duplicateRows
     }
@@ -162,6 +181,8 @@ final class RadarConsoleSession {
         // Pulse points every few seconds are plenty for a 5-minute strip and
         // keep the chart from rebuilding on every refresh tick.
         let now = Date()
+        var history = radarHistory
+        if history.record(compactSnapshot.allRows.map(LiveRadarInput.init(row:)), at: now) { radarHistory = history }
         if let last = memoryPulse.last, now.timeIntervalSince(last.date) < 4 {
             return
         }
@@ -214,6 +235,8 @@ final class RadarConsoleSession {
         panelTask = nil
         requestedQueryKey = nil
         queries.cancel()
+        incidentHistoryTracker.reset()
+        isSearchingIncidentLog = false
         // Otherwise every later refresh keeps prioritising forensics for
         // families nobody is looking at.
         lastFocusedFamilySignatures = []
@@ -225,6 +248,7 @@ final class RadarConsoleSession {
         if navigationSubtitle != title { navigationSubtitle = title }
         recordEngineSample()
         updateOverviewThermalBand()
+        updateOverviewQueueLayout()
         renewPortCensusIfUnanswered()
         scheduleQueryUpdate()
         updateCanStopSelection()
@@ -264,6 +288,7 @@ final class RadarConsoleSession {
         let request = ConsoleProjectionRequest(
             source: monitor.consoleSnapshot,
             incidents: monitor.incidents,
+            incidentHistory: incidentHistoryForProjection(),
             state: state.coreState,
             families: monitor.families,
             processes: monitor.sampledProcesses,
@@ -277,12 +302,16 @@ final class RadarConsoleSession {
         queryTask = Task { [weak self] in
             let published = await queries.update(request)
             guard published, !Task.isCancelled else { return }
+            self?.syncIncidentSearchState()
             self?.updateFocusedFamilies()
         }
         return queryTask
     }
 
     func toggleInspector() {
+        // Off a family page there is no inspector to show, and flipping the
+        // saved choice there would change what the next family page opens with.
+        guard state.focusedSelection.familyKey != nil else { return }
         state.showInspector.toggle()
         // Remembered for the next family page, including after relaunch.
         ConsolePreferences.showInspector = state.showInspector
@@ -399,14 +428,19 @@ final class RadarConsoleSession {
         ignore(familyKey: signatureID, name: selectedFamily?.displayName)
     }
 
+    // The toast follows the save, so it never announces a rule that is not there.
     func snooze(familyKey: String, name: String? = nil, minutes: TimeInterval = 60) {
-        Task { await monitor.snooze(signatureID: familyKey, minutes: minutes) }
-        showToast("Snoozed \(name ?? "family") for \(Self.durationText(minutes: minutes))", systemImage: "moon")
+        Task {
+            await monitor.snooze(signatureID: familyKey, name: name, minutes: minutes)
+            showToast("Snoozed \(name ?? "family") for \(Self.durationText(minutes: minutes))", systemImage: "moon")
+        }
     }
 
     func ignore(familyKey: String, name: String? = nil) {
-        Task { await monitor.ignore(signatureID: familyKey) }
-        showToast("Ignoring \(name ?? "family") — undo under Rules", systemImage: "eye.slash")
+        Task {
+            await monitor.ignore(signatureID: familyKey, name: name)
+            showToast("Ignoring \(name ?? "family") — undo under Rules", systemImage: "eye.slash")
+        }
     }
 
     func prepareKillSelected() {

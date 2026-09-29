@@ -7,6 +7,7 @@ import UserNotifications
 final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, Sendable {
     static let familyCategory = "ghost.family"
     static let sentinelCategory = "ghost.sentinel"
+    static let energyCategory = "ghost.energy"
     static let stopAction = "ghost.stop"
     static let snoozeAction = "ghost.snooze"
     static let showAction = "ghost.show"
@@ -31,6 +32,9 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, Send
             UNNotificationCategory(identifier: Self.familyCategory, actions: actions, intentIdentifiers: [], options: []),
             UNNotificationCategory(identifier: Self.sentinelCategory,
                                    actions: [UNNotificationAction(identifier: Self.showAction, title: "Review", options: [.foreground])],
+                                   intentIdentifiers: [], options: []),
+            UNNotificationCategory(identifier: Self.energyCategory,
+                                   actions: [UNNotificationAction(identifier: Self.showAction, title: "Review", options: [.foreground])],
                                    intentIdentifiers: [], options: [])
         ])
     }
@@ -50,6 +54,10 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, Send
         let userInfo = response.notification.request.content.userInfo
         if userInfo["sentinelFinding"] != nil {
             await coordinator.showSecurityCommand()
+            return
+        }
+        if userInfo["energyFinding"] != nil {
+            await coordinator.showEnergyCommand()
             return
         }
         let familyKey = userInfo["familyKey"] as? String

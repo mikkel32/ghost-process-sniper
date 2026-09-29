@@ -76,7 +76,6 @@ public struct RadarPipeline: Sendable {
     private var hysteresis = RadarHysteresis()
     private var continuity = RadarContinuity()
     private var metricsVersions: [String: UInt64] = [:]
-    private var signatureVersions: [String: UInt64] = [:]
     private var scoringCache = FamilyScoringCache()
     private var hostOutlook: HostMemoryOutlook?
 
@@ -92,9 +91,10 @@ public struct RadarPipeline: Sendable {
         processes: [ProcessMetrics],
         settings: ThresholdSettings,
         context: RadarContext,
+        responsible: [ProcessIdentity: Int32] = [:],
         now: Date
     ) -> RadarPipelineOutput {
-        let build = buildCandidates(processes: processes, settings: settings, now: now)
+        let build = buildCandidates(processes: processes, settings: settings, responsible: responsible, now: now)
         let scored = score(families: build.families, diff: build.diff, context: context, settings: settings, now: now)
         return RadarPipelineOutput(
             families: scored.families,
@@ -115,9 +115,12 @@ public struct RadarPipeline: Sendable {
         RadarSummaryBuilder.summary(for: families, hostOutlook: hostOutlook)
     }
 
+    /// - Parameter responsible: the app macOS holds responsible for each
+    ///   launchd-started helper, which joins that app's family.
     public mutating func buildCandidates(
         processes: [ProcessMetrics],
         settings: ThresholdSettings,
+        responsible: [ProcessIdentity: Int32] = [:],
         now: Date
     ) -> RadarPipelineBuildOutput {
         let buildStart = Date()
@@ -127,6 +130,7 @@ public struct RadarPipeline: Sendable {
             settings: settings,
             trendWindow: &trendWindow,
             history: &history,
+            responsible: responsible,
             now: now
         )
         return RadarPipelineBuildOutput(
@@ -171,16 +175,11 @@ public struct RadarPipeline: Sendable {
     }
 
     private mutating func versionedFamily(_ family: ProcessFamily, diff: RadarSnapshotDiff, now: Date) -> ProcessFamily {
-        let signatureID = family.signature.id
         let familyKey = family.familyKey
         let hasMetricChange = family.members.contains { diff.changedOrAdded.contains($0.identity) }
         if hasMetricChange {
             metricsVersions[familyKey, default: 0] += 1
         }
-        if signatureVersions[signatureID] == nil {
-            signatureVersions[signatureID] = 1
-        }
-
         let freshness = family.members
             .compactMap { member -> Date? in
                 member.forensics.isPartial ? nil : member.sampledAt
@@ -188,7 +187,9 @@ public struct RadarPipeline: Sendable {
             .max()
 
         return family.enriched(
-            signatureVersion: signatureVersions[signatureID, default: 1],
+            // Every signature has only ever had version 1; the map that
+            // held it grew with each workload seen and was never read otherwise.
+            signatureVersion: 1,
             metricsVersion: metricsVersions[familyKey, default: 0],
             forensicsFreshness: freshness,
             lastScoredAt: now
