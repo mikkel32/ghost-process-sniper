@@ -14,16 +14,38 @@ public struct FamilyProcessTreeRow: Identifiable, Equatable, Sendable {
     public let isRoot: Bool
     /// Owned by the current user and not a system process.
     public let isStoppable: Bool
+    /// "+42 MB/min" for a member with a real share of the family's growth;
+    /// nil for the rest, which is nearly every member of nearly every family.
+    public let growthText: String?
+    /// The member the engine names as the source of a credible leak.
+    public let isGrowthCulprit: Bool
     /// Nil for a leaf, as hierarchical tables expect.
-    public let children: [FamilyProcessTreeRow]?
+    public private(set) var children: [FamilyProcessTreeRow]?
 
     public var pid: Int32 { id.pid }
 
+    /// A member is worth a growth figure from a tenth of the family's growth.
+    static let minimumGrowthShare = 0.1
+    /// Below this the figure would read "+0 MB/min": drift, not growth.
+    static let minimumGrowthMegabytesPerMinute = 1.0
+
     /// Members whose parent is outside the family hang off the root, so no
     /// member is ever dropped. Siblings are ordered by memory, largest first.
-    public static func build(members: [ProcessMetrics], root: ProcessMetrics, ownedIdentities: [ProcessIdentity]) -> [FamilyProcessTreeRow] {
+    /// `growth` and `culprit` arrive already judged (the panel decides
+    /// whether the family's history earns them), so the tree only draws them.
+    public static func build(
+        members: [ProcessMetrics],
+        root: ProcessMetrics,
+        ownedIdentities: [ProcessIdentity],
+        growth: [MemberGrowth] = [],
+        culprit: ProcessIdentity? = nil
+    ) -> [FamilyProcessTreeRow] {
         guard !members.isEmpty else { return [] }
         let owned = Set(ownedIdentities)
+        var growthTexts: [ProcessIdentity: String] = [:]
+        for entry in growth where entry.share >= minimumGrowthShare && entry.slopeMegabytesPerMinute >= minimumGrowthMegabytesPerMinute {
+            growthTexts[entry.identity] = "+" + RadarFormat.leak(entry.slopeMegabytesPerMinute)
+        }
         let memberPIDs = Set(members.map(\.pid))
         var childrenByParent: [Int32: [ProcessMetrics]] = [:]
         for member in members where member.identity != root.identity {
@@ -57,6 +79,8 @@ public struct FamilyProcessTreeRow: Identifiable, Equatable, Sendable {
                 executablePath: process.executablePath,
                 isRoot: process.identity == root.identity,
                 isStoppable: owned.contains(process.identity) && !process.isSystemProcess,
+                growthText: growthTexts[process.identity],
+                isGrowthCulprit: process.identity == culprit,
                 children: childRows.isEmpty ? nil : childRows
             )
         }
@@ -68,5 +92,30 @@ public struct FamilyProcessTreeRow: Identifiable, Equatable, Sendable {
             rows.append(node(member))
         }
         return rows
+    }
+
+    /// The root, then the `limit - 1` biggest other processes wherever they
+    /// sit in the outline, as a flat list: what a narrow column can show of
+    /// a family with dozens of helpers. Built once with the panel.
+    public static func largest(_ rows: [FamilyProcessTreeRow], limit: Int) -> [FamilyProcessTreeRow] {
+        guard limit > 0 else { return [] }
+        var all: [FamilyProcessTreeRow] = []
+        func collect(_ rows: [FamilyProcessTreeRow]) {
+            for row in rows {
+                all.append(row)
+                collect(row.children ?? [])
+            }
+        }
+        collect(rows)
+        all.sort { lhs, rhs in
+            if lhs.isRoot != rhs.isRoot { return lhs.isRoot }
+            if lhs.memoryBytes != rhs.memoryBytes { return lhs.memoryBytes > rhs.memoryBytes }
+            return lhs.pid < rhs.pid
+        }
+        return all.prefix(limit).map { row in
+            var flat = row
+            flat.children = nil
+            return flat
+        }
     }
 }

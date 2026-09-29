@@ -146,7 +146,141 @@ final class FamilyDecisionBriefTests: XCTestCase {
         XCTAssertNil(firstChild?.children?.first?.children, "leaves have no children array")
     }
 
+    // MARK: - Growth in the tree
+
+    func testTreeNamesTheMemberTheGrowthComesFrom() {
+        let root = process(pid: 100, parent: 1)
+        let small = process(pid: 200, parent: 100, memory: 50 * 1_048_576)
+        let big = process(pid: 201, parent: 100, memory: 900 * 1_048_576)
+        let middle = process(pid: 202, parent: 100, memory: 300 * 1_048_576)
+        let members = [root, small, big, middle]
+
+        let rows = FamilyProcessTreeRow.build(
+            members: members, root: root, ownedIdentities: members.map(\.identity),
+            growth: [growth(big, slope: 42, share: 0.8), growth(middle, slope: 5, share: 0.05)],
+            culprit: big.identity
+        )
+
+        let bigRow = tree(rows, pid: 201)
+        XCTAssertEqual(bigRow?.growthText, "+42 MB/min")
+        XCTAssertEqual(bigRow?.isGrowthCulprit, true)
+        XCTAssertNil(tree(rows, pid: 202)?.growthText, "5% of the growth is not worth a figure")
+        XCTAssertEqual(tree(rows, pid: 202)?.isGrowthCulprit, false)
+        XCTAssertNil(tree(rows, pid: 200)?.growthText)
+        XCTAssertNil(tree(rows, pid: 100)?.growthText)
+        XCTAssertEqual(rows[0].children?.map(\.pid), [201, 202, 200], "siblings stay ordered by memory")
+    }
+
+    func testTreeShowsNoFigureThatWouldRoundToNothing() {
+        let root = process(pid: 100, parent: 1)
+        let kids = (0..<4).map { process(pid: Int32(200 + $0), parent: 100) }
+        let members = [root] + kids
+
+        let rows = FamilyProcessTreeRow.build(
+            members: members, root: root, ownedIdentities: members.map(\.identity),
+            growth: [
+                growth(kids[0], slope: 0.3, share: 0.5),
+                growth(kids[1], slope: 1, share: 0.1),
+                growth(kids[2], slope: 8, share: 0.09),
+                growth(kids[3], slope: 1_234, share: 0.3)
+            ]
+        )
+
+        XCTAssertNil(tree(rows, pid: 200)?.growthText, "0.3 MB/min would print as +0 MB/min")
+        XCTAssertEqual(tree(rows, pid: 201)?.growthText, "+1 MB/min", "the floors are inclusive")
+        XCTAssertNil(tree(rows, pid: 202)?.growthText, "under a tenth of the growth")
+        XCTAssertEqual(tree(rows, pid: 203)?.growthText, "+1234 MB/min")
+        XCTAssertFalse(flatten(rows).contains(where: \.isGrowthCulprit), "no culprit was named")
+    }
+
+    func testAMemberIsCalledLeakingOnlyWhenTheEngineCallsTheFamilyALeak() throws {
+        let points = (0..<8).map { Double(400 + $0 * 40) * mebibyte }
+        let child = process(pid: 5_000, parent: 4_242, memory: 900 * 1_048_576)
+        let attributed = [growth(child, slope: 42, share: 0.8)]
+        XCTAssertTrue(try XCTUnwrap(attributed.first).isCulprit, "the fixture is the engine's culprit")
+
+        // A credible leak: the named member is marked and carries its figure.
+        var leaking = makeFamily(points: points, fit: 0.95, forecast: forecast(.leaking, confidence: 0.8), extraMembers: [child])
+        leaking.attribute(growth: attributed)
+        XCTAssertTrue(leaking.hasCredibleLeak)
+        let marked = tree(FamilyDetailPanelModel(family: leaking).processTree, pid: 5_000)
+        XCTAssertEqual(marked?.isGrowthCulprit, true)
+        XCTAssertEqual(marked?.growthText, "+42 MB/min")
+
+        // Growing but not called a leak: the figure is honest, the verdict is not borrowed.
+        var growing = makeFamily(points: points, fit: 0.95, forecast: forecast(.quiet, confidence: 0), level: .quiet, extraMembers: [child])
+        growing.attribute(growth: attributed)
+        XCTAssertFalse(growing.hasCredibleLeak)
+        XCTAssertGreaterThan(growing.trend.credibleMemoryVelocity, 0)
+        let figure = tree(FamilyDetailPanelModel(family: growing).processTree, pid: 5_000)
+        XCTAssertEqual(figure?.growthText, "+42 MB/min")
+        XCTAssertEqual(figure?.isGrowthCulprit, false, "MemberGrowth.isCulprit alone is not a leak verdict")
+
+        // A family whose history proves no growth shows neither, whatever was attributed.
+        var flat = makeFamily(points: Array(repeating: 400 * mebibyte, count: 8), fit: 0.1,
+                              forecast: forecast(.quiet, confidence: 0), level: .quiet, extraMembers: [child])
+        flat.attribute(growth: attributed)
+        XCTAssertEqual(flat.trend.credibleMemoryVelocity, 0)
+        let quiet = tree(FamilyDetailPanelModel(family: flat).processTree, pid: 5_000)
+        XCTAssertNil(quiet?.growthText)
+        XCTAssertEqual(quiet?.isGrowthCulprit, false)
+    }
+
+    // MARK: - Largest processes
+
+    func testLargestListsTheRootThenTheBiggestProcessesAnywhereInTheOutline() {
+        let root = process(pid: 100, parent: 1)
+        let small = process(pid: 200, parent: 100, memory: 50 * 1_048_576)
+        let big = process(pid: 201, parent: 100, memory: 900 * 1_048_576)
+        let middle = process(pid: 202, parent: 100, memory: 300 * 1_048_576)
+        let deep = process(pid: 203, parent: 201, memory: 2_000 * 1_048_576)
+        let members = [root, small, big, middle, deep]
+        let rows = FamilyProcessTreeRow.build(members: members, root: root, ownedIdentities: members.map(\.identity))
+
+        XCTAssertEqual(FamilyProcessTreeRow.largest(rows, limit: 2).map(\.pid), [100, 203])
+        XCTAssertEqual(FamilyProcessTreeRow.largest(rows, limit: 4).map(\.pid), [100, 203, 201, 202])
+        XCTAssertEqual(FamilyProcessTreeRow.largest(rows, limit: 99).map(\.pid), [100, 203, 201, 202, 200])
+        XCTAssertEqual(FamilyProcessTreeRow.largest(rows, limit: 0).map(\.pid), [])
+        XCTAssertTrue(FamilyProcessTreeRow.largest(rows, limit: 5).allSatisfy { $0.children == nil }, "the list is flat")
+        XCTAssertEqual(FamilyProcessTreeRow.largest(rows, limit: 1).first?.isRoot, true, "the root stays even when it is the smallest")
+    }
+
+    func testLargestBreaksTiesByPid() {
+        let root = process(pid: 100, parent: 1)
+        let kids = [process(pid: 230, parent: 100), process(pid: 210, parent: 100), process(pid: 220, parent: 100)]
+        let members = [root] + kids
+        let rows = FamilyProcessTreeRow.build(members: members, root: root, ownedIdentities: members.map(\.identity))
+
+        XCTAssertEqual(FamilyProcessTreeRow.largest(rows, limit: 3).map(\.pid), [100, 210, 220])
+    }
+
+    func testTheInspectorListsTheBiggestTenOfALargeFamilyNotTheFirstTen() {
+        // The bigger the pid, the bigger the process, so the first ten by pid are the smallest.
+        let children = (0..<39).map { process(pid: Int32(5_000 + $0), parent: 4_242, memory: UInt64(100 + $0) * 1_048_576) }
+        let family = makeFamily(points: (0..<8).map { Double(400 + $0 * 40) * mebibyte }, fit: 0.95,
+                                forecast: forecast(.quiet, confidence: 0), level: .quiet, extraMembers: children)
+
+        let shown = FamilyDetailPanelModel(family: family).inspectorTree
+
+        XCTAssertEqual(shown.count, FamilyDetailPanelModel.inspectorTreeLimit)
+        XCTAssertEqual(shown.first?.isRoot, true)
+        XCTAssertEqual(shown.dropFirst().map(\.pid), (0..<9).map { Int32(5_038 - $0) })
+        XCTAssertEqual(shown.dropFirst().first?.memoryText, "138 MB")
+    }
+
     // MARK: - Fixtures
+
+    private func growth(_ member: ProcessMetrics, slope: Double, share: Double, rSquared: Double = 0.9) -> MemberGrowth {
+        MemberGrowth(identity: member.identity, name: member.name, slopeMegabytesPerMinute: slope, rSquared: rSquared, share: share)
+    }
+
+    private func flatten(_ rows: [FamilyProcessTreeRow]) -> [FamilyProcessTreeRow] {
+        rows.flatMap { [$0] + flatten($0.children ?? []) }
+    }
+
+    private func tree(_ rows: [FamilyProcessTreeRow], pid: Int32) -> FamilyProcessTreeRow? {
+        flatten(rows).first { $0.pid == pid }
+    }
 
     private func count(_ rows: [FamilyProcessTreeRow]) -> Int {
         rows.reduce(0) { $0 + 1 + count($1.children ?? []) }
@@ -205,7 +339,8 @@ final class FamilyDecisionBriefTests: XCTestCase {
         alert: AlertState = .normal,
         owned: Bool = true,
         components: [GhostScoreComponent] = [],
-        level: GhostLevel = .hot
+        level: GhostLevel = .hot,
+        extraMembers: [ProcessMetrics] = []
     ) -> ProcessFamily {
         let root = process(pid: 4_242, parent: 1, memory: UInt64(points.last ?? 0), measurement: measurement)
         let samples = points.enumerated().map { index, bytes in
@@ -220,7 +355,7 @@ final class FamilyDecisionBriefTests: XCTestCase {
         )
         return ProcessFamily(
             root: root,
-            members: [root],
+            members: [root] + extraMembers,
             totalResidentMemoryBytes: root.residentMemoryBytes,
             totalPhysicalFootprintBytes: root.physicalFootprintBytes,
             totalCPUPercent: 3,
