@@ -17,12 +17,14 @@ public struct ThermalSnapshot: Equatable, Sendable {
     public let gpuSeriesID: String?
     /// Where the sensor key map came from; nil when this Mac has none.
     public let mappingSource: SMCSensorMapping.Source?
+    /// Read-only fan speeds; empty on a Mac without fans or when they could not be read.
+    public let fans: [ThermalFan]
 
     public init(sampledAt: Date, cpuCelsius: Double?, gpuCelsius: Double?, sensorCount: Int,
                 sensorKeys: [String], systemState: String, unavailableReason: String?,
                 cpuSensorKey: String? = nil, gpuSensorKey: String? = nil,
                 cpuSeriesID: String? = nil, gpuSeriesID: String? = nil,
-                mappingSource: SMCSensorMapping.Source? = nil) {
+                mappingSource: SMCSensorMapping.Source? = nil, fans: [ThermalFan] = []) {
         self.sampledAt = sampledAt
         self.cpuCelsius = cpuCelsius
         self.gpuCelsius = gpuCelsius
@@ -35,6 +37,7 @@ public struct ThermalSnapshot: Equatable, Sendable {
         self.cpuSeriesID = cpuSeriesID
         self.gpuSeriesID = gpuSeriesID
         self.mappingSource = mappingSource
+        self.fans = fans
     }
 
     /// A caveat for key maps not yet confirmed on real hardware of this chip family.
@@ -58,6 +61,13 @@ public struct ThermalSnapshot: Equatable, Sendable {
         guard (0...15).contains(now.timeIntervalSince(sampledAt)), let value, value.isFinite else { return "Unavailable" }
         return RadarFormat.celsius(value)
     }
+
+    /// The fan line, or nil without fans and once the reading is no longer current,
+    /// so an old rpm never sits beside an "Unavailable" temperature.
+    public func fanText(at now: Date = Date()) -> String? {
+        guard (0...15).contains(now.timeIntervalSince(sampledAt)) else { return nil }
+        return ThermalFan.summary(fans)
+    }
 }
 
 enum SMCTemperatureCodec {
@@ -66,8 +76,7 @@ enum SMCTemperatureCodec {
         switch type {
         case "flt ":
             guard bytes.count == 4 else { return nil }
-            let bits = UInt32(bytes[0]) | UInt32(bytes[1]) << 8 | UInt32(bytes[2]) << 16 | UInt32(bytes[3]) << 24
-            value = Double(Float(bitPattern: bits))
+            value = float32(bytes)
         case "sp78":
             guard bytes.count == 2 else { return nil }
             value = Double(Int16(bitPattern: UInt16(bytes[0]) << 8 | UInt16(bytes[1]))) / 256
@@ -75,6 +84,31 @@ enum SMCTemperatureCodec {
         }
         // Zero, sentinels, NaN, and unsupported encodings are not temperatures.
         return value.isFinite && (5...125).contains(value) ? value : nil
+    }
+
+    /// Plain numbers such as fan counts and speeds: `flt ` (little-endian), `fpe2`
+    /// (unsigned 14.2 fixed point, big-endian, on older Intel Macs) and `ui8 `.
+    /// Range checks belong to the caller; only non-finite values are refused here.
+    static func decodeNumber(type: String, bytes: [UInt8]) -> Double? {
+        let value: Double
+        switch type {
+        case "flt ":
+            guard bytes.count == 4 else { return nil }
+            value = float32(bytes)
+        case "fpe2":
+            guard bytes.count == 2 else { return nil }
+            value = Double(UInt16(bytes[0]) << 8 | UInt16(bytes[1])) / 4
+        case "ui8 ":
+            guard bytes.count == 1 else { return nil }
+            value = Double(bytes[0])
+        default: return nil
+        }
+        return value.isFinite ? value : nil
+    }
+
+    private static func float32(_ bytes: [UInt8]) -> Double {
+        let bits = UInt32(bytes[0]) | UInt32(bytes[1]) << 8 | UInt32(bytes[2]) << 16 | UInt32(bytes[3]) << 24
+        return Double(Float(bitPattern: bits))
     }
 
     static func fourCC(_ value: String) -> UInt32 {
@@ -130,6 +164,8 @@ public actor ThermalSampler {
         let keys = (cpu + gpu).map(\.0)
         let hottestCPU = cpu.max { $0.1 < $1.1 }
         let hottestGPU = gpu.max { $0.1 < $1.1 }
+        // Independent of the temperature map: a chip without one can still report fans.
+        let fans = reader?.fanSpeeds() ?? []
         snapshot = ThermalSnapshot(
             sampledAt: now,
             cpuCelsius: hottestCPU?.1,
@@ -142,7 +178,8 @@ public actor ThermalSampler {
             gpuSensorKey: hottestGPU?.0,
             cpuSeriesID: Self.seriesID("cpu", cpu),
             gpuSeriesID: Self.seriesID("gpu", gpu),
-            mappingSource: mapping?.source
+            mappingSource: mapping?.source,
+            fans: fans
         )
         return snapshot
     }

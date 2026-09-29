@@ -93,6 +93,153 @@ final class SMCSensorCatalogTests: XCTestCase {
         XCTAssertEqual(smc.calls(command: 5, key: "Tp01"), 2)
     }
 
+    // MARK: Fans (read-only)
+
+    private func fanSnapshot(_ smc: FakeSMC, brand: String = "Apple M1 Pro", at offset: TimeInterval = 0) async -> ThermalSnapshot {
+        await ThermalSampler(brand: brand, makeTransport: { smc }).sample(now: now.addingTimeInterval(offset))
+    }
+
+    func testFanSpeedIsReadNextToTheTemperatures() async {
+        let smc = FakeSMC(values: ["Tp01": 70, "F0Ac": 2400, "F0Mx": 5800], types: ["FNum": ("ui8 ", 1)])
+        let snapshot = await fanSnapshot(smc)
+        XCTAssertEqual(snapshot.fans, [ThermalFan(rpm: 2400, maximumRPM: 5800)])
+        XCTAssertEqual(snapshot.cpuCelsius, 70, "Fans never disturb the temperature reading")
+        XCTAssertEqual(snapshot.fans.first?.fraction ?? 0, 2400.0 / 5800.0, accuracy: 1e-9)
+    }
+
+    func testFanSummaryIsWrittenInTheReadersLocale() {
+        let fans = [ThermalFan(rpm: 2340, maximumRPM: 5700)]
+        XCTAssertEqual(ThermalFan.summary(fans, locale: Locale(identifier: "en_US")), "Fans 2,340 rpm (41% of max)")
+        XCTAssertEqual(ThermalFan.summary(fans, locale: Locale(identifier: "da_DK")), "Fans 2.340 rpm (41% of max)")
+        XCTAssertEqual(ThermalFan.summary([ThermalFan(rpm: 2340, maximumRPM: nil)], locale: Locale(identifier: "en_US")),
+                       "Fans 2,340 rpm", "No maximum, no percentage")
+        XCTAssertNil(ThermalFan.summary([]))
+    }
+
+    func testFansBelowAHundredRPMAreIdle() {
+        XCTAssertEqual(ThermalFan.summary([ThermalFan(rpm: 0, maximumRPM: 5800)]), "Fans idle")
+        XCTAssertEqual(ThermalFan.summary([ThermalFan(rpm: 99, maximumRPM: 5800)]), "Fans idle")
+        XCTAssertNotEqual(ThermalFan.summary([ThermalFan(rpm: 100, maximumRPM: 5800)]), "Fans idle")
+        XCTAssertEqual(ThermalFan.summary([ThermalFan(rpm: 0, maximumRPM: nil), ThermalFan(rpm: 40, maximumRPM: nil)]),
+                       "Fans idle", "Idle only when every fan is")
+    }
+
+    func testSeveralFansReportTheBusiestOne() async {
+        let smc = FakeSMC(values: ["Tp01": 70, "F0Ac": 1200, "F0Mx": 6000, "F1Ac": 3000, "F1Mx": 6000],
+                          types: ["FNum": ("ui8 ", 1)], bytes: ["FNum": [2]])
+        let snapshot = await fanSnapshot(smc)
+        XCTAssertEqual(snapshot.fans.map(\.rpm), [1200, 3000])
+        XCTAssertEqual(ThermalFan.summary(snapshot.fans, locale: Locale(identifier: "en_US")), "Fans up to 3,000 rpm (50% of max)")
+    }
+
+    func testTheFractionStaysWithinZeroAndOne() {
+        XCTAssertEqual(ThermalFan(rpm: 6100, maximumRPM: 6000).fraction, 1, "A fan may overshoot its listed maximum")
+        XCTAssertNil(ThermalFan(rpm: 3000, maximumRPM: nil).fraction)
+        XCTAssertNil(ThermalFan(rpm: 3000, maximumRPM: 0).fraction, "Never divide by a zero maximum")
+    }
+
+    func testAMacWithoutFansShowsNothingAndDoesNotKeepAsking() async {
+        let smc = FakeSMC(values: ["Tp01": 70])
+        let sampler = ThermalSampler(brand: "Apple M1", makeTransport: { smc })
+        let first = await sampler.sample(now: now)
+        let second = await sampler.sample(now: now.addingTimeInterval(4))
+        XCTAssertEqual(first.fans, [])
+        XCTAssertEqual(second.fans, [])
+        XCTAssertEqual(second.cpuCelsius, 70)
+        XCTAssertNil(second.fanText(at: now.addingTimeInterval(4)))
+        XCTAssertEqual(smc.calls(command: 9, key: "FNum"), 1, "Key-not-found is cached")
+        XCTAssertEqual(smc.calls(command: 5, key: "FNum"), 0)
+        XCTAssertEqual(smc.calls(command: 9, key: "F0Ac"), 0, "Without a fan count there is nothing to read")
+    }
+
+    func testAFanCountOfZeroReadsNoFanKeys() async {
+        let smc = FakeSMC(values: ["Tp01": 70, "F0Ac": 2400], types: ["FNum": ("ui8 ", 1)], bytes: ["FNum": [0]])
+        let snapshot = await fanSnapshot(smc)
+        XCTAssertEqual(snapshot.fans, [])
+        XCTAssertEqual(smc.calls(command: 5, key: "F0Ac"), 0)
+    }
+
+    func testImplausibleFanReadingsAreDropped() async {
+        for bad: Float in [65535, -20, .nan, .infinity] {
+            let smc = FakeSMC(values: ["Tp01": 70, "F0Ac": bad, "F0Mx": 5800], types: ["FNum": ("ui8 ", 1)])
+            let snapshot = await fanSnapshot(smc)
+            XCTAssertEqual(snapshot.fans, [], "\(bad)")
+        }
+        let onlyOneBad = FakeSMC(values: ["Tp01": 70, "F0Ac": 0, "F1Ac": 65535], types: ["FNum": ("ui8 ", 1)], bytes: ["FNum": [2]])
+        let snapshot = await fanSnapshot(onlyOneBad)
+        XCTAssertEqual(snapshot.fans, [], "A fan that cannot be trusted must not let the others say idle")
+    }
+
+    func testAnImplausibleMaximumLeavesTheSpeedWithoutAPercentage() async {
+        let smc = FakeSMC(values: ["Tp01": 70, "F0Ac": 2400, "F0Mx": 0], types: ["FNum": ("ui8 ", 1)])
+        let snapshot = await fanSnapshot(smc)
+        XCTAssertEqual(snapshot.fans, [ThermalFan(rpm: 2400, maximumRPM: nil)])
+    }
+
+    func testTheMaximumIsReadOnceButTheSpeedEverySample() async {
+        let smc = FakeSMC(values: ["Tp01": 70, "F0Ac": 2400, "F0Mx": 5800], types: ["FNum": ("ui8 ", 1)])
+        let sampler = ThermalSampler(brand: "Apple M1 Pro", makeTransport: { smc })
+        _ = await sampler.sample(now: now)
+        let second = await sampler.sample(now: now.addingTimeInterval(4))
+        XCTAssertEqual(second.fans, [ThermalFan(rpm: 2400, maximumRPM: 5800)])
+        XCTAssertEqual(smc.calls(command: 5, key: "F0Mx"), 1, "The maximum never changes")
+        XCTAssertEqual(smc.calls(command: 5, key: "F0Ac"), 2)
+        XCTAssertEqual(smc.calls(command: 5, key: "FNum"), 1, "The fan count never changes")
+        XCTAssertEqual(smc.calls(command: 9, key: "F0Ac"), 1, "Metadata is cached")
+    }
+
+    func testFansAreReadEvenWhenNoTemperatureSensorIsMapped() async {
+        let smc = FakeSMC(values: ["F0Ac": 1800, "F0Mx": 5000], types: ["FNum": ("ui8 ", 1)], extraKeys: ["FNum"])
+        let snapshot = await fanSnapshot(smc, brand: "Apple M6")
+        XCTAssertEqual(snapshot.sensorCount, 0)
+        XCTAssertNotNil(snapshot.unavailableReason)
+        XCTAssertEqual(snapshot.fans, [ThermalFan(rpm: 1800, maximumRPM: 5000)])
+    }
+
+    func testOlderIntelMacsReportFansAsFixedPointNumbers() async {
+        // fpe2 is unsigned 14.2, big-endian: 0x0960 = 2400 quarter-rpm steps = 600 rpm.
+        let smc = FakeSMC(values: ["TC0D": 60],
+                          types: ["FNum": ("ui8 ", 1), "F0Ac": ("fpe2", 2), "F0Mx": ("fpe2", 2)],
+                          bytes: ["F0Ac": [0x09, 0x60], "F0Mx": [0x1B, 0x58]])
+        let snapshot = await fanSnapshot(smc, brand: "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz")
+        XCTAssertEqual(snapshot.cpuCelsius, 60)
+        XCTAssertEqual(snapshot.fans, [ThermalFan(rpm: 600, maximumRPM: 1750)])
+    }
+
+    func testNumberCodecDecodesTheThreeFanEncodings() {
+        XCTAssertEqual(SMCTemperatureCodec.decodeNumber(type: "fpe2", bytes: [0x09, 0x60]), 600)
+        XCTAssertEqual(SMCTemperatureCodec.decodeNumber(type: "fpe2", bytes: [0x00, 0x01]), 0.25, "Quarter steps survive")
+        XCTAssertEqual(SMCTemperatureCodec.decodeNumber(type: "fpe2", bytes: [0xFF, 0xFF]), 16383.75)
+        XCTAssertEqual(SMCTemperatureCodec.decodeNumber(type: "ui8 ", bytes: [3]), 3)
+        let bits = Float(2400).bitPattern
+        let littleEndian = (0..<4).map { UInt8(truncatingIfNeeded: bits >> ($0 * 8)) }
+        XCTAssertEqual(SMCTemperatureCodec.decodeNumber(type: "flt ", bytes: littleEndian), 2400)
+        XCTAssertNil(SMCTemperatureCodec.decodeNumber(type: "flt ", bytes: [0, 0, 0xC0, 0x7F]), "NaN is not a number")
+        XCTAssertNil(SMCTemperatureCodec.decodeNumber(type: "fpe2", bytes: [0x09]), "Short data")
+        XCTAssertNil(SMCTemperatureCodec.decodeNumber(type: "ui8 ", bytes: [1, 2]))
+        XCTAssertNil(SMCTemperatureCodec.decodeNumber(type: "sp78", bytes: [0x18, 0x00]), "Temperatures keep their own decoder")
+        XCTAssertEqual(SMCTemperatureCodec.decode(type: "sp78", bytes: [0x18, 0x00]), 24)
+    }
+
+    func testFanTextExpiresWithTheTemperatures() async {
+        let smc = FakeSMC(values: ["Tp01": 70, "F0Ac": 0, "F0Mx": 5800], types: ["FNum": ("ui8 ", 1)])
+        let snapshot = await fanSnapshot(smc)
+        XCTAssertEqual(snapshot.fanText(at: now.addingTimeInterval(15)), "Fans idle")
+        XCTAssertNil(snapshot.fanText(at: now.addingTimeInterval(16)), "No stale rpm beside an Unavailable temperature")
+        XCTAssertNil(snapshot.fanText(at: now.addingTimeInterval(-1)), "A reading from the future is not current")
+        XCTAssertEqual(snapshot.temperatureText(snapshot.cpuCelsius, at: now.addingTimeInterval(16)), "Unavailable")
+        XCTAssertNil(ThermalSnapshot.unknown.fanText(at: now))
+    }
+
+    func testFanReadsUseOnlyTheReadCommands() async {
+        let smc = FakeSMC(values: ["Tp01": 70, "F0Ac": 2400, "F0Mx": 5800], types: ["FNum": ("ui8 ", 1)])
+        let sampler = ThermalSampler(brand: "Apple M1 Pro", makeTransport: { smc })
+        _ = await sampler.sample(now: now)
+        _ = await sampler.sample(now: now.addingTimeInterval(4))
+        XCTAssertTrue(smc.commandsSent.isSubset(of: [5, 8, 9]), "\(smc.commandsSent)")
+        XCTAssertGreaterThan(smc.calls(command: 5, key: "F0Ac"), 0)
+    }
+
     func testTransportGuardAllowsOnlyReadCommands() {
         for command: UInt8 in [5, 8, 9] {
             var frame = [UInt8](repeating: 0, count: 80)
@@ -139,19 +286,26 @@ private final class FakeSMC: SMCTransport, @unchecked Sendable {
     private let keys: [String]
     private let values: [String: Float]
     private let types: [String: (String, Int)]
+    /// Raw payloads for keys whose encoding is not a little-endian float.
+    private let bytes: [String: [UInt8]]
     private let reportedKeyCount: Int
     private var log: [(command: UInt8, key: String)] = []
 
-    init(values: [String: Float], types: [String: (String, Int)] = [:], extraKeys: [String] = [],
-         reportedKeyCount: Int? = nil) {
+    init(values: [String: Float], types: [String: (String, Int)] = [:], bytes: [String: [UInt8]] = [:],
+         extraKeys: [String] = [], reportedKeyCount: Int? = nil) {
         self.values = values
         self.types = types
+        self.bytes = bytes
         keys = (values.keys.sorted() + extraKeys)
         self.reportedKeyCount = reportedKeyCount ?? keys.count
     }
 
     func calls(command: UInt8, key: String? = nil) -> Int {
         lock.withLock { log.filter { $0.command == command && (key == nil || $0.key == key) }.count }
+    }
+
+    var commandsSent: Set<UInt8> {
+        lock.withLock { Set(log.map(\.command)) }
     }
 
     func call(_ input: [UInt8]) -> SMCCallResult {
@@ -181,6 +335,8 @@ private final class FakeSMC: SMCTransport, @unchecked Sendable {
             if key == "#KEY" {
                 let count = UInt32(reportedKeyCount)
                 for offset in 0..<4 { output[48 + offset] = UInt8(truncatingIfNeeded: count >> ((3 - offset) * 8)) }
+            } else if let raw = bytes[key] {
+                for (offset, byte) in raw.enumerated() { output[48 + offset] = byte }
             } else if let value = values[key] {
                 SMCTemperatureCodec.put(value.bitPattern, into: &output, at: 48)
             } else if types[key] != nil {
