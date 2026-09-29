@@ -18,6 +18,15 @@ final class PressureAttributionTests: XCTestCase {
         return Fixture.family(root, trend: Fixture.trend(megabytes: megabytes))
     }
 
+    /// A family of `size` MB climbing `rate` MB/min in a steady line: 17
+    /// samples ten seconds apart, enough for the trend to trust it. The
+    /// smallest climb it trusts is about 5 MB/min.
+    private func steadyFamily(pid: Int32, rate: Double, size: Double = 2_048) -> ProcessFamily {
+        let megabytes = (0..<17).map { size + Double($0) * rate * 10 / 60 }
+        let root = Fixture.process(pid: pid, megabytes: megabytes.last ?? size, cpu: 2)
+        return Fixture.family(root, trend: Fixture.trend(megabytes: megabytes, cadence: 10))
+    }
+
     private func enrich(_ family: ProcessFamily, _ context: RadarContext) -> ProcessFamily {
         RadarIntelligence().enrich(family: family, context: context, settings: .smart, now: Fixture.now)
     }
@@ -40,6 +49,69 @@ final class PressureAttributionTests: XCTestCase {
         let bystanderBoost = bystander.score.value - enrich(idle, plain).score.value
         XCTAssertLessThan(bystanderBoost, 2)
         XCTAssertGreaterThan(growing.score.value - enrich(grower, plain).score.value, 10)
+    }
+
+    /// Growth is judged by its share, and the only family growing has all of
+    /// it, however little that is. A trickle is not what starves the Mac, so
+    /// it must not be voted the driver of pressure: that vote keeps a big app
+    /// at its usual size from being held at Watch.
+    func testALoneSlowGrowerIsNotTheDriverOfPressure() throws {
+        let slow = steadyFamily(pid: 740, rate: 12)
+        let idle = family(pid: 741, rate: 0)
+        XCTAssertEqual(slow.trend.credibleMemoryVelocity, 12, accuracy: 3, "a credible climb, only a slow one")
+
+        let warning = pressure(.warning, total: 16 << 30, available: 3 << 30)
+        let shares = PressureAttribution.compute(families: [slow, idle], pressure: warning)
+        let share = try XCTUnwrap(shares[slow.familyKey])
+        XCTAssertEqual(share.growthShare, 1, accuracy: 0.001, "all of the growth there is")
+        XCTAssertFalse(share.corroboratesPressure)
+        XCTAssertFalse(share.text.contains("recent growth"), share.text)
+
+        let context = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: warning)
+            .attributingPressure(to: [slow, idle])
+        XCTAssertEqual(enrich(slow, context).score.heat.corroborationCount, 0, "no vote")
+    }
+
+    /// The boost follows how much the growth is, not only its share of it.
+    func testTheGrowthBoostFollowsHowMuchTheFamilyGrows() throws {
+        let warning = pressure(.warning, total: 16 << 30, available: 3 << 30)
+        func share(of rate: Double) throws -> PressureShare {
+            let grower = steadyFamily(pid: 742, rate: rate, size: 600)
+            let shares = PressureAttribution.compute(families: [grower, family(pid: 743, rate: 0)], pressure: warning)
+            return try XCTUnwrap(shares[grower.familyKey])
+        }
+        let trickle = try share(of: 6)
+        XCTAssertEqual(trickle.growthShare, 1, accuracy: 0.001)
+        XCTAssertLessThan(trickle.boostScale, 0.5, "a trickle earns part of the boost")
+        XCTAssertGreaterThan(trickle.boostScale, 0.1, "but not none of it")
+
+        let steady = try share(of: 60)
+        XCTAssertEqual(steady.boostScale, 1, accuracy: 0.001)
+        XCTAssertTrue(steady.corroboratesPressure)
+        XCTAssertTrue(steady.text.contains("100% of recent growth"), steady.text)
+    }
+
+    /// Material growth is at least 20 MB/min, the same floor as the host
+    /// countdown; a share built without a rate is judged as before.
+    func testGrowthIsMaterialFromTwentyMegabytesAMinute() {
+        func share(_ rate: Double) -> PressureShare {
+            PressureShare(footprintShare: 0.1, growthShare: 1, growthMegabytesPerMinute: rate)
+        }
+        XCTAssertFalse(share(19.9).corroboratesPressure)
+        XCTAssertLessThan(share(19.9).boostScale, 1)
+        XCTAssertEqual(share(10).boostScale, 0.5, accuracy: 0.001)
+        XCTAssertTrue(share(20).corroboratesPressure)
+        XCTAssertEqual(share(20).boostScale, 1, accuracy: 0.001)
+        XCTAssertEqual(share(0).boostScale, 0.4, accuracy: 0.001, "its footprint still counts")
+
+        XCTAssertTrue(PressureShare(footprintShare: 0.1, growthShare: 1).corroboratesPressure)
+        XCTAssertFalse(PressureShare(footprintShare: 0.1, growthShare: 0.29).corroboratesPressure, "and it must be most of the growth")
+        XCTAssertEqual(PressureShare(footprintShare: 0.5, growthShare: 0, growthMegabytesPerMinute: 0).boostScale, 1, "a big holder is not a trickle")
+        XCTAssertEqual(PressureShare.none.boostScale, 0)
+
+        let outlook = PressureAttribution.outlook(families: [steadyFamily(pid: 744, rate: 12), steadyFamily(pid: 745, rate: 12)],
+                                                  pressure: pressure(.warning, total: 16 << 30, available: 3 << 30))
+        XCTAssertNotNil(outlook, "two trickles that add up to 24 MB/min still count down together")
     }
 
     func testHostETAIsHeadroomOverCredibleGrowth() throws {
@@ -134,5 +206,18 @@ final class PressureAttributionTests: XCTestCase {
         let base = FamilyScoringCache.fingerprint(family: family, context: context(footprintShare: 0.20))
         XCTAssertEqual(base, FamilyScoringCache.fingerprint(family: family, context: context(footprintShare: 0.21)))
         XCTAssertNotEqual(base, FamilyScoringCache.fingerprint(family: family, context: context(footprintShare: 0.26)))
+    }
+
+    /// A trickle's boost follows its rate: the same share of the growth at a
+    /// faster rate is scored again.
+    func testScoringCacheRescoresWhenATrickleSpeedsUp() {
+        let family = family(pid: 731, rate: 0)
+        func context(rate: Double) -> RadarContext {
+            RadarContext(baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: pressure(.warning),
+                         pressureShares: [family.familyKey: PressureShare(footprintShare: 0.05, growthShare: 1, growthMegabytesPerMinute: rate)])
+        }
+        let slow = FamilyScoringCache.fingerprint(family: family, context: context(rate: 6))
+        XCTAssertEqual(slow, FamilyScoringCache.fingerprint(family: family, context: context(rate: 6.5)))
+        XCTAssertNotEqual(slow, FamilyScoringCache.fingerprint(family: family, context: context(rate: 10)))
     }
 }

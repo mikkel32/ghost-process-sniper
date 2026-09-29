@@ -6,27 +6,48 @@ public struct PressureShare: Equatable, Sendable {
     public let footprintShare: Double
     /// Share of the credible growth across all families.
     public let growthShare: Double
+    /// The family's own credible growth. A share is relative: the only family
+    /// growing has all of the growth, however little that is.
+    public let growthMegabytesPerMinute: Double
+
+    /// Growth that counts as driving host pressure: below it the family is a
+    /// trickle whatever its share, so it earns a part of the boost and no
+    /// vote. Also the least total growth the host outlook counts.
+    public static let materialGrowthMegabytesPerMinute: Double = 20
 
     public static let none = PressureShare(footprintShare: 0, growthShare: 0)
 
-    public init(footprintShare: Double, growthShare: Double) {
+    /// Without a rate, the growth is taken as material: a share built by hand
+    /// judges as before.
+    public init(footprintShare: Double, growthShare: Double,
+                growthMegabytesPerMinute: Double = PressureShare.materialGrowthMegabytesPerMinute) {
         self.footprintShare = min(1, max(0, footprintShare))
         self.growthShare = min(1, max(0, growthShare))
+        self.growthMegabytesPerMinute = max(0, growthMegabytesPerMinute)
     }
 
     public var contribution: Double { max(footprintShare, growthShare) }
 
+    /// How much of `materialGrowthMegabytesPerMinute` the family's growth is, at most all.
+    private var growthMateriality: Double { min(1, growthMegabytesPerMinute / Self.materialGrowthMegabytesPerMinute) }
+
     /// Scales the host-pressure boost: a family holding a quarter of used
-    /// memory (or of its growth) gets all of it; an idle bystander little.
-    public var boostScale: Double { min(1, contribution / 0.25) }
+    /// memory gets all of it, and so does one with a quarter of the growth,
+    /// once that growth is material (a trickle earns a part in proportion);
+    /// an idle bystander little.
+    public var boostScale: Double {
+        max(min(1, footprintShare / 0.25), min(1, growthShare / 0.25) * growthMateriality)
+    }
 
-    /// Only a family driving the growth is corroborated by host pressure.
-    public var corroboratesPressure: Bool { growthShare >= 0.3 }
+    /// Only a family driving the growth is corroborated by host pressure:
+    /// most of it, and enough of it to matter.
+    public var corroboratesPressure: Bool { growthShare >= 0.3 && growthMateriality >= 1 }
 
-    /// "38% of used memory, 71% of recent growth".
+    /// "38% of used memory, 71% of recent growth". A trickle's growth is not
+    /// worth the claim.
     public var text: String {
         let memory = "\(Int((footprintShare * 100).rounded()))% of used memory"
-        guard growthShare > 0 else { return memory }
+        guard growthShare > 0, growthMateriality >= 1 else { return memory }
         return memory + ", \(Int((growthShare * 100).rounded()))% of recent growth"
     }
 }
@@ -68,7 +89,8 @@ public enum PressureAttribution {
         for (family, familyGrowth) in zip(families, growth) {
             shares[family.familyKey] = PressureShare(
                 footprintShare: used > 0 ? Double(family.totalPhysicalFootprintBytes) / used : 0,
-                growthShare: totalGrowth > 0 ? familyGrowth / totalGrowth : 0
+                growthShare: totalGrowth > 0 ? familyGrowth / totalGrowth : 0,
+                growthMegabytesPerMinute: familyGrowth
             )
         }
         return shares
@@ -78,16 +100,18 @@ public enum PressureAttribution {
     /// its footprint share, and all the growth if it is growing.
     public static func share(for family: ProcessFamily, pressure: SystemMemoryPressure) -> PressureShare {
         let used = Double(pressure.totalBytes - min(pressure.availableBytes, pressure.totalBytes))
-        let growing = credibleGrowth(of: family, physicalMemoryBytes: pressure.totalBytes) > 0
+        let growth = credibleGrowth(of: family, physicalMemoryBytes: pressure.totalBytes)
         return PressureShare(
             footprintShare: used > 0 ? Double(family.totalPhysicalFootprintBytes) / used : 0,
-            growthShare: growing ? 1 : 0
+            growthShare: growth > 0 ? 1 : 0,
+            growthMegabytesPerMinute: growth
         )
     }
 
-    /// Only with at least 20 MB/min of credible growth and pressure already
-    /// elevated; macOS compresses and swaps long before it runs out, so the
-    /// target is critical pressure, not zero free memory.
+    /// Only with at least `PressureShare.materialGrowthMegabytesPerMinute` of
+    /// credible growth and pressure already elevated; macOS compresses and
+    /// swaps long before it runs out, so the target is critical pressure, not
+    /// zero free memory.
     public static func outlook(families: [ProcessFamily], pressure: SystemMemoryPressure) -> HostMemoryOutlook? {
         guard let headroom = headroomMegabytes(pressure), pressure.level >= .elevated else { return nil }
         let growing = families
@@ -95,7 +119,7 @@ public enum PressureAttribution {
             .filter { $0.1 > 0 }
             .sorted { $0.1 > $1.1 }
         let total = growing.reduce(0) { $0 + $1.1 }
-        guard total >= 20 else { return nil }
+        guard total >= PressureShare.materialGrowthMegabytesPerMinute else { return nil }
         return HostMemoryOutlook(
             etaSeconds: headroom / total * 60,
             growthMegabytesPerMinute: total,
