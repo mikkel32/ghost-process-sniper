@@ -54,7 +54,7 @@ private struct PopoverSecurityRow: View {
 
     var body: some View {
         let report = monitor.sentinel
-        let finding = report.findings.first { $0.isRunning && $0.severity >= .suspicious }
+        let finding = report.findings.first { $0.isRunning && $0.severity >= .suspicious } ?? report.latestExitedDangerous
         let item = report.flaggedLaunchItems.first
         if finding != nil || item != nil {
             let severity = finding?.severity ?? item?.severity ?? .suspicious
@@ -69,7 +69,8 @@ private struct PopoverSecurityRow: View {
                         Text(finding?.headline ?? "Startup item: \(item?.label ?? "")")
                             .font(.callout.weight(.semibold))
                             .lineLimit(1)
-                        Text(report.attentionCount > 1 ? "\(report.attentionCount) things need a look" : "Security needs a look")
+                        Text(report.attentionCount > 1 ? "\(report.attentionCount) things need a look"
+                             : finding?.isRunning == false ? "A dangerous command ran and has already exited" : "Security needs a look")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

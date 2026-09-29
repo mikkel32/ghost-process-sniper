@@ -398,6 +398,26 @@ public struct SentinelReport: Sendable {
     public var attentionCount: Int {
         activeFindingCount + flaggedLaunchItems.count
     }
+
+    /// The level the page, the sidebar and the Overview show. `highestSeverity`
+    /// is what is running; a dangerous command that already exited is still
+    /// listed, and reading all-clear beside it would hide the one thing the
+    /// spawn watcher exists to catch.
+    public var displaySeverity: SentinelSeverity? {
+        exitedDangerousCount > 0 ? max(highestSeverity ?? .info, .dangerous) : highestSeverity
+    }
+
+    /// The newest dangerous command that has already exited.
+    public var latestExitedDangerous: SentinelFinding? {
+        findings.first { !$0.isRunning && $0.severity == .dangerous }
+    }
+
+    /// The sidebar's line when something needs a look, else nil.
+    public var attentionLine: String? {
+        if attentionCount > 0 { return attentionCount == 1 ? "1 process needs a look" : "\(attentionCount) processes need a look" }
+        let exited = exitedDangerousCount
+        return exited == 0 ? nil : exited == 1 ? "A dangerous command ran" : "\(exited) dangerous commands ran"
+    }
 }
 
 extension SentinelReport: Equatable {

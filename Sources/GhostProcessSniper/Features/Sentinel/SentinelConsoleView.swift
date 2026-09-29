@@ -139,7 +139,7 @@ struct SentinelHero: View {
     let report: SentinelReport
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var severity: SentinelSeverity? { report.highestSeverity }
+    private var severity: SentinelSeverity? { report.displaySeverity }
     private var tint: Color { severity.map(SentinelStyle.color(for:)) ?? .green }
 
     private var title: String {
@@ -332,15 +332,13 @@ struct SidebarSecurityDestination: View {
 
     var body: some View {
         let report = session.monitor.sentinel
-        let severity = report.highestSeverity
-        let active = report.attentionCount
+        let severity = report.displaySeverity
         let isSelected = session.state.focusedSelection == .security
         Button { session.focus(.security) } label: {
             SidebarDestinationRow(
                 title: "Security",
-                subtitle: active > 0
-                    ? (active == 1 ? "1 process needs a look" : "\(active) processes need a look")
-                    : (report.watchedAppNames.isEmpty ? "Watching every new process" : "Watching \(report.watchedAppNames.count) apps live"),
+                subtitle: report.attentionLine
+                    ?? (report.watchedAppNames.isEmpty ? "Watching every new process" : "Watching \(report.watchedAppNames.count) apps live"),
                 systemImage: (severity ?? .info) >= .suspicious ? "exclamationmark.shield.fill" : "checkmark.shield",
                 color: (severity ?? .info) >= .suspicious ? SentinelStyle.color(for: severity ?? .info) : RadarTheme.brand,
                 isSelected: isSelected
@@ -364,7 +362,39 @@ struct SentinelOverviewBanner: View {
         let report = session.monitor.sentinel
         let live = report.findings.filter { $0.isRunning && $0.severity >= .suspicious }
         ZStack {
-            if let top = live.first {
+            if live.isEmpty, let gone = report.latestExitedDangerous {
+                // Over already, but it ran: the page below says what it did.
+                let tint = SentinelStyle.color(for: .dangerous)
+                Button { session.focus(.security) } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.shield.fill")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(tint.gradient)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("SECURITY · A DANGEROUS COMMAND RAN")
+                                .font(.system(size: 9, weight: .black))
+                                .tracking(1.1)
+                                .foregroundStyle(tint)
+                            Text(gone.headline)
+                                .font(.headline)
+                                .lineLimit(1)
+                            Text("It had already exited when Ghost caught it. Review what it did.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        Text("Review")
+                            .font(.callout.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(tint.opacity(0.16), in: Capsule())
+                    }
+                    .padding(14)
+                    .radarSurface(tint: tint, cornerRadius: 16)
+                }
+                .buttonStyle(RadarCardButtonStyle(tint: tint))
+            } else if let top = live.first {
                 let tint = SentinelStyle.color(for: top.severity)
                 Button { session.focus(.security) } label: {
                     HStack(spacing: 12) {
