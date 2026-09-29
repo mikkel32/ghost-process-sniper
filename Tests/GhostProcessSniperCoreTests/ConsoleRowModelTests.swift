@@ -87,6 +87,25 @@ final class ConsoleRowModelTests: XCTestCase {
         XCTAssertNil(rows.first { $0.familyName == "gone" }?.liveFamilyKey)
     }
 
+    func testIncidentGrowthIsNeverNegativeOrZeroMegabytes() {
+        // Rows written before peaks were tracked can hold a raw, negative slope.
+        XCTAssertEqual(IncidentRowViewModel(incident: incident("shrinking", memory: 1, seenAt: 1, leak: -170)).leakText, "none")
+        XCTAssertEqual(IncidentRowViewModel(incident: incident("flat", memory: 1, seenAt: 1, leak: 0.4)).leakText, "none")
+        XCTAssertEqual(IncidentRowViewModel(incident: incident("climbing", memory: 1, seenAt: 1, leak: 247.4)).leakText, "247 MB/min")
+    }
+
+    func testIncidentDurationHasNoDecimalSeparator() {
+        func duration(_ seconds: TimeInterval) -> String {
+            var episode = incident("episode", memory: 1, seenAt: 0)
+            episode.lastSeenAt = episode.startedAt.addingTimeInterval(seconds)
+            return IncidentRowViewModel(incident: episode).durationText
+        }
+        XCTAssertEqual(duration(45), "45 s")
+        XCTAssertEqual(duration(12 * 60), "12 min")
+        XCTAssertEqual(duration(96_840), "27 h", "26.9 hours must not need a decimal point that the reader's locale spells differently")
+        XCTAssertEqual(duration(2 * 3_600 + 5 * 60), "2 h 5 min")
+    }
+
     func testRevealSelectsTheOutermostAppBundle() {
         XCTAssertEqual(FinderReveal.path(forExecutable: "/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper"),
                        "/Applications/Visual Studio Code.app")
@@ -94,11 +113,12 @@ final class ConsoleRowModelTests: XCTestCase {
         XCTAssertNil(FinderReveal.path(forExecutable: ""))
     }
 
-    private func incident(_ name: String, memory: UInt64, seenAt: TimeInterval, signature: ProcessSignature? = nil) -> RadarIncident {
+    private func incident(_ name: String, memory: UInt64, seenAt: TimeInterval, signature: ProcessSignature? = nil,
+                          leak: Double = 0) -> RadarIncident {
         RadarIncident(
             signature: signature ?? ProcessSignature(displayName: name, canonicalPath: "/bin/\(name)", commandLine: name),
             familyName: name, level: .hot, maxScore: Double(memory), memoryBytes: memory, cpuPercent: 0,
-            leakVelocityMegabytesPerMinute: 0, reasons: [], startedAt: now, lastSeenAt: now.addingTimeInterval(seenAt)
+            leakVelocityMegabytesPerMinute: leak, reasons: [], startedAt: now, lastSeenAt: now.addingTimeInterval(seenAt)
         )
     }
 }

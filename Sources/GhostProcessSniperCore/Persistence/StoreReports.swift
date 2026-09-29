@@ -11,7 +11,7 @@ extension RadarStore {
         var lines = ["Ghost Process Sniper Incident Report", "Generated \(Date().formatted())", ""]
         for incident in incidents {
             lines.append("\(incident.familyName) - \(incident.level.label) - score \(Int(incident.maxScore.rounded()))")
-            lines.append("  memory: \(ByteCountFormatter.memoryString(incident.memoryBytes)), cpu: \(Int(incident.cpuPercent.rounded()))%, leak: \(Int(incident.leakVelocityMegabytesPerMinute.rounded())) MB/min")
+            lines.append("  peak memory: \(ByteCountFormatter.memoryString(incident.memoryBytes)), peak cpu: \(RadarFormat.percent(incident.cpuPercent)), peak growth: \(IncidentRowViewModel.growthText(incident.leakVelocityMegabytesPerMinute))")
             lines.append("  first: \(incident.startedAt.formatted()), last: \(incident.lastSeenAt.formatted()), hits: \(incident.occurrenceCount)")
             let reasons = incident.reasons.joined(separator: ", ")
             lines.append("  why: \(reasons)")

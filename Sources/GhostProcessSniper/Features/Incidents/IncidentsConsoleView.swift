@@ -110,7 +110,7 @@ struct IncidentsConsoleView: View {
                             .background(Color.green.opacity(0.12), in: Capsule())
                     }
                 }
-                .help("\(row.leakText)\n\(row.timeRangeText)")
+                .help("Peak growth: \(row.leakText)\n\(row.timeRangeText)")
             }
             .width(min: 160, ideal: 220)
 
@@ -207,16 +207,17 @@ struct IncidentsConsoleView: View {
                         }
                         HStack(spacing: 8) {
                             RadarChip(title: "Score", value: "\(Int(incident.maxScore.rounded()))", systemImage: "gauge.with.dots.needle.67percent", level: incident.level)
-                            RadarChip(title: "Duration", value: incidentDuration(incident), systemImage: "clock")
+                            RadarChip(title: "Duration", value: row.durationText, systemImage: "clock")
                         }
                         FlowTags(title: "Why", items: incident.reasons)
                     }
 
-                    RadarSection(title: "Metrics") {
+                    // Every value is the episode's highest, not the last sample.
+                    RadarSection(title: "Metrics", subtitle: "Peak values") {
                         HStack(spacing: 8) {
-                            RadarChip(title: "Memory", value: RadarFormat.bytes(incident.memoryBytes), systemImage: "memorychip", level: incident.level)
-                            RadarChip(title: "CPU", value: "\(Int(incident.cpuPercent.rounded()))%", systemImage: "cpu", level: incident.level)
-                            RadarChip(title: "Leak", value: "\(Int(incident.leakVelocityMegabytesPerMinute.rounded())) MB/min", systemImage: "chart.line.uptrend.xyaxis", level: incident.leakVelocityMegabytesPerMinute > 0 ? .watch : .quiet)
+                            RadarChip(title: "Memory", value: row.memoryText, systemImage: "memorychip", level: incident.level)
+                            RadarChip(title: "CPU", value: row.cpuText, systemImage: "cpu", level: incident.level)
+                            RadarChip(title: "Growth", value: row.leakText, systemImage: "chart.line.uptrend.xyaxis", level: IncidentRowViewModel.hasGrowth(incident.leakVelocityMegabytesPerMinute) ? .watch : .quiet)
                         }
                     }
 
@@ -238,18 +239,6 @@ struct IncidentsConsoleView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    private func incidentDuration(_ incident: RadarIncident) -> String {
-        let end = incident.resolvedAt ?? incident.lastSeenAt
-        let seconds = max(0, end.timeIntervalSince(incident.startedAt))
-        if seconds < 60 {
-            return "\(Int(seconds.rounded()))s"
-        }
-        if seconds < 3_600 {
-            return "\(Int((seconds / 60).rounded()))m"
-        }
-        return String(format: "%.1fh", seconds / 3_600)
     }
 
     private func detailLine(_ title: String, _ value: String) -> some View {
@@ -277,8 +266,9 @@ struct IncidentsConsoleView: View {
             "Family: \(incident.familyName)",
             "State: \(incident.resolvedAt == nil ? "Active" : "Resolved")",
             "Score: \(Int(incident.maxScore.rounded()))",
-            "Memory: \(RadarFormat.bytes(incident.memoryBytes))",
-            "CPU: \(RadarFormat.percent(incident.cpuPercent))",
+            "Peak memory: \(RadarFormat.bytes(incident.memoryBytes))",
+            "Peak CPU: \(RadarFormat.percent(incident.cpuPercent))",
+            "Peak growth: \(IncidentRowViewModel.growthText(incident.leakVelocityMegabytesPerMinute))",
             "Reasons: \(incident.reasons.joined(separator: ", "))"
         ].joined(separator: "\n")
     }

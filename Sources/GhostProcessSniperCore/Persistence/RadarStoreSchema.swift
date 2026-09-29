@@ -456,28 +456,30 @@ enum RadarStoreQueries {
     static let refreshIncident = """
         UPDATE incidents
         SET level = ?, max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
-            cpu_percent = ?, leak_velocity = ?, last_seen_at = ?
+            cpu_percent = MAX(cpu_percent, ?), leak_velocity = MAX(leak_velocity, ?), last_seen_at = ?
         WHERE id = ?
         """
 
     static let escalateIncident = """
         UPDATE incidents
         SET level = ?, max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
-            cpu_percent = ?, leak_velocity = ?, last_seen_at = ?, reasons_json = ?
+            cpu_percent = MAX(cpu_percent, ?), leak_velocity = MAX(leak_velocity, ?), last_seen_at = ?, reasons_json = ?
         WHERE id = ?
         """
 
     static let reopenIncident = """
         UPDATE incidents
         SET resolved_at = NULL, occurrence_count = occurrence_count + 1, last_seen_at = ?, level = ?,
-            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?), cpu_percent = ?, leak_velocity = ?
+            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
+            cpu_percent = MAX(cpu_percent, ?), leak_velocity = MAX(leak_velocity, ?)
         WHERE id = ?
         """
 
     static let closeIncident = """
         UPDATE incidents
         SET resolved_at = ?, last_seen_at = MAX(last_seen_at, ?),
-            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?)
+            max_score = MAX(max_score, ?), memory_bytes = MAX(memory_bytes, ?),
+            cpu_percent = MAX(cpu_percent, ?), leak_velocity = MAX(leak_velocity, ?)
         WHERE id = ?
         """
 
