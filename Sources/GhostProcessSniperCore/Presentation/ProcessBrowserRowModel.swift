@@ -33,8 +33,13 @@ public struct ProcessBrowserRowModel: Identifiable, Equatable, Sendable {
         familyKey = row.familyKey
         identity = row.familyID
         name = row.displayName
-        nameHighlights = match?.nameHighlights ?? []
-        detail = match?.reason ?? row.assessment.cause
+        // The search measured the root's process name. Where the row shows a
+        // title instead (a simulator), its highlights would land on the wrong
+        // letters: leave them off and say what matched.
+        let namedByProcess = row.displayName == row.signature.displayName
+        let nameMatched = match?.nameHighlights.isEmpty == false
+        nameHighlights = namedByProcess ? match?.nameHighlights ?? [] : []
+        detail = match?.reason ?? (nameMatched && !namedByProcess ? "Process: \(row.signature.displayName)" : row.assessment.cause)
         memoryBytes = row.memoryBytes
         memoryText = row.memoryText
         cpuPercent = row.cpuPercent
