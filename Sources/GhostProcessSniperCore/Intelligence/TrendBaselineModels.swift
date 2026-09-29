@@ -90,9 +90,12 @@ public struct TrendMetrics: Equatable, Sendable {
 }
 
 public struct FamilyBaseline: Codable, Equatable, Sendable {
+    /// Version 3: a family also holds the launchd-started helpers macOS reports
+    /// for its app (Safari's tabs, an IDE's XPC services), so its size means
+    /// more than in version 2, which learned it without them.
     /// Version 2: a time-constant EWMA with variance and observed time.
     /// Older rows learned per refresh and are relearned.
-    public static let currentMeasurementVersion = 2
+    public static let currentMeasurementVersion = 3
 
     public let signature: ProcessSignature
     public var sampleCount: Int
