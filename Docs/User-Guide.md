@@ -6,21 +6,23 @@ Ghost Process Sniper lives in the menu bar and keeps watching while its console 
 
 The menu-bar icon is a small scope. Its shape carries the state as well as its color, so it reads under color filters too: a plain ring when quiet (it follows the menu bar's appearance), a filled orange center at Watch, a red scope with heavier crosshairs at Hot, and a solid glowing red disc at Critical.
 
-Click it for the popover. It leads with one verdict, then up to three culprits with their cause and numbers — or up to two early warnings, or a quiet line once the first scan is done — followed by CPU and GPU temperature and memory pressure. Culprit rows carry a [Quick Stop](#quick-stop) button; every row's context menu can show it in the console, snooze it or ignore it. An orange row appears only when history cannot be saved.
+Click it for the popover. It leads with one verdict, then up to three culprits with their cause and numbers — or up to two early warnings, or a quiet line once the first scan is done — followed by CPU and GPU temperature (with a *Throttling* or *Critical heat* line while macOS reports serious or critical thermal pressure) and memory pressure. Culprit rows carry a [Quick Stop](#quick-stop) button; every row's context menu can show it in the console, snooze it or ignore it. An orange row appears only when history cannot be saved.
 
-Right-click (or Control-click) the icon for a menu: the current status, Quick Stops for up to three culprits, **Open Console**, **Refresh Radar**, **Copy Diagnostics**, **Settings…** and **Quit**.
+Right-click (or Control-click) the icon for a menu: a one-line status ("4 to review - Leak 12m - 1 leak", or "History not saved" when the store has a problem), Quick Stops for up to three culprits, **Open Console**, **Refresh Radar**, **Copy Diagnostics**, **Settings…** and **Quit**.
 
 **Open Dashboard** in the popover opens the console, and so does opening **Ghost Process Sniper** from Applications again — a second launch brings the existing console forward instead of starting a new copy. Closing the window leaves the monitor running, and the console reopens where you left it. Quit from the popover's **More** menu or the status menu.
 
+The very first time Ghost is opened it shows the console with a short welcome: where it lives (the menu bar, and closing the window keeps it running), an **Allow** button for notifications, an **Open at login** switch and a tour. It is offered once and never again, and never to anyone who already has a Ghost store; both choices stay available in Settings (Alerts and System). Open at login is offered in the welcome only when Ghost runs from an Applications folder.
+
 ## Overview
 
-The **Overview** leads with one verdict: what, if anything, needs doing. Its headline is the recommendation itself — or "Your Mac is running smoothly" — with the detail, a confidence note and **Why this recommendation** for the evidence. Its buttons open the family behind it and, when a stop fits, offer its Quick Stop; **Scan now** takes a fresh sample.
+The **Overview** leads with one verdict: what, if anything, needs doing. Its headline is the recommendation itself — or "Your Mac is running smoothly" — with the detail, a confidence note and **Why this recommendation** for the evidence. Its buttons say where they go (**Review app**, **Review database**, **Review containers**, **Review family**) and, when a stop fits, the Quick Stop stands beside them; **Scan now** takes a fresh sample. A big app at its usual size is not an early warning: with no Hot family and nothing but size against the watched ones, the verdict stays calm and says how many families are watched for size only.
 
 Below it:
 
-- **Risk Queue** and **Warming Up**: families that need attention now, and early warnings. Risk rows show their Quick Stop on hover or keyboard focus; warming rows offer it only in the context menu, because an early warning is not yet a reason to stop.
+- **Risk Queue** and **Warming Up**: families that need attention now, and early warnings, each row saying *why* ("Over its memory limit", "1.7x its usual size", "2 copies running", "Memory is tight on this Mac"). Risk rows show their Quick Stop on hover or keyboard focus; warming rows offer it only in the context menu, because an early warning is not yet a reason to stop. Warming Up lists families with an early sign first, then those merely watched for size. The Risk Queue shows its full count, with **Show all N** when rows are hidden; when both lists are empty, one slim all-clear strip replaces them (the cards return at once when a row appears, and give way again after 30 seconds of calm).
 - **Where your resources go**: the Live Radar, memory share, the memory pulse and recent incidents.
-- **Summary cards**: **Families** opens every family, **Needs review** the ones that need attention, **Leaks** the credible leaks, **Duplicates** the overlap review, and **Memory** the processes ordered by footprint.
+- **Summary cards**: **Families** opens every family, **Needs review** the Hot ones and credible escalations (the **Review** filter), **Leaks** every credible leak, **Duplicates** the overlap review, and **Memory** the processes ordered by footprint.
 - **Heat & CPU activity**: temperatures and the work behind them (see [Temperatures](#temperatures)). It moves up to second place, under the verdict, only while macOS reports serious throttling or the hottest sensor has stayed at 90 °C or more for 30 seconds, and moves back after a calm minute.
 
 ### Reading the Live Radar
@@ -31,7 +33,8 @@ Below it:
 - **A dotted streak is where it was five minutes ago.** A streak from further out with an arrowhead toward the center means it is getting worse; an arrowhead pointing out means it is easing off. Drifting inside the Quiet ring does not count.
 - **Names**: everything at Watch or above, and anything getting worse, is named on the scope, in the margin with a line when there is no room beside it. The biggest quiet families are named while there is room.
 - **Contacts** beside the scope lists the same families worst first. Point at a row or a blip to light the other and see why it is there; click either to open the family, right-click to snooze, ignore or stop it.
-- **Contacts** say why a family is there ("Memory footprint · 2.7 GB") when it is at Watch or above, and its size and quarter otherwise.
+- **Contacts** say why a family is there ("Over its memory limit · 2.7 GB", "1.7x its usual size · 4.4 GB") when it is at Watch or above, and its size and quarter otherwise.
+- **The trail** compares with where a family was five minutes ago (one mark every 10 seconds), so the arrowhead and the streak mean the same as the contact's "closing in".
 - **The sweep** lights each blip as it passes. In Low Power Mode it steps at 10 frames a second; it rests with Reduce Motion and while the window is covered or Ghost is in the background. The blips move with every scan either way.
 
 The levels **Stable**, **Observe**, **Review**, **Urgent** and **Measuring** summarize how much attention a family needs. A Hot or Critical level is held until the family has read lower for 20 seconds and then steps down one level at a time, so a family hovering around a threshold does not flicker.
@@ -40,11 +43,14 @@ The levels **Stable**, **Observe**, **Review**, **Urgent** and **Measuring** sum
 
 **All Processes** is a table of every family in the current query, plus every other running process that matches a search. **Name**, **Memory**, **CPU** and **Status** sort both ways, and the toolbar's Sort menu stays in step with the headers. Rows multi-select and move with the arrow keys; **Return** or a double-click opens a family, and **Delete** previews a stop for the selected row. The context menu offers **Stop…** (disabled, with the reason, for another user's or a system process), **Show Details**, **Snooze**, **Ignore**, **Copy PID**, **Copy Command Line** and **Reveal in Finder**.
 
+The filters are **All**, **Review**, **Attention**, **Leaks**, **Can stop** and **Quiet**. A row's second line is "9 processes · 1.7x its usual size": how many processes the family groups, then why it has its status. Helpers macOS starts for an app (Safari's tabs, GPU and network processes, an IDE's XPC services) belong to that app's family, so Safari is one row with its true total, and searching for a helper's name finds the app.
+
 ### Searching
 
 Press **⌘F** anywhere in the console and start typing; results open on this page. Search covers every running process, not only the families the radar tracks:
 
-- **Words** match in any order, ignoring case and accents, across process names, helper names, command lines, and executable paths. A row that matched through a helper or its command says so underneath its name.
+- **Words** match in any order, ignoring case and accents, across process names, helper names, command lines, and executable paths. A row that matched through a helper or its command says so underneath its name. A word with dashes such as `--inspect` or `--type=renderer` finds command-line flags; `-word` and `!word` still exclude.
+- **Filters** read numbers the way the app prints them: `mem>1,5gb`, `mem>1.5 GB`, `watts>0,5`, `writes>5 MB/s` and `leak>2 MB/min` all work, with a decimal comma or point.
 - **Numbers** match a PID or a listening port as well as text, so `5173` finds the dev server serving that port.
 - **Ports** are found even for a quiet server: a `port:` search has the listening ports of your processes read on the next scan.
 - **Tracked families come first**, then processes outside the current watch scope. Those show memory, CPU and PID, and can be stopped through the same preview as any family.
@@ -73,18 +79,18 @@ A *family* groups related processes — an app and its helpers, or a dev server 
 
 A family page leads with the engine's judgement:
 
-- **The verdict** — for example "Likely leak", "Leaking under GC", "Running away", "Probably forgotten" or "Using a lot of memory now" — with its detail and a confidence capsule (low, medium or high, from how fresh the measurements are, how long the family has been watched and how clean its trend is).
+- **The verdict** — for example "Likely leak", "Leaking under GC", "Running away", "Probably forgotten" "Using a lot of memory now", "Bigger than usual for it" or "Memory is tight on this Mac" — with its detail and a confidence capsule (low, medium or high, from how fresh the measurements are, how long the family has been watched and how clean its trend is).
 - **One recommendation** and the top evidence behind it. When one helper accounts for most of a family's growth, it is named.
 - **The most serious consequence of stopping it**, such as unsaved documents or database writes, before any preview opens, and what a stop would give back.
 - **The action that fits**: the stop button (**Quit <App>…**, **Stop Process…** or **Stop Tree…**); **Stop <supervisor> Instead…** when pm2, forever or supervisord would restart the family; or **Unsnooze** / **Stop Ignoring** for a muted family. **Snooze** and **Ignore** sit beside it.
 
 The stop button shows a spinner while its preview is prepared. It is disabled, with the reason shown, when the family can never be stopped: Ghost Process Sniper itself, the terminal or app it runs inside, `loginwindow`, `WindowServer`, `launchd`, or a process macOS marks as a system process.
 
-The tabs are **Overview** (the verdict, the memory trend, and chips for memory, CPU, growth and "vs normal"), **Evidence** (why it was flagged, the culprit and the forecast), **Processes** (every member in a tree, with **Stop This Process…**, **Copy PID**, **Copy Command Line** and **Reveal in Finder** per row) and **Details** (the command line and forensics such as the working directory, open files and ports). The inspector (**⌥⌘I**) keeps forensics and the first processes of the tree beside the page.
+The tabs are **Overview** (the verdict, the memory trend, and chips for memory, CPU, growth and "vs normal"), **Evidence** (why it was flagged, the culprit and the forecast), **Processes** (every member in a tree, with a **Growth** column and an orange *leaking* tag on the process holding most of a credible leak, so the helper named in "Stop only <helper>" can be found among same-named helpers, and **Stop This Process…**, **Copy PID**, **Copy Command Line** and **Reveal in Finder** per row) and **Details** (the command line and forensics such as the working directory, open files and ports). The inspector (**⌥⌘I**) keeps forensics and the first processes of the tree beside the page.
 
 "Probably forgotten" lists only facts that hold: a job that outlived the terminal it was started from, or whose launcher exited; no CPU use for 30 minutes or more; running for hours; a working directory that was deleted; a port still held while idle. Apps and launchd services stay unlikely unless their working directory is gone — launchd is every app's parent, which says nothing about being forgotten.
 
-After a family is stopped, its page says what was stopped and what was freed instead of a generic "no longer running", and offers to stop the supervisor if one restarted it.
+After a family is stopped, its page says what was stopped and what was freed instead of a generic "no longer running", and offers to stop the supervisor if one restarted it. Only what is really gone counts as stopped: a family leaves the scan the moment its root exits, so workers that ignored the request stay listed as still running and are not counted as freed.
 
 ## Quick Stop
 
@@ -115,7 +121,7 @@ Confirm needs **⌘↩**. Return alone never stops anything.
 
 | Workload | First step | First wait | Force |
 | --- | --- | --- | --- |
-| Apps and document editors (Xcode, Pages, VS Code…) | Asked to quit like **⌘Q**, so they can save and close their own helpers; leftover helpers then get `SIGTERM` | 8 s (10 s for editors) | Only if you allow it |
+| Apps and document editors (Xcode, Pages, VS Code…) | Asked to quit like **⌘Q**, so they can save and close their own helpers. While the app is still answering (a save prompt, "Leave site?") its helpers are left alone; only what the app left behind once it has exited gets `SIGTERM` | 8 s (10 s for editors) | Only if you allow it |
 | Databases (Postgres, MySQL, Redis, Mongo, Elasticsearch…) | The main process alone is asked to shut down (Postgres gets `SIGINT`, its fast shutdown) so it stops its own workers in order; leftovers get `SIGTERM` | 12 s | Only if you allow it |
 | Container runtimes (Docker, OrbStack, Colima…) | `SIGTERM`; every container stops | 15 s | Only if you allow it |
 | git mid-operation, package installs | `SIGTERM`; warns about `.git/index.lock` or half-installed dependencies | 5 s / 4 s | Only if you allow it |
@@ -135,7 +141,7 @@ While the stop runs, each process's row updates in place. A wait of two seconds 
 - **Stop Waiting** ends the wait now and reports what is still running. Nothing is forced.
 - **Skip Force** lets the polite steps finish, then reports anything still running instead of forcing it.
 
-When survivors were held back, the result offers **Force Stop N Processes**, which sends `SIGKILL` to exactly those processes and repeats nothing polite. It is available for a minute after the result; after that, open a new preview.
+When survivors were held back, the result offers **Force Stop N Processes**, which sends `SIGKILL` to exactly those processes and repeats nothing polite (for an app that stayed open, that includes its helpers). It is available for a minute after the result; after that, open a new preview. **Check Again** takes one targets-only look at what the result lists as running (never a signal), and the sheet does it once by itself when you return to Ghost: an app that has quit after you answered its save prompt turns the result into "Stopped Pages…", the Force button goes, and closing the sheet gives the usual confirmation.
 
 ### launchd services and Homebrew
 
@@ -153,6 +159,7 @@ After a stop where a supervisor restarts on exit, Ghost looks for a restart for 
 
 The result leads with what happened, by name — "Stopped vite and 3 helpers in 1.2 s. Freed 480 MB.", "Pages is still open; it may be showing a save prompt.", "Stopped postgres, but launchd started it again" — and one next step when something is left. Below it:
 
+- **Left running**: a stop of a single process (**Stop only <helper>**, **Stop This Process…**, a port holder) says beforehand which children it leaves behind ("3 child processes are not stopped"), lists them as rows in the sheet, checks them again for a moment after the stop, and lists the ones still running with **Stop It Too**. They are a note for one helper and a caution when the process is its family's root; nothing is stopped implicitly.
 - **Ports**: each port the workload listened on is checked. It is **free**, **held by** a named process that escaped the stop (with **Stop It Too** when the radar knows that process), or **likely free** when not every likely holder could be checked.
 - **Outcome by process**: every process's fate, problems first.
 - Notes on what the stop left: processes kept running or orphaned, a launchd service that stays off until the next login, a process stuck finishing its exit in the kernel, or a fork storm Ghost had to freeze.
@@ -160,6 +167,7 @@ The result leads with what happened, by name — "Stopped vite and 3 helpers in 
 
 ### Special cases
 
+- **Helpers and services.** Stopping an app helper says what it is ("Part of Slack: the window or tab this process draws may go blank or need a reload"). A macOS XPC service such as Safari's WebContent is not called a launchd-kept process or an orphan, and a reloaded tab is not reported as "launchd started it again". Stopping a simulated device's `launchd_sim` says the device stops abruptly and gives the exact `xcrun simctl shutdown <UDID>` (or Simulator's Device › Shut Down), and waits six seconds before force.
 - **Paused jobs.** A job stopped with Ctrl-Z cannot act on a polite signal until it runs again, so Ghost resumes it right after asking it to stop, and resumes a paused app before asking it to quit. The preview notes it.
 - **Debugger attached.** A polite stop only pauses a debugged process in the debugger. The preview says so, the wait does not wait for it, and only force or the debugger itself ends it.
 - **Zombies.** A process that has exited but not been collected by its parent is never signalled; no signal can do more. The preview names the parent that still has to collect it, and stopping that parent clears it.
@@ -169,28 +177,28 @@ The result leads with what happened, by name — "Stopped vite and 3 helpers in 
 
 ## Security
 
-**Security** (⌘3) answers "is anything on this Mac acting like an attack?" The shield at the top shows the worst live finding. The subtitle names the apps Sentinel is watching live and how many processes started in the last minute.
+**Security** (⌘3) answers "is anything on this Mac acting like an attack?" The shield at the top shows the worst live finding, and stays red while a dangerous command that has already exited is listed. The subtitle names the apps Sentinel is watching live and how many processes started in the last minute.
 
 - **Microphone and Camera** show whether each is in use. macOS names the apps recording audio; for cameras it only says one is on.
 - **Findings** are running (or recently exited) processes with evidence: the chain that launched them (`Google Chrome › zsh › curl`), each matched pattern with the exact text, the command line, the signature, and the page it was downloaded from. **Stop…** opens the usual stop preview. **Reveal** shows the program in Finder. **Copy Details** copies a plain-text report. **More › Trust** says exactly what it trusts — an app's signer ("Trust Slack (Team BQR82RBBHL)"), one exact build, or, for a shell or tool, one script or command — and **Dismiss** hides only this finding. A trusted program that changes is flagged again, and the **Trusted** list at the bottom of the page has **Revoke**. A dangerous finding pulses once when it appears.
 - **Starts automatically** lists launch agents and daemons, flagged and new ones first. A new one is caught the moment it is written and announced with a notification. Expand a row for its command, signature and **Reveal Plist**. Moving the plist to the Trash and logging out stops it.
 - **Launch feed** shows every new process, newest first, with what started it. **Flagged** shows findings only, **Commands** hides app launches, and **Everything** shows all. A bolt marks processes caught live by the spawn watcher, including ones that ran for under a second. Click a row for the full command.
 
-While a suspicious or dangerous process runs, a banner sits above the Overview, the menu-bar icon rises to hot or critical, and one notification is sent. [Sentinel](Sentinel.md) explains every pattern and its limits.
+While a suspicious or dangerous process runs, a banner sits above the Overview, the menu-bar icon rises to hot or critical, and one notification is sent. A dangerous one-shot command (a pasted `curl … | sh` is over in a second) alerts once even though it has already exited, and the page, the sidebar row, the Overview banner and the popover say "A dangerous command ran and has already exited" for 30 minutes or until you dismiss it. **Settings › Alerts** can limit Security to Dangerous only; a dangerous finding always notifies. [Sentinel](Sentinel.md) explains every pattern and its limits.
 
 ## Energy
 
-**Energy** (⌘4) answers "what is draining my battery, and what is keeping my Mac awake?" The card at the top shows the battery (or the charger), the whole Mac's draw, how much of it apps and jobs account for, and the last hour as a sparkline. Battery health and cycle count sit underneath.
+**Energy** (⌘4) answers "what is draining my battery, and what is keeping my Mac awake?" The card at the top says **Charging**, **Plugged in, not charging** or **Draining while plugged in** (from which way current really flows through the battery), shows the charger's rating, the whole Mac's draw, how much of it apps and jobs account for when that can be true, and the last hour as a sparkline. Battery health and cycle count sit underneath.
 
 - **Worth a look** appears when something deserves attention: an idle app holding the Mac awake for half an hour or more, an app waking the processor 150 times a second or more while doing almost nothing (the limit macOS itself enforces), a job writing to disk without a break, or, on battery, an app costing twenty minutes of battery or more. Each finding says what to do, with **Open Family** and **Stop…**.
-- **Using energy now** ranks apps and jobs by their average over the last five minutes, with wake-ups and disk writes per second. On battery, the green figure is how much longer the battery would last if that app stopped. Click a row to open its family; right-click for **Stop…** or **Show in Finder**. Apps that used energy and exited in the last hour are listed underneath.
+- **Using energy now** ranks apps and jobs by their average over the last five minutes, with wake-ups and disk writes per second. On battery, the green figure is how much longer the battery would last if that app stopped. The wake-ups and writes figures turn orange only when a finding would show. Click a row to open its family; right-click for **Stop…** or **Show in Finder**. Apps that used energy and exited in the last hour are listed underneath.
 - **Keeping your Mac awake** lists everything holding back sleep and for how long. When macOS holds it on an app's behalf — coreaudiod keeping the speakers open for a Safari tab — the app gets the blame and the holder is named. Keep-awake apps such as Amphetamine are marked, and macOS's own services are folded away.
 
 A family's page shows the same figures for that family: energy, wake-ups, disk writes and whether it keeps the Mac awake. Search understands `watts>2`, `wakeups>150` and `writes>5mb` (per second). The [Energy notes](Energy.md) explain every measurement and threshold.
 
 ## Duplicates
 
-**Duplicates** lists work running more than once. A *copy* is an independently started instance — from a shell or by launchd; the workers one tool starts are a pool, not duplicates. Interpreted scripts are compared by what they run, so `node vite` and `node tsserver` are not copies of each other.
+**Duplicates** lists work running more than once. A *copy* is an independently started instance — from a shell or by launchd; the workers one tool starts are a pool, not duplicates. Interpreted scripts are compared by what they run, so `node vite` and `node tsserver` are not copies of each other, and booted simulators are never copies of each other. A cluster is listed only when it adds up: at least 32 MB or 5% CPU in all, four or more copies, or a copy to stop that serves a port. Independent copies raise their families only when stopping the extras would give back at least 32 MB (or a copy listens on a port); idle 2 MB leftovers stay findable with `is:duplicate` and stoppable from their family page. Unclassified tools read "Repeated tool".
 
 Selecting a cluster shows its plan: a one-line verdict, every live copy with **Keep** or **Stop** and the reason, and **Stop N Copies…**. The copy the radar recommends keeping — the one in a terminal, else the one that did work most recently — is kept. Only copies that are yours, idle and orphaned are stopped; anything busy, listening, run by launchd, an app you opened, or started by a running parent is kept. A cluster never loses every copy, and one pass stops at most 32.
 
@@ -198,7 +206,7 @@ Selecting a cluster shows its plan: a one-line verdict, every live copy with **K
 
 ## Incidents
 
-**Incidents** is the local history of leaks, spikes and runaway families. Each row is an episode: it stays open through short dips, snoozes and skipped samples, closes after 90 seconds without activity, and a return within ten minutes reopens it and counts a hit. Rows show the episode's peak. Column headers sort by family, score, memory and hits, both ways. A **Running** badge marks families that still run; those rows offer **Open Family** and, while active, **Stop…**, and an exited one offers **Search for It**.
+**Incidents** is the local history of leaks, spikes and runaway families. Each row is an episode: it stays open through short dips, snoozes and skipped samples, closes after 90 seconds without being observed (time the Mac slept counts, so a family that is hot again after waking starts a new row, or within ten minutes reopens the old one as a hit), and a return within ten minutes reopens it and counts a hit. Rows show the episode's peaks: score, memory, CPU and proven growth (none when growth was never proven). The list shows the latest 80; search and the **Resolved** and **Critical** filters read the whole log, up to the newest 2,000 incidents, and the header says which. An app with two or more episodes gets a **Recurrence** section (how often, typical length, peak memory range); it describes and never calls a repeat routine, because recurrence raises the score. Column headers sort by family, score, memory and hits, both ways. A green dot marks families that still run; those rows offer **Open Family** and, while active, **Stop…**, and an exited one offers **Search for It**.
 
 ## Rules
 
@@ -210,19 +218,19 @@ The **Heat & CPU activity** panel on the Overview answers two separate questions
 
 The temperature card shows measured CPU and GPU Celsius — the hottest readable sensor of each — separately from the macOS thermal state. These are hardware readings, never invented per-process temperatures. Sensor maps for M1, M2 and Intel Macs are verified; M3 and M4 Macs use catalog maps, and M5 and later use sensors found on the Mac itself; the card says when a map is unverified. Unsupported, missing, invalid or stale readings show **Unavailable** with the reason, and the panel falls back to macOS thermal pressure. Temperatures are read on every scan while the popover or the console is on screen and at most every 4 seconds otherwise, so the trend is ready when you open them; sensor access is read-only.
 
-A single very hot reading is called a brief spike; advice to cut work needs heat that persists. The attribution card names the app or job doing the work — helpers join their app, and a build's compiler processes are one job — and ranks by recent sustained load rather than one reading. Known macOS sources such as Spotlight, Photos analysis, Time Machine and the virtual machine behind Docker are labelled as system work.
+A single very hot reading is called a brief spike; advice to cut work needs heat that persists. The attribution card names the app or job doing the work — helpers join their app, and a build's compiler processes are one job — and ranks by recent sustained load rather than one reading. Known macOS sources such as Spotlight, Photos analysis, Time Machine, iCloud sync, security checks (Gatekeeper, XProtect) and software update, and the virtual machine behind Docker, are labelled as system work; a script run from a prompt is one job named after the script, and a build run through Xcode's tools from Terminal is that Terminal's job. The card shows fan speed under the temperatures ("Fans idle", or the fastest fan's rpm and share of its maximum) on Macs that have fans.
 
 - **Scan now** takes fresh readings. **Combined**, **CPU** and **GPU** switch the ranking.
 - **Temperature history & measurement details** shows sensor traces.
 - **Inspect <app>** shows the current evidence and the sampled processes behind an app.
 - **Compare after a change** saves a baseline. Change optional work yourself, then compare fresh CPU/GPU activity and temperatures after at least 15 seconds. The comparison expires after three minutes and never treats a missing app as zero load.
-- **Stop …** appears for your own work when it can be stopped: on the card when the same app or job keeps showing up while the Mac is warm, and in its detail sheet. The label names the process family the stop will act on, which can be a helper rather than the app itself. It opens the usual stop preview, and is never offered for macOS services.
+- **Stop …** appears for your own work when it can be stopped: on the card when the same app or job keeps showing up while the Mac is warm, and in its detail sheet. The label names the process family the stop will act on, which can be a helper rather than the app itself. It opens the usual stop preview, and is never offered for macOS services, including the daemons that run as you.
 
 Scan, Inspect and Compare never stop or pause apps. Activity is evidence, not a measurement of an application's temperature or heat share. The ⓘ beside the panel title explains how to read the numbers; [Thermals](Thermals.md) documents the rules behind them.
 
 ## Notifications
 
-When the radar has a credible reason to interrupt you, it posts one notification per family; a newer one replaces the older instead of stacking. Its actions are **Stop…** (opens the console with the stop preview), **Snooze 1 Hour**, and **Show** (opens the family). Banners appear even while the console is in front. **Settings › Alerts** shows whether notifications are allowed.
+When the radar has a credible reason to interrupt you, a family alerts once per episode, again when it gets worse (at least five minutes later) and as a reminder after twelve hours. At most three process alerts are posted in any ten minutes, most urgent first, and a family that left and returned within thirty minutes stays quiet. Security and Energy alerts keep their cooldowns (24 and 12 hours) across relaunches, so an update or a login does not announce again what the last run already did. **Settings › Alerts › What can notify you** turns process alerts and energy alerts off and can limit Security to Dangerous only. Its actions are **Stop…** (opens the console with the stop preview), **Snooze 1 Hour**, and **Show** (opens the family). Banners appear even while the console is in front. **Settings › Alerts** shows whether notifications are allowed.
 
 ## Keyboard shortcuts
 
@@ -238,7 +246,8 @@ When the radar has a credible reason to interrupt you, it posts one notification
 | Stop the selected family | ⇧⌘⌫ |
 | Confirm a stop | ⌘↩ |
 | Snooze / Ignore the selected family | ⇧⌘S / ⇧⌘E |
-| Inspector | ⌥⌘I |
+| Inspector (family pages) | ⌥⌘I |
+| Close window / Minimize | ⌘W / ⌘M |
 | Copy incident report / diagnostics | ⇧⌘C / ⇧⌘D |
 | Open the console | ⌘O |
 | Settings | ⌘, |
@@ -250,8 +259,8 @@ Back and Forward remember up to 30 visited pages and skip families that have exi
 Settings has five tabs:
 
 - **Protection**: protection style, what to watch, family grouping, and the current limits.
-- **Alerts**: notifications, the safe-intervention summary and the **Grace period** for an ordinary process.
-- **Performance**: adaptive scanning and the active mode. In the background the radar samples every few seconds at utility priority, and slower on battery, in Low Power Mode and when the Mac is hot; with the popover or console on screen it samples about once a second.
+- **Alerts**: whether notifications are allowed, **What can notify you**, the safe-intervention summary and the **Grace period** for an ordinary process.
+- **Performance**: adaptive scanning, the active mode and, with adaptive scanning off, the **Refresh** pace (1 to 5 seconds) that sets how often the console updates in every mode. In the background the radar samples every few seconds at utility priority, and slower on battery, in Low Power Mode and when the Mac is hot; with the popover or console on screen it samples about once a second.
 - **Diagnostics**: what the radar itself costs (refresh cost, its own CPU and memory), the last stop, the store backlog, host memory pressure, any store error, and **Copy Diagnostics** for bug reports.
 - **System**: **Launch at login** (with a note when macOS is waiting for your approval in Login Items), the **Safety boundary** — your own processes only, no privileged helper, the final action always yours — and **Restore Smart Defaults**.
 
