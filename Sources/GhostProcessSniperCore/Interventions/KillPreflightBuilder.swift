@@ -103,7 +103,9 @@ struct KillPreflightBuilder: Sendable {
         stale.sort { $0.pid < $1.pid }
         recycled.sort { $0.pid < $1.pid }
 
-        let reclaim = reclaimEstimator.estimate(plan: plan, targets: targets)
+        let (measured, usedRadarMemory) = reclaimEstimator.takingRadarMemory(targets, plan: plan)
+        targets = measured
+        let reclaim = reclaimEstimator.estimate(plan: plan, targets: targets, usedRadarMemory: usedRadarMemory)
         let radarCPU = KillReclaimEstimator.radarCPU(plan)
         targets = targets.map { target in
             guard target.cpuPercent <= 0, let reading = radarCPU[target.identity] else { return target }
