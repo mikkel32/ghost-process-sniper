@@ -125,7 +125,12 @@ extension GhostLevel {
 
 /// Describes observed resource use, never an invented per-process temperature.
 public struct ProcessAssessment: Equatable, Sendable {
+    /// The generic category: what kind of finding this is.
     public let cause: String
+    /// Why this family is on the radar, in a few words: the cause, unless
+    /// something more specific is known (see AttentionReason). Rows, the
+    /// hero and notifications show this, so they tell families apart.
+    public let reason: String
     public let evidence: String
     public let recommendation: String
     public let measurementText: String
@@ -145,6 +150,8 @@ public struct ProcessAssessment: Equatable, Sendable {
             measurementText = complete ? (duration >= 15 ? "Observed for \(duration)s" : "Building history") : "Partial or stale measurements"
         }
         status = complete ? family.score.level.actionLabel : "Measuring"
+        // Only the two generic causes have a more specific reason to give.
+        var specific: AttentionReason?
         if !complete {
             cause = "Waiting for a complete reading"
             evidence = "Some process metrics are missing or older than 15 seconds. They are excluded from growth detection."
@@ -172,12 +179,16 @@ public struct ProcessAssessment: Equatable, Sendable {
             systemImage = "square.stack.3d.up"
         } else if family.totalPhysicalFootprintBytes >= 512 * 1_048_576 {
             cause = "Memory footprint"
-            evidence = "\(memory) tracked footprint, \(cpu) CPU. Size alone does not prove a leak."
+            specific = AttentionReason(family: family)
+            evidence = specific?.evidence(memory: memory, cpu: cpu) ??
+                "\(memory) tracked footprint, \(cpu) CPU. Size alone does not prove a leak."
             recommendation = "Review the largest member; stop only work you no longer need."
             systemImage = "memorychip"
         } else if family.score.level >= .watch {
             cause = "Activity to review"
-            evidence = family.score.heat.evidence.first ?? "\(memory) memory and \(cpu) CPU in the current scan."
+            specific = AttentionReason(family: family)
+            evidence = specific?.evidence(memory: memory, cpu: cpu) ??
+                family.score.heat.evidence.first ?? "\(memory) memory and \(cpu) CPU in the current scan."
             recommendation = "Review current measurements and the process tree."
             systemImage = "waveform.path"
         } else {
@@ -186,5 +197,9 @@ public struct ProcessAssessment: Equatable, Sendable {
             recommendation = "Keep running. No stop is suggested from these readings."
             systemImage = "checkmark.circle"
         }
+        reason = specific?.text ?? cause
     }
+
+    /// The reason to end a sentence with: "ChatGPT: memory is tight on this Mac".
+    public var reasonInSentence: String { AttentionReason.inSentence(reason) }
 }

@@ -170,7 +170,7 @@ actor UserNotificationRadarNotifier: RadarNotifying {
 
         let content = UNMutableNotificationContent()
         content.title = "\(family.displayName) is \(family.score.level.label.lowercased())"
-        content.subtitle = "\(ProcessAssessment(family: family).cause) - \(RadarFormat.bytes(family.totalPhysicalFootprintBytes)) - \(Int(family.totalCPUPercent.rounded()))% CPU"
+        content.subtitle = "\(ProcessAssessment(family: family).reason) - \(RadarFormat.bytes(family.totalPhysicalFootprintBytes)) - \(Int(family.totalCPUPercent.rounded()))% CPU"
         content.body = (family.score.heat.evidence.isEmpty ? family.score.reasons : family.score.heat.evidence)
             .prefix(3)
             .joined(separator: ", ")
