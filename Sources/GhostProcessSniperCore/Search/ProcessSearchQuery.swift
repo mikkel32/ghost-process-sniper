@@ -5,13 +5,16 @@ import Foundation
 /// Plain words must all match (in any order) somewhere in a process's name,
 /// helper names, command line or path. On top of that:
 ///
-/// - `"exact phrase"` keeps words together; `-word` or `!word` excludes.
+/// - `"exact phrase"` keeps words together; `-word` or `!word` excludes. A
+///   word that starts with `--` is a command-line flag to find (`--inspect`),
+///   not an exclusion.
 /// - `name:` `cmd:` `path:` `user:` `kind:` scope a word to one field.
 /// - `pid:123,456` and `port:3000` match identities; a bare number matches a
 ///   PID or listening port as well as text.
 /// - `cpu>20` `mem>1.5gb` `gpu>=5` `leak>2` `threads>100` `children>3`
 ///   `watts>2` `wakeups>150` `writes>5mb` compare measurements (memory and
-///   disk writes per second default to MB).
+///   disk writes per second default to MB). Numbers read a decimal comma and
+///   a space before the unit, the way the app prints them: `mem>1,5 GB`.
 /// - `is:hot` `is:leaking` `is:killable` `is:dev` `is:system` `is:mine`
 ///   `is:tracked` … select radar states; any unique prefix works (`is:leak`).
 public struct ProcessSearchQuery: Equatable, Sendable {
@@ -202,7 +205,8 @@ public struct ProcessSearchQuery: Equatable, Sendable {
         for token in Self.split(raw) {
             var body = token
             var negated = false
-            if body.count > 1, body.first == "-" || body.first == "!" {
+            // `--inspect` is a flag to find, not the exclusion of `-inspect`.
+            if body.count > 1, body.first == "-" || body.first == "!", !body.hasPrefix("--") {
                 negated = true
                 body.removeFirst()
             }
@@ -289,12 +293,19 @@ public struct ProcessSearchQuery: Equatable, Sendable {
 
     /// Splits on whitespace outside double quotes. Quotes stay in the token
     /// so `"phrase"`, `-"phrase"` and `key:"value"` can be told apart.
-    /// macOS substitutes curly quotes while typing; treat them as straight.
+    /// macOS substitutes curly quotes and an em dash for `--` while typing;
+    /// treat them as the straight characters.
     private static func split(_ raw: String) -> [String] {
-        let normalized = raw
+        var normalized = raw
             .replacingOccurrences(of: "\u{201c}", with: "\"")
             .replacingOccurrences(of: "\u{201d}", with: "\"")
+            .replacingOccurrences(of: "\u{2014}", with: "--")
             .replacingOccurrences(of: #"\s*(>=|<=|>|<|=)\s*"#, with: "$1", options: .regularExpression)
+        for rule in spacedUnitRules {
+            normalized = rule.stringByReplacingMatches(
+                in: normalized, range: NSRange(normalized.startIndex..., in: normalized), withTemplate: "$1$2"
+            )
+        }
         var tokens: [String] = []
         var current = ""
         var inQuotes = false
@@ -318,9 +329,27 @@ public struct ProcessSearchQuery: Equatable, Sendable {
         return text
     }
 
+    /// The number takes a dot or a comma, since the app prints both ("1.5 GB",
+    /// "0,5 W"). A space before the unit is joined by `spacedUnitRules`.
     private static let metricPattern = try! NSRegularExpression(
-        pattern: #"^([a-z]+):?(>=|<=|>|<|=)?([0-9]+(?:\.[0-9]+)?)\s*(%|[kmgt]i?b?(?:/s)?|b(?:/s)?|mb/min|w|/s)?$"#
+        pattern: #"^([a-z]+):?(>=|<=|>|<|=)?([0-9]+(?:[.,][0-9]+)?)(%|[kmgt]i?b?(?:/s)?|b(?:/s)?|mb/min|w|/s)?$"#
     )
+
+    /// `mem>1.5 GB`, `watts>0,5 W` and `leak>2 MB/min` are how the app prints
+    /// these values, but a search splits on spaces: without this the filter
+    /// would read 1.5 MB and `GB` would become a word to find. Each rule joins
+    /// one unit vocabulary to its own metrics only, so `cpu>5 gb` still
+    /// searches for `gb`.
+    private static let spacedUnitRules: [NSRegularExpression] = [
+        ("memory|mem|ram|writes?|disk", "[kmgt]i?b(?:/s)?|b(?:/s)?"),
+        ("leak|growth", "mb/min"),
+        ("watts?|energy|power", "w")
+    ].map { keys, units in
+        try! NSRegularExpression(
+            pattern: "(?<![a-z0-9])((?:\(keys))(?:>=|<=|>|<|=|:)[0-9]+(?:[.,][0-9]+)?)\\s+(\(units))(?=\\s|$)",
+            options: .caseInsensitive
+        )
+    }
 
     private static func metricFilter(_ token: String, negated: Bool) -> MetricFilter? {
         let range = NSRange(token.startIndex..., in: token)
@@ -328,7 +357,7 @@ public struct ProcessSearchQuery: Equatable, Sendable {
               let keyRange = Range(match.range(at: 1), in: token),
               let metric = Metric.named(String(token[keyRange])),
               let valueRange = Range(match.range(at: 3), in: token),
-              let number = Double(token[valueRange])
+              let number = Double(token[valueRange].replacingOccurrences(of: ",", with: "."))
         else { return nil }
         let hasOperator = match.range(at: 2).location != NSNotFound
         guard hasOperator || token.contains(":") else { return nil }

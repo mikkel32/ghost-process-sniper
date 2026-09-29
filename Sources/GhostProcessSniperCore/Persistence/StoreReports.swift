@@ -20,14 +20,15 @@ extension RadarStore {
         return lines.joined(separator: "\n")
     }
 
-    public func exportDiagnosticsReport(settings: ThresholdSettings) throws -> String {
+    /// `home` is the folder written as `~` in the report; tests stand in for it.
+    public func exportDiagnosticsReport(settings: ThresholdSettings, home: String = NSHomeDirectory()) throws -> String {
         let health = storeHealth()
         let rules = try loadRules(settings: settings)
         let incidents = try recentIncidents(limit: 12)
         let kills = try recentKillOperations(limit: 5)
-        return [
-            "Ghost Process Sniper Store Diagnostics",
-            "URL: \(url.path)",
+        var report = ["Ghost Process Sniper Store Diagnostics", "URL: \(url.path)"]
+        report += footprintLines()
+        report += [
             "Backlog: \(health.backlogCount), dropped models: \(health.droppedModelCount)",
             "Last flush: \(health.lastFlushDate?.formatted() ?? "none")",
             "Last flush cost: \(Int(health.lastFlushMilliseconds.rounded())) ms",
@@ -42,7 +43,41 @@ extension RadarStore {
             "Last kill: \(kills.first?.summary ?? "none")",
             "Error: \(health.errorMessage ?? "none")",
             "Recovered from a corrupt file this session: \(health.recoveredFromCorruption ? "yes" : "no")"
-        ].joined(separator: "\n")
+        ]
+        // The store sits under the home folder and a kill summary can name
+        // paths in it; a pasted report should not carry the account name.
+        return DiagnosticsIdentity.redactingHome(in: report.joined(separator: "\n"), home: home)
+    }
+
+    /// Schema version, file sizes and row counts: which schema a report came
+    /// from, and whether a table is growing. Each figure stands alone, so a
+    /// table that cannot be read says n/a instead of failing the report.
+    private func footprintLines() -> [String] {
+        var version: Int32?
+        try? query("PRAGMA user_version") { version = Int32(truncatingIfNeeded: $0.int64(0)) }
+        let tables = [("incidents", "incidents"), ("baselines", "baselines"), ("rules", "rules"),
+                      ("kill_operations", "kill operations"), ("energy_days", "energy days")]
+        let counts = tables.map { table, label in
+            var count: Int?
+            try? query("SELECT COUNT(*) FROM \(table)") { count = $0.int(0) }
+            return "\(label) \(count.map(String.init) ?? "n/a")"
+        }
+        let main = Self.fileSize(url.path).map(Self.sizeText) ?? "n/a"
+        let log = Self.sizeText(Self.fileSize(url.path + "-wal") ?? 0)
+        return [
+            "Schema version: \(version.map(String.init) ?? "n/a")",
+            "Store file: \(main), write-ahead log \(log)",
+            "Stored rows: \(counts.joined(separator: ", "))"
+        ]
+    }
+
+    private static func fileSize(_ path: String) -> UInt64? {
+        (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? UInt64
+    }
+
+    /// Whole KB below a megabyte, so a small store is not rounded to "1 MB".
+    private static func sizeText(_ bytes: UInt64) -> String {
+        bytes >= 1_048_576 ? RadarFormat.bytes(bytes) : "\((bytes + 1_023) / 1_024) KB"
     }
 }
 

@@ -3,14 +3,17 @@ import Foundation
 extension EngineDiagnosticsViewModel {
     /// The Copy Diagnostics text, built only when asked for. It embeds the
     /// generation time, so keeping it in the published view model made
-    /// every tick's diagnostics unequal and re-rendered every reader.
+    /// every tick's diagnostics unequal and re-rendered every reader. It says
+    /// which build and Mac it came from, and with `profile` the settings and
+    /// limits in effect, so a report can be reproduced.
     public static func diagnosticsReport(
         metrics: RadarPerformanceMetrics,
         health: SamplerHealth,
         storeHealth: StoreHealth,
         storeError: String?,
         summary: RadarSummary,
-        generatedAt: Date
+        generatedAt: Date,
+        profile: ResolvedThresholdProfile? = nil
     ) -> String {
         let engine = EngineDiagnosticsViewModel(
             metrics: metrics,
@@ -21,9 +24,10 @@ extension EngineDiagnosticsViewModel {
             generatedAt: generatedAt
         )
         let optimization = RadarOptimizationReport(scannerHealth: metrics.scannerHealth, metrics: metrics)
-        return [
-            "Ghost Process Sniper Diagnostics",
-            "Generated: \(generatedAt.formatted())",
+        var lines = ["Ghost Process Sniper Diagnostics", "Generated: \(generatedAt.formatted())"]
+        lines += DiagnosticsIdentity.current().lines
+        if let profile { lines += DiagnosticsIdentity.settingsLines(profile) }
+        lines += [
             "State: \(summary.statusText)",
             "Families: \(summary.familyCount), hot: \(summary.hotCount), leaks: \(summary.leakingCount)",
             "Duplicates: \(metrics.duplicateClusterCount) clusters, \(metrics.promotedDuplicateCandidateCount) promoted candidates, detector \(Int(metrics.duplicateDetectorMilliseconds.rounded()))ms",
@@ -42,6 +46,7 @@ extension EngineDiagnosticsViewModel {
             "Store coalescing: \(engine.storeCoalescingText)",
             "Pressure: \(engine.pressureText)",
             "Health: \(engine.statusLine)"
-        ].joined(separator: "\n")
+        ]
+        return lines.joined(separator: "\n")
     }
 }

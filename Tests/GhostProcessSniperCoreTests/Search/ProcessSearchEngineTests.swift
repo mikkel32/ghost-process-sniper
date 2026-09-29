@@ -29,6 +29,80 @@ final class ProcessSearchEngineTests: XCTestCase {
         XCTAssertEqual(ProcessSearchQuery("is:zzz").tokens.first?.kind, .ignored)
     }
 
+    func testFiltersReadNumbersTheWayTheAppPrintsThem() {
+        let gibibyte = 1_073_741_824.0
+        // A decimal comma, and the space the app puts before a unit ("1.5 GB", "0,5 W").
+        for text in ["mem>1,5gb", "mem>1,5 GB", "mem>1.5 gb", "MEM > 1,5 Gb", "memory>1,5 GiB"] {
+            let query = ProcessSearchQuery(text)
+            XCTAssertEqual(query.metrics.map(\.value), [1.5 * gibibyte], text)
+            XCTAssertEqual(query.metrics.map(\.comparison), [.greater], text)
+            XCTAssertTrue(query.terms.isEmpty, "\(text): the unit is part of the filter, not a search word")
+        }
+        XCTAssertEqual(ProcessSearchQuery("watts>0,5").metrics.map(\.value), [0.5])
+        XCTAssertEqual(ProcessSearchQuery("watts>0,5 W").metrics.map(\.value), [0.5])
+        XCTAssertEqual(ProcessSearchQuery("cpu>12,5").metrics.map(\.value), [12.5])
+        XCTAssertEqual(ProcessSearchQuery("writes>1,5 MB/s").metrics.map(\.value), [1.5 * 1_048_576])
+        XCTAssertEqual(ProcessSearchQuery("leak>2 MB/min").metrics.map(\.value), [2])
+        XCTAssertTrue(ProcessSearchQuery("writes>1,5 MB/s watts>2 W leak>2 MB/min").terms.isEmpty)
+        XCTAssertEqual(ProcessSearchQuery("mem>1,5 chrome").terms.map(\.text), ["chrome"], "other words still search")
+        // The same number in a comma-decimal locale is still a plain number elsewhere.
+        XCTAssertEqual(ProcessSearchQuery("pid:1,2 port:3000,3001").pids.first?.values, [1, 2])
+        XCTAssertEqual(ProcessSearchQuery("pid:1,2 port:3000,3001").ports.first?.values, [3000, 3001])
+    }
+
+    func testAUnitWordJoinsOnlyTheFiltersThatTakeOne() {
+        // `cpu` has no unit words, so `gb` stays something to search for.
+        let cpu = ProcessSearchQuery("cpu>5 gb")
+        XCTAssertEqual(cpu.metrics.map(\.value), [5])
+        XCTAssertEqual(cpu.terms.map(\.text), ["gb"])
+        // A metric name inside a longer word is not a filter.
+        XCTAssertEqual(ProcessSearchQuery("somemem>5 gb").terms.map(\.text), ["somemem>5", "gb"])
+        // Half typed stays quiet: no unit yet, or a unit still being typed.
+        let halfTyped = ProcessSearchQuery("cpu>1, mem>1, writes>5mb/")
+        XCTAssertTrue(halfTyped.metrics.isEmpty && halfTyped.terms.isEmpty && halfTyped.tokens.isEmpty)
+        // Without a unit, memory still means MB.
+        XCTAssertEqual(ProcessSearchQuery("mem>1,5").metrics.map(\.value), [1.5 * 1_048_576])
+    }
+
+    func testDoubleDashFlagsAreLiteralTermsNotNegations() {
+        // Smart dashes turn a typed `--` into an em dash before the search sees it.
+        for text in ["--inspect", "\u{2014}inspect"] {
+            let query = ProcessSearchQuery(text)
+            XCTAssertEqual(query.terms.map(\.text), ["--inspect"], text)
+            XCTAssertEqual(query.terms.map(\.isNegated), [false], text)
+        }
+        XCTAssertEqual(ProcessSearchQuery("--type=renderer").terms.map(\.text), ["--type=renderer"])
+        // Exclusions keep working, including for a flag.
+        for text in ["!--inspect", "-\"--inspect\""] {
+            let query = ProcessSearchQuery(text)
+            XCTAssertEqual(query.terms.map(\.text), ["--inspect"], text)
+            XCTAssertEqual(query.terms.map(\.isNegated), [true], text)
+        }
+        for text in ["-helper", "!helper"] {
+            XCTAssertEqual(ProcessSearchQuery(text).terms.map(\.text), ["helper"], text)
+            XCTAssertEqual(ProcessSearchQuery(text).terms.map(\.isNegated), [true], text)
+        }
+        let plain = ProcessSearchQuery("chrome -helper")
+        XCTAssertEqual(plain.terms.map(\.text), ["chrome", "helper"])
+        XCTAssertEqual(plain.terms.map(\.isNegated), [false, true])
+    }
+
+    func testCommaNumbersAndDoubleDashFlagsFilterTheRealList() {
+        XCTAssertEqual(names("mem>1,5gb").families, ["Google Chrome"])
+        XCTAssertEqual(names("mem>1,5 GB").families, names("mem>1.5gb").families)
+        XCTAssertTrue(names("mem>2,5 gb").families.isEmpty, "2 GB is under 2.5 GiB")
+        // `--type=renderer` used to exclude exactly the process that has it.
+        XCTAssertEqual(names("--type=renderer").families, ["Google Chrome"])
+        XCTAssertEqual(Set(names("--type").families), ["Google Chrome", "Code Helper"])
+
+        let quiet = subject(process(600, "quiet"), watts: 0.3)
+        let busy = subject(process(601, "busy"), watts: 0.8)
+        for text in ["watts>0,5", "watts>0,5 w", "watts>0.5"] {
+            let outcome = ProcessSearchEngine.search(ProcessSearchQuery(text), families: [quiet, busy], processes: [])
+            XCTAssertEqual(Set(outcome.families.keys), [1], text)
+        }
+    }
+
     func testCurlyQuotesUrlsAndNegatedPhrases() {
         let query = ProcessSearchQuery("\u{201c}google chrome\u{201d} http://localhost:3000 -\"code helper\"")
         XCTAssertEqual(query.terms.map(\.text), ["google chrome", "http://localhost:3000", "code helper"])
@@ -141,6 +215,7 @@ private func subject(
     cpu: Double = 0,
     memory: Double = 0,
     leak: Double? = nil,
+    watts: Double? = nil,
     flags: Set<ProcessSearchQuery.Flag> = [.tracked]
 ) -> SearchSubject {
     SearchSubject(
@@ -148,7 +223,8 @@ private func subject(
         helpers: helpers,
         kindLabel: kind,
         measurements: SearchMeasurements(cpuPercent: cpu, memoryBytes: memory, gpuPercent: 0, threads: 4,
-                                         leakMegabytesPerMinute: leak, children: Double(helpers.count)),
+                                         leakMegabytesPerMinute: leak, children: Double(helpers.count),
+                                         energyWatts: watts),
         flags: flags
     )
 }
