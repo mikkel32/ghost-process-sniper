@@ -40,6 +40,11 @@ final class PersistenceMonitorTests: XCTestCase {
         XCTAssertTrue(agent.signals.contains { $0.kind == .hiddenLocation })
     }
 
+    func testStartupItemRunningAHiddenFileInTheHomeFolderIsFlagged() throws {
+        let agent = try item("com.example.helper", arguments: ["/Users/me/.helper"])
+        XCTAssertTrue(agent.signals.contains { $0.kind == .hiddenLocation && $0.severity >= .notable }, "\(agent.signals)")
+    }
+
     func testOrdinaryHomebrewServiceIsQuiet() throws {
         let agent = try item("homebrew.mxcl.postgresql@16", arguments: ["/bin/ls", "-l"])
         XCTAssertLessThan(agent.severity, .notable, "\(agent.signals)")

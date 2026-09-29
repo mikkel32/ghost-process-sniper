@@ -179,6 +179,53 @@ final class SentinelPrecisionTests: XCTestCase {
         XCTAssertFalse(kinds(evaluate(quiet, signing: signed(.developerID))).contains(.tunnel))
     }
 
+    // MARK: - Hidden home folders
+
+    private let hiddenAgent = "/Users/me/.xq/agent"
+
+    func testUnvouchedProgramInAHiddenHomeFolderThatListensIsSuspicious() {
+        let agent = subject("agent", path: hiddenAgent, ports: [4444])
+        for signing in [signed(.adHoc), signed(.unsigned)] {
+            let result = evaluate(agent, signing: signing)
+            XCTAssertEqual(result.severity, .suspicious, "\(result.signals)")
+            XCTAssertTrue(kinds(result, atLeast: .suspicious).contains(.tunnel), "\(result.signals)")
+        }
+        XCTAssertEqual(evaluate(agent).severity, .notable, "signature not read yet: the quieter verdict, as for /Users/Shared")
+
+        let vouched = evaluate(agent, signing: signed(.developerID))
+        XCTAssertFalse(kinds(vouched).contains(.tunnel), "a signed server is a server, wherever it lives")
+        XCTAssertEqual(vouched.severity, .notable, "still listed, not raised")
+        let typed = evaluate(agent, ancestors: typedInTerminal, signing: signed(.adHoc))
+        XCTAssertFalse(kinds(typed).contains(.tunnel), "someone typed it")
+        XCTAssertEqual(typed.severity, .notable)
+    }
+
+    func testHiddenHomeProgramWithAnotherSignOfAttackIsDangerous() {
+        let blob = String(repeating: "QUJD", count: 70)
+        let command = "\(hiddenAgent) --cfg base64:\(blob)"
+        let listening = evaluate(subject("agent", path: hiddenAgent, command: command, ports: [4444]), signing: signed(.adHoc))
+        XCTAssertEqual(listening.severity, .dangerous)
+        XCTAssertTrue(kinds(listening, atLeast: .dangerous).isSuperset(of: [.tunnel, .hiddenLocation]), "\(listening.signals)")
+
+        let payload = subject("agent", path: hiddenAgent, command: command)
+        let lifted = evaluate(payload, signing: signed(.unsigned))
+        XCTAssertTrue(kinds(lifted, atLeast: .dangerous).contains(.hiddenLocation), "\(lifted.signals)")
+        XCTAssertLessThan(evaluate(payload).severity, .dangerous, "unknown signer: the quieter verdict")
+        XCTAssertEqual(evaluate(payload, signing: signed(.developerID)).signals.first { $0.kind == .hiddenLocation }?.severity, .notable)
+
+        let miner = subject("xmrig", path: "/Users/me/.xq/xmrig", command: "/Users/me/.xq/xmrig -o stratum+tcp://pool.minexmr.com:4444 --donate-level 1")
+        XCTAssertEqual(evaluate(miner, signing: signed(.adHoc)).severity, .dangerous)
+        XCTAssertEqual(evaluate(miner).severity, .suspicious, "a miner is worth a look before anyone reads its signature")
+        XCTAssertEqual(evaluate(miner, signing: signed(.developerID)).severity, .suspicious)
+    }
+
+    func testHiddenFileInTheHomeFolderIsANotableFindingForEveryone() {
+        let helper = subject("helper", path: "/Users/me/.helper")
+        for signing in [nil, signed(.developerID), signed(.adHoc)] {
+            XCTAssertEqual(evaluate(helper, signing: signing).severity, .notable, "\(String(describing: signing))")
+        }
+    }
+
     // MARK: - Programs a coding assistant just built
 
     func testProgramABuiltAndRunByACodingAssistantIsOnlyNotable() {

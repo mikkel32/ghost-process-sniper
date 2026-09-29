@@ -92,6 +92,7 @@ public enum SentinelCatalog {
         "/.oh-my-zsh/", "/.tmux/", "/.zinit/", "/.fzf/", "/.gem/", "/.swiftpm/", "/.mint/", "/.proto/",
         "/.moon/", "/.go/", "/go/bin/", "/.kube/", "/.terraform", "/.pulumi/", "/.config/", "/.git/",
         "/.build/", "/.venv/", "/venv/", "/.tox/", "/.conda/", "/miniconda3/", "/anaconda3/", "/.pixi/",
+        "/.foundry/", "/.rvm/", "/.pub-cache/", "/.flutter/", "/.android/", "/.gemini/", "/.opencode/", "/.lmstudio/",
     ]
 
     /// Temporary locations nothing should normally be *installed* in.
