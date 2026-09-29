@@ -86,7 +86,11 @@ struct FamilyEvidenceScorer: Sendable {
                 detail: "\(RadarFormat.fixed0(leakVelocity)) MB/min is \(RadarFormat.fixed1(leakRatio))x the " +
                     "\(RadarFormat.fixed0(settings.leakVelocityMegabytesPerMinute)) MB/min limit",
                 impact: leakImpact,
-                level: componentLevel(leakRatio, critical: 1.6)
+                // A launch allocates fast while it warms up: the climb is shown, but
+                // it is not a leak (Leaks, "Sustained memory growth", a culprit) until grace is over.
+                level: StartupGrace.isStarting(root: root, now: now)
+                    ? min(componentLevel(leakRatio, critical: 1.6), .watch)
+                    : componentLevel(leakRatio, critical: 1.6)
             ),
             GhostScoreComponent(
                 slot: "relevance",

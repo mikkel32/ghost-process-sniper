@@ -9,13 +9,13 @@ final class StartupGraceTests: XCTestCase {
 
     /// Six scans four seconds apart, ending at the fixture clock, climbing at
     /// `rate` MB/min: fast enough to be a leak on any process old enough to judge.
-    private func ramp(startedSecondsAgo: TimeInterval, rate: Double = 400) throws -> ProcessFamily {
+    private func ramp(startedSecondsAgo: TimeInterval, rate: Double = 400, base: Double = 300) throws -> ProcessFamily {
         var window = TrendWindow()
         var family: ProcessFamily?
         let started = Fixture.now.addingTimeInterval(-startedSecondsAgo)
         for step in 0..<6 {
             let date = Fixture.now.addingTimeInterval(Double(step - 5) * 4)
-            let megabytes = 300 + Double(step) * rate * 4 / 60
+            let megabytes = base + Double(step) * rate * 4 / 60
             let process = Fixture.process(megabytes: megabytes, started: started, date: date)
             family = Fixture.scored([process], window: &window, at: date).first
         }
@@ -31,6 +31,21 @@ final class StartupGraceTests: XCTestCase {
         XCTAssertFalse(launching.score.heat.shouldRaiseLiveAlert)
         XCTAssertLessThan(launching.forecast.state, .leaking)
         XCTAssertTrue(launching.score.heat.evidence.contains { $0.contains("only just started") }, "\(launching.score.heat.evidence)")
+    }
+
+    /// A big IDE or VM passes its memory limit while it climbs in its first seconds. Heat is Hot for the size, but
+    /// the leak claims (the Leaks count, "Sustained memory growth", "Stop only <helper>") wait out the same grace.
+    func testABigLaunchIsNotCalledALeakWhileItStarts() throws {
+        let launching = try ramp(startedSecondsAgo: 60, base: 1_600)
+        XCTAssertGreaterThanOrEqual(launching.score.level, .hot, "over its limit: the size is worth flagging")
+        let leak = try XCTUnwrap(launching.score.components.first { $0.kind == .leak && $0.slot == "leak" })
+        XCTAssertLessThanOrEqual(leak.level, .watch, "the climb is real, but a launch is not yet a leak")
+        XCTAssertFalse(launching.hasCredibleLeak, "no Leaks count, no growth cause, no culprit while it starts")
+
+        let settled = try ramp(startedSecondsAgo: 3_600, base: 1_600)
+        let settledLeak = try XCTUnwrap(settled.score.components.first { $0.kind == .leak && $0.slot == "leak" })
+        XCTAssertGreaterThanOrEqual(settledLeak.level, .hot)
+        XCTAssertTrue(settled.hasCredibleLeak, "the same climb an hour in is a leak")
     }
 
     /// The same ramp on a process that has been running for an hour is a leak.
