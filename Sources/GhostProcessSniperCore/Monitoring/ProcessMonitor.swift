@@ -454,7 +454,8 @@ public final class ProcessMonitor {
             storeHealth: storeHealth,
             storeError: storeError,
             summary: summary,
-            generatedAt: Date()
+            generatedAt: Date(),
+            profile: resolvedThresholdProfile
         )
     }
 
