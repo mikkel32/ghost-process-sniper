@@ -8,6 +8,7 @@ struct RadarConsoleView: View {
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var handledSearchFocusToken = 0
+    @State private var tourAfterWelcome = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var searchFocused: Bool
 
@@ -163,6 +164,14 @@ struct RadarConsoleView: View {
         }
         .sheet(isPresented: $session.showQuickGuide) {
             RadarQuickGuideView()
+        }
+        .sheet(isPresented: $session.showWelcome, onDismiss: {
+            // One sheet at a time: the guide opens only once the welcome is gone.
+            guard tourAfterWelcome else { return }
+            tourAfterWelcome = false
+            session.showQuickGuide = true
+        }) {
+            RadarWelcomeView { tourAfterWelcome = true }
         }
         // On the root, not the Duplicates page, so a run keeps its sheet
         // when a menu command or a notification moves the console.

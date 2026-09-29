@@ -85,8 +85,10 @@ final class MenuBarCoordinator: NSObject, NSPopoverDelegate, NSMenuItemValidatio
         consoleController.focusSection(section)
     }
 
-    func openConsole() {
-        consoleController.show(monitor: monitor, killer: killer, quickStops: quickStops) { [weak self] in
+    /// `welcome` opens the first-run sheet over the console; only a first-ever
+    /// launch asks for it.
+    func openConsole(welcome: Bool = false) {
+        consoleController.show(monitor: monitor, killer: killer, quickStops: quickStops, welcome: welcome) { [weak self] in
             self?.openSettings()
         }
     }
