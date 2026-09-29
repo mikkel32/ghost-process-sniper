@@ -48,6 +48,14 @@ public enum SentinelCatalog {
         "hyper", "tabby", "rio", "wave",
     ]
 
+    /// Coding assistants: they build programs and run them through a shell on
+    /// someone's behalf. Bundle names (lowercased) and process names.
+    static let codingAgentApps: Set<String> = ["claude", "codex"]
+    static let codingAgentNames: Set<String> = ["claude", "codex"]
+    /// Installs whose executable is named by version, not by product
+    /// (`~/.local/share/claude/versions/2.1.5`, Claude Desktop's embedded CLI).
+    static let codingAgentFolders: [String] = ["/claude-code/", "/.local/share/claude/"]
+
     /// Programs that turn text into actions: the usual second step of an attack.
     static let commandRunners: Set<String> = [
         "sh", "bash", "zsh", "dash", "fish", "tcsh", "csh", "ksh",
@@ -119,6 +127,15 @@ public enum SentinelCatalog {
     static func isTerminalApp(path: String, name: String) -> Bool {
         if let app = appName(forPath: path)?.lowercased(), terminalApps.contains(app) { return true }
         return terminalApps.contains(name.lowercased())
+    }
+
+    /// Claude or Codex, by bundle, process name or install folder. Says nothing
+    /// about where it runs from: a copy dropped in /tmp is not one.
+    static func isCodingAgent(path: String, name: String) -> Bool {
+        if let app = appName(forPath: path)?.lowercased(), codingAgentApps.contains(app) { return true }
+        if codingAgentNames.contains(programName(name, path: path)) || codingAgentNames.contains(name.lowercased()) { return true }
+        let lower = path.lowercased()
+        return codingAgentFolders.contains(where: lower.contains)
     }
 
     /// The bare program name: "-zsh" → "zsh", "python3.12" → "python3".

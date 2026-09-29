@@ -132,6 +132,7 @@ enum SentinelRules {
         }
 
         signals = escalate(signals, contentAncestor: contentAncestor)
+        signals = softenAgentBuild(signals, of: subject, ancestors: ancestors)
         let headline = headline(for: subject, signals: signals, contentAncestor: contentAncestor, fromTerminal: fromTerminal)
         return SentinelEvaluation(
             signals: signals,
@@ -291,6 +292,27 @@ enum SentinelRules {
             }
         }
         return result
+    }
+
+    /// A program a coding assistant just built and ran from a temporary folder
+    /// is the everyday case of the location rule, not a dropper. When its shell
+    /// started it and that folder is the only thing Suspicious about it, the
+    /// signal stays (Notable, so the signature rules still treat the place as
+    /// odd) but stops being an alarm. Anything else Suspicious keeps the
+    /// finding: a listener, a payload or miner (escalate already made the
+    /// location Dangerous), a deleted file. The listener rule ran on the
+    /// original signal, and a program typed into a terminal is not softened.
+    static func softenAgentBuild(_ signals: [SentinelSignal], of subject: SentinelSubject,
+                                 ancestors: [SentinelSubject]) -> [SentinelSignal] {
+        let serious = signals.filter { $0.severity >= .suspicious }
+        guard serious.count == 1, let location = serious.first, location.kind == .temporaryLocation,
+              location.severity == .suspicious, startedByCodingAgent(ancestors) else { return signals }
+        return signals.map { signal in
+            guard signal.kind == .temporaryLocation, signal.severity == .suspicious else { return signal }
+            return SentinelSignal(.temporaryLocation, .notable,
+                "Runs from \((subject.executablePath as NSString).deletingLastPathComponent), a temporary folder. A coding assistant started it from a shell, so it is probably a program it just built. Check it if you did not ask for that.",
+                evidence: signal.evidence)
+        }
     }
 
     // MARK: - Words

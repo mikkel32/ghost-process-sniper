@@ -42,6 +42,26 @@ extension SentinelRules {
         return chain[..<host].contains { ShellRole.isShell($0.program) }
     }
 
+    /// A coding assistant's own shell started it: a shell sits between it and
+    /// Claude or Codex, which build programs and run them on someone's behalf.
+    /// Unlike a terminal this is not "someone typed it", so it never counts for
+    /// the listener rule. The assistant must run from where such tools install:
+    /// a process that merely carries the name from /tmp or a hidden folder is
+    /// not one.
+    static func startedByCodingAgent(_ ancestors: [SentinelSubject]) -> Bool {
+        let chain = ancestors.prefix(8)
+        guard let host = chain.firstIndex(where: isTrustworthyCodingAgent) else { return false }
+        return chain[..<host].contains { ShellRole.isShell($0.program) }
+    }
+
+    private static func isTrustworthyCodingAgent(_ process: SentinelSubject) -> Bool {
+        guard process.executablePath.hasPrefix("/"),
+              SentinelCatalog.isCodingAgent(path: process.executablePath, name: process.name) else { return false }
+        // The same places the location rules distrust, and Downloads even for an app.
+        let oddly = locationSignals(process, fileExists: { _ in true }).contains { $0.severity >= .notable }
+        return !oddly && process.executablePath.lowercased().range(of: #"^/users/[^/]+/downloads/"#, options: .regularExpression) == nil
+    }
+
     /// Signs of an attack other than where a program lives.
     static let corroboratingKinds: Set<SentinelSignalKind> = [
         .downloadAndExecute, .encodedPayload, .passwordPrompt, .credentialAccess, .reverseShell, .persistence,
