@@ -3,8 +3,7 @@ import GhostProcessSniperCore
 import UserNotifications
 
 actor UserNotificationRadarNotifier: RadarNotifying {
-    private var lastDelivered: [String: Date] = [:]
-    private let minimumInterval: TimeInterval = 15 * 60
+    private var familyAlerts = FamilyAlertGate()
     // Each settings read is an XPC round trip to usernoted inside the awaited
     // refresh, so the status is cached and only re-read once a minute.
     private let statusCacheInterval: TimeInterval = 60
@@ -16,6 +15,7 @@ actor UserNotificationRadarNotifier: RadarNotifying {
     private let notificationCenterAvailable = Bundle.main.bundleIdentifier != nil
 
     func process(model: RadarModel) async {
+        guard notificationCenterAvailable else { return }
         let candidates = model.families.filter { family in
             family.score.heat.shouldNotify &&
                 family.alertState.kind != .ignored &&
@@ -23,26 +23,24 @@ actor UserNotificationRadarNotifier: RadarNotifying {
                 family.suggestions.contains { $0.type == .notify || $0.type == .suggestKill || $0.type == .inspect || $0.type == .kill }
         }
 
-        for family in candidates.prefix(3) {
-            await notifyIfNeeded(family: family, at: model.generatedAt)
+        // The gate sees every candidate, not the first few: families that
+        // already alerted must not keep a newer one from being considered.
+        let planned = familyAlerts.plan(
+            candidates.map { FamilyAlertGate.Candidate(id: $0.signature.id, level: $0.score.level) },
+            now: model.generatedAt
+        )
+        guard !planned.isEmpty, await mayDeliver() else { return }
+        for id in planned {
+            guard let family = candidates.first(where: { $0.signature.id == id }) else { continue }
+            if await deliver(family) {
+                familyAlerts.delivered(id, level: family.score.level, at: model.generatedAt)
+            }
         }
     }
 
     /// One alert per Sentinel finding; clicking it opens the Security page.
     func notify(sentinel finding: SentinelFinding) async {
-        guard notificationCenterAvailable else { return }
-        switch await currentStatus() {
-        case .authorized, .provisional, .ephemeral:
-            break
-        case .notDetermined:
-            if !didPromptThisLaunch {
-                didPromptThisLaunch = true
-                Task { _ = await self.requestAuthorization() }
-            }
-            return
-        default:
-            return
-        }
+        guard notificationCenterAvailable, await mayDeliver() else { return }
         let content = UNMutableNotificationContent()
         // Only a dangerous finding alerts after its process exited (a one-shot command caught in the act).
         content.title = !finding.isRunning ? "Security: a dangerous command ran"
@@ -138,36 +136,30 @@ actor UserNotificationRadarNotifier: RadarNotifying {
         return await authorizationStatus()
     }
 
-    private func notifyIfNeeded(family: ProcessFamily, at date: Date) async {
-        guard notificationCenterAvailable else {
-            return
-        }
-        let id = family.signature.id
-        if let last = lastDelivered[id], date.timeIntervalSince(last) < minimumInterval {
-            return
-        }
-
+    /// Whether macOS will show an alert now. While the answer is still open it
+    /// asks once per launch when something first deserves an alert, but never
+    /// waits for the reply: the prompt can stay up unanswered. Answering
+    /// refreshes the cached status, so a later pass delivers; the popover and
+    /// Settings offer the prompt again.
+    private func mayDeliver() async -> Bool {
         switch await currentStatus() {
         case .authorized, .provisional, .ephemeral:
-            break
+            return true
         case .notDetermined:
-            // Ask once per launch when something first deserves an alert, but
-            // never wait for the answer: the prompt can stay up unanswered.
-            // Answering refreshes the cached status, so a later pass delivers;
-            // the popover and Settings offer the prompt again.
             if !didPromptThisLaunch {
                 didPromptThisLaunch = true
                 Task { _ = await self.requestAuthorization() }
             }
-            return
-        case .denied:
-            // The delivery interval also throttles re-checks for this family.
-            lastDelivered[id] = date
-            return
-        @unknown default:
-            return
+            return false
+        default:
+            return false
         }
+    }
 
+    /// Whether the alert was posted. A refusal is not reported to the gate, so
+    /// the family is offered again (permission may be granted later).
+    private func deliver(_ family: ProcessFamily) async -> Bool {
+        let id = family.signature.id
         let content = UNMutableNotificationContent()
         content.title = "\(family.displayName) is \(family.score.level.label.lowercased())"
         content.subtitle = "\(ProcessAssessment(family: family).cause) - \(RadarFormat.bytes(family.totalPhysicalFootprintBytes)) - \(Int(family.totalCPUPercent.rounded()))% CPU"
@@ -185,10 +177,11 @@ actor UserNotificationRadarNotifier: RadarNotifying {
 
         do {
             try await UNUserNotificationCenter.current().add(request)
-            lastDelivered[id] = date
             RadarLogger.notifications.info("Delivered notification for \(family.displayName, privacy: .public)")
+            return true
         } catch {
             RadarLogger.notifications.error("Notification delivery failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 }
