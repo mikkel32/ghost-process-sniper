@@ -61,7 +61,9 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         growth.first.flatMap { $0.isCulprit ? $0 : nil }
     }
 
-    public var displayName: String { root.name }
+    /// What lists, stop previews and notifications call the family: the
+    /// root's process name, or a simulator's runtime. Built once, as sorts read it.
+    public let displayName: String
     public var childCount: Int { max(0, members.count - 1) }
     public var isKillable: Bool { !ownedIdentities.isEmpty && protectedPIDs.isEmpty }
 
@@ -108,6 +110,7 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
         growth: [MemberGrowth] = []
     ) {
         self.root = root
+        self.displayName = FamilyTitle.name(for: root)
         self.members = members
         self.totalResidentMemoryBytes = totalResidentMemoryBytes
         self.totalPhysicalFootprintBytes = totalPhysicalFootprintBytes

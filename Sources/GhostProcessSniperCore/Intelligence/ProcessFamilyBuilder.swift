@@ -171,10 +171,17 @@ public struct ProcessFamilyBuilder: Sendable {
         // Membership first, so duplicates are resolved against the real
         // families before any family is scored against them.
         let rootIdentities = Set(roots.map(\.identity))
-        let memberships = roots.compactMap { root -> (familyKey: String, root: ProcessMetrics, members: [ProcessMetrics])? in
-            let members = tree.members(of: root, rootIdentities: rootIdentities)
-            guard !members.isEmpty else { return nil }
-            return (ProcessFamily.key(signature: signature(of: root, in: tree), root: root.identity), root, members)
+        var memberships = roots.compactMap { membership(of: $0, in: tree, rootIdentities: rootIdentities) }
+        // Heavy mode counts an app by what its helpers add up to, so an app
+        // with no heavy process of its own still gets a family.
+        if settings.groupFamilies, settings.radarMode == .heavy {
+            let covered = Set(memberships.lazy.flatMap { $0.members }.map(\.pid))
+            let groups = tree.groupRoots(of: processes, userID: currentUserID, memoryGate: settings.memoryBytes / 2,
+                                         covered: covered, rootIdentities: rootIdentities)
+            if !groups.isEmpty {
+                let boundaries = rootIdentities.union(groups.map(\.identity))
+                memberships += groups.compactMap { membership(of: $0, in: tree, rootIdentities: boundaries) }
+            }
         }
         let resolvedClusters = DuplicateFamilyResolver.resolve(
             duplicateSet.clusters,
@@ -265,6 +272,16 @@ public struct ProcessFamilyBuilder: Sendable {
             isHardwareEligible: hardwareDetector.isEligibleForGenericHardwareDetection(process),
             duplicateKey: duplicateDetector.candidateKey(for: process, tokens: tokens, classification: classification)
         )
+    }
+
+    private func membership(
+        of root: ProcessMetrics,
+        in tree: ProcessTree,
+        rootIdentities: Set<ProcessIdentity>
+    ) -> (familyKey: String, root: ProcessMetrics, members: [ProcessMetrics])? {
+        let members = tree.members(of: root, rootIdentities: rootIdentities)
+        guard !members.isEmpty else { return nil }
+        return (ProcessFamily.key(signature: signature(of: root, in: tree), root: root.identity), root, members)
     }
 
     private func signature(of root: ProcessMetrics, in tree: ProcessTree) -> ProcessSignature {

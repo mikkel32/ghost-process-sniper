@@ -161,6 +161,12 @@ public struct DuplicateClusterDetector: Sendable {
         if tokens.isAppMainBinary || isSystemPath(tokens.lowerPath) {
             return false
         }
+        // Every booted device runs its own launchd_sim and its own copy of
+        // each daemon in the runtime, so devices are never copies of one
+        // another, and stopping the "older" one would shut a device down.
+        if classification.kind == .simulator {
+            return false
+        }
         if classification.confidence >= 0.2 {
             return true
         }

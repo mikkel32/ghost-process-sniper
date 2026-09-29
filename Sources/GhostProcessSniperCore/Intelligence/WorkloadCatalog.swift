@@ -257,8 +257,10 @@ public enum WorkloadCatalog {
         "previewshost", "xcodepreviews", "fsnotifier", "com.apple.dt.instruments.dtsymbolicationservice",
     ]
 
+    /// Bundle names matched whole, or followed by a space and a version.
+    /// Xcode is not here: `isXcodeBundle` knows the names it installs under.
     static let editorBundles = [
-        "xcode", "visual studio code", "cursor", "windsurf", "zed", "sublime text", "nova", "bbedit", "fleet",
+        "visual studio code", "cursor", "windsurf", "zed", "sublime text", "nova", "bbedit", "fleet",
         "intellij idea", "pycharm", "webstorm", "goland", "rider", "clion", "phpstorm", "rubymine", "android studio",
         "vscodium", "codex", "positron", "trae", "kiro", "void",
     ]
@@ -347,7 +349,7 @@ public enum WorkloadCatalog {
             (tokens.isAppMainBinary && tokens.innermostBundle == "simulator") {
             return WorkloadMatch(kind: .simulator, confidence: 0.7, reason: "iOS Simulator runtime", traits: .longLived)
         }
-        if tokens.named(ideServices) || (tokens.appBundle == "xcode" && tokens.pathComponents.contains("xpcservices")) {
+        if tokens.named(ideServices) || (tokens.appBundle.map(isXcodeBundle) == true && tokens.pathComponents.contains("xpcservices")) {
             return WorkloadMatch(kind: .ideService, confidence: 0.8, reason: "IDE indexing or preview service", traits: .longLived)
         }
         if isLanguageServer(tokens) {
@@ -410,7 +412,17 @@ public enum WorkloadCatalog {
     }
 
     static func isEditorBundle(_ app: String) -> Bool {
-        editorBundles.contains { app == $0 || app.hasPrefix($0 + " ") }
+        isXcodeBundle(app) || editorBundles.contains { app == $0 || app.hasPrefix($0 + " ") }
+    }
+
+    /// Xcode under any name the disk gives it: "Xcode", "Xcode-beta",
+    /// "Xcode_26.1", "Xcode 26", beside the release. A name that goes on
+    /// with a letter is another app: "Xcodes" is the version manager.
+    /// Shared with KillRiskAssessor, so both catalogs agree.
+    static func isXcodeBundle(_ lowerName: String) -> Bool {
+        guard lowerName.hasPrefix("xcode") else { return false }
+        guard let next = lowerName.dropFirst("xcode".count).first else { return true }
+        return !next.isLetter
     }
 
     private static func isLanguageServer(_ tokens: WorkloadTokens) -> Bool {
