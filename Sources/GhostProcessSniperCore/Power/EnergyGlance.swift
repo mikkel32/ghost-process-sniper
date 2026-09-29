@@ -4,7 +4,7 @@ import Foundation
 /// only changes when something a person would notice changes.
 public struct EnergyGlance: Equatable, Sendable {
     public let findings: [EnergyFinding]
-    public let unexpectedBlockerCount: Int
+    public let unexpectedHolderCount: Int
     public let isDischarging: Bool
     public let powerState: PowerState?
     public let chargePercent: Int?
@@ -19,7 +19,7 @@ public struct EnergyGlance: Equatable, Sendable {
 
     public init(_ report: EnergyReport) {
         findings = Array(report.findings.prefix(3))
-        unexpectedBlockerCount = report.unexpectedBlockers.count
+        unexpectedHolderCount = report.unexpectedHolderCount
         let battery = report.battery
         isDischarging = battery?.isDischarging ?? false
         powerState = battery?.powerState

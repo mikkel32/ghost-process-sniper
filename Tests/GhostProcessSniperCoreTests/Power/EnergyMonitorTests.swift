@@ -103,6 +103,7 @@ final class EnergyMonitorTests: XCTestCase {
         XCTAssertEqual(spread.consumers[0].wakeupsPerSecond, 300, accuracy: 0.01)
         XCTAssertEqual(spread.consumers[0].busiestWakeups?.perSecond ?? 0, 100, accuracy: 0.01)
         XCTAssertTrue(spread.findings.isEmpty, "three helpers at 100 a second each stay under macOS's per-process limit")
+        XCTAssertFalse(spread.consumers[0].wakesProcessorTooOften, "and the row does not colour their 300 a second")
 
         var single = EnergyDriver()
         let busy = single.run(ticks: 70) { index, date in
@@ -116,6 +117,72 @@ final class EnergyMonitorTests: XCTestCase {
         XCTAssertEqual(finding?.kind, .wakeups)
         XCTAssertEqual(finding?.headline, "Slack wakes the processor 200 times a second")
         XCTAssertTrue(finding?.detail.hasPrefix("Slack Helper (Renderer), one of its processes") ?? false)
+        XCTAssertTrue(busy.consumers[0].wakesProcessorTooOften, "the row is coloured exactly when the finding shows")
+    }
+
+    func testAHelperWakingWhileTheAppDoesRealWorkIsNeitherAFindingNorColoured() {
+        var driver = EnergyDriver()
+        let report = driver.run(ticks: 70) { index, date in
+            [
+                EnergyFixture.process(pid: 92, name: "Slack", path: slack, counters: .init(), at: date),
+                // 200 wake-ups a second while the helper computes 2 s in every 5: 0.4 of a core.
+                EnergyFixture.process(pid: 93, name: "Slack Helper (Renderer)", path: helper, parent: 92,
+                                      counters: .init(wakeups: UInt64(index) * 1_000, cpuSeconds: 2 * Double(index)),
+                                      at: date)
+            ]
+        }
+        XCTAssertEqual(report.consumers[0].busiestWakeups?.perSecond ?? 0, 200, accuracy: 0.01)
+        XCTAssertGreaterThan(report.consumers[0].averageCores, 0.25)
+        XCTAssertTrue(report.findings.isEmpty)
+        XCTAssertFalse(report.consumers[0].wakesProcessorTooOften)
+    }
+
+    func testAFamilyPageMarksTheFigureItsFindingIsAbout() {
+        let families: ([ProcessMetrics]) -> [ProcessFamily] = { [EnergyFixture.family($0)] }
+        var spreadDriver = EnergyDriver()
+        let spread = spreadDriver.run(ticks: 70, families: families) { index, date in
+            let counters = EnergyFixture.Counters(wakeups: UInt64(index) * 500)
+            return [
+                EnergyFixture.process(pid: 80, name: "Slack", path: slack, counters: counters, at: date),
+                EnergyFixture.process(pid: 81, name: "Slack Helper", path: helper, parent: 80, counters: counters, at: date),
+                EnergyFixture.process(pid: 82, name: "Slack Helper", path: helper, parent: 80, counters: counters, at: date)
+            ]
+        }
+        var busyDriver = EnergyDriver()
+        let busy = busyDriver.run(ticks: 70, families: families) { index, date in
+            [
+                EnergyFixture.process(pid: 90, name: "Slack", path: slack, counters: .init(), at: date),
+                EnergyFixture.process(pid: 91, name: "Slack Helper (Renderer)", path: helper, parent: 90,
+                                      counters: .init(wakeups: UInt64(index) * 1_000), at: date)
+            ]
+        }
+        let spreadKey = spread.consumers[0].familyKey ?? "none"
+        let busyKey = busy.consumers[0].familyKey ?? "none"
+        XCTAssertNotEqual(busyKey, "none")
+        XCTAssertFalse(spread.hasFinding(.wakeups, familyKey: spreadKey), "300 a second in all is not a finding")
+        XCTAssertTrue(busy.hasFinding(.wakeups, familyKey: busyKey))
+        XCTAssertFalse(busy.hasFinding(.heavyDiskWrites, familyKey: busyKey), "another kind of finding")
+        XCTAssertFalse(busy.hasFinding(.wakeups, familyKey: "someone else"))
+    }
+
+    func testWritesAreColouredLikeTheHeavyWritesFindingAndBuildsMayWriteMore() {
+        func run(_ kind: DevProcessKind?) -> EnergyReport {
+            var driver = EnergyDriver()
+            // 5 MB/s for ten minutes and more.
+            return driver.run(ticks: 130, families: { [EnergyFixture.family($0, kind: kind)] }) { index, date in
+                [EnergyFixture.process(pid: 95, name: "job", path: "/usr/local/bin/job",
+                                       counters: .init(diskBytes: UInt64(index) * 25_000_000), at: date)]
+            }
+        }
+        let plain = run(nil)
+        XCTAssertEqual(plain.consumers[0].diskWriteBytesPerSecond, 5_000_000, accuracy: 1)
+        XCTAssertTrue(plain.consumers[0].writesTooMuch)
+        XCTAssertEqual(plain.findings.map(\.kind), [.heavyDiskWrites])
+
+        let build = run(.swiftBuild)
+        XCTAssertEqual(build.consumers[0].devKind, .swiftBuild, "the family's kind travels with the consumer")
+        XCTAssertFalse(build.consumers[0].writesTooMuch, "a build writes 5 MB/s for a living")
+        XCTAssertTrue(build.findings.isEmpty)
     }
 
     // MARK: - Sleep blockers
@@ -144,6 +211,39 @@ final class EnergyMonitorTests: XCTestCase {
         XCTAssertEqual(safari?.isSystem, false)
         XCTAssertEqual(report.blockers.first { $0.displayName == "powerd" }?.isSystem, true)
         XCTAssertEqual(report.unexpectedBlockers.map(\.displayName), ["Safari"])
+    }
+
+    func testAnAppHoldingBothTheMacAndItsDisplayAwakeIsCountedOnce() {
+        let started = EnergyFixture.start.addingTimeInterval(-3 * 3_600)
+        func held(_ pid: Int32, _ name: String, _ effect: SleepAssertionEffect) -> SleepAssertion {
+            SleepAssertion(pid: pid, processName: name,
+                           type: effect == .systemSleep ? "PreventUserIdleSystemSleep" : "PreventUserIdleDisplaySleep",
+                           effect: effect, name: "Electron", startedAt: started)
+        }
+        let assertions = ScriptedAssertions([
+            held(600, "Zoom", .systemSleep), held(600, "Zoom", .displaySleep),
+            held(610, "Notes", .systemSleep),
+            held(620, "Amphetamine", .systemSleep), held(620, "Amphetamine", .displaySleep),
+            held(90, "powerd", .systemSleep), held(90, "powerd", .displaySleep)
+        ])
+        var driver = EnergyDriver(assertions: assertions)
+        let report = driver.run(ticks: 2) { _, date in
+            [
+                EnergyFixture.process(pid: 600, name: "Zoom", path: "/Applications/Zoom.app/Contents/MacOS/Zoom",
+                                      counters: .init(), at: date),
+                EnergyFixture.process(pid: 610, name: "Notes", path: "/Applications/Notes.app/Contents/MacOS/Notes",
+                                      counters: .init(), at: date),
+                EnergyFixture.process(pid: 620, name: "Amphetamine",
+                                      path: "/Applications/Amphetamine.app/Contents/MacOS/Amphetamine",
+                                      counters: .init(), at: date),
+                EnergyFixture.process(pid: 90, name: "powerd", path: "/usr/libexec/powerd", counters: .init(), at: date)
+            ]
+        }
+        XCTAssertEqual(report.blockers.count, 7, "the awake list keeps one row per holder and effect")
+        XCTAssertEqual(report.unexpectedBlockers.count, 3)
+        XCTAssertEqual(report.unexpectedHolderCount, 2, "Zoom and Notes: the apps, not the assertions")
+        XCTAssertEqual(EnergyGlance(report).unexpectedHolderCount, 2)
+        XCTAssertEqual(report.blockers.filter(\.isSystem).holderCount, 1, "and one macOS service holds two")
     }
 
     func testKeepAwakeUtilitiesAndBoundedCaffeinateAreIntentional() {
