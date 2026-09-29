@@ -56,6 +56,16 @@ final class ScriptedBattery: BatterySource, @unchecked Sendable {
         }
     }
 
+    /// Moves the power controller's running totals on, as the registry does
+    /// between its updates: `samples` more one-second samples averaging `watts`.
+    func advanceLoad(samples: Double, watts: Double) {
+        set { reading in
+            let old = reading.systemLoadAccumulator ?? PowerAccumulator(sum: 10_000_000_000, samples: 450_000)
+            reading.systemLoadAccumulator = PowerAccumulator(sum: old.sum + samples * watts * 1_000,
+                                                             samples: old.samples + samples)
+        }
+    }
+
     /// 60 Wh left at 12.5 V, discharging at `watts`.
     static func discharging(watts: Double) -> ScriptedBattery {
         ScriptedBattery(BatteryReading(
@@ -63,6 +73,16 @@ final class ScriptedBattery: BatterySource, @unchecked Sendable {
             currentCapacityMilliampHours: 4_800, fullChargeCapacityMilliampHours: 6_000,
             designCapacityMilliampHours: 6_000, voltageMillivolts: 12_500,
             amperageMilliamps: -watts / 12.5 * 1_000, batteryDischargeWatts: watts, cycleCount: 300,
+            readAt: .distantPast))
+    }
+
+    /// On a charger rated `rated` W, `amperage` mA into (+) or out of (-) a 12.5 V battery at 76%.
+    static func pluggedIn(amperage: Double, load: Double, input: Double, rated: Double?) -> ScriptedBattery {
+        ScriptedBattery(BatteryReading(
+            hasBattery: true, onExternalPower: true, isCharging: true, chargePercent: 76,
+            currentCapacityMilliampHours: 4_800, fullChargeCapacityMilliampHours: 6_000,
+            designCapacityMilliampHours: 6_000, voltageMillivolts: 12_500, amperageMilliamps: amperage,
+            systemLoadWatts: load, adapterInputWatts: input, adapterRatedWatts: rated, cycleCount: 300,
             readAt: .distantPast))
     }
 }

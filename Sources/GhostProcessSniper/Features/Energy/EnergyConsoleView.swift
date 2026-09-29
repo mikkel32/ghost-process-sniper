@@ -148,9 +148,12 @@ struct EnergyHero: View {
     let report: EnergyReport
 
     private var battery: BatteryOutlook? { report.battery }
+    /// The header's words come from Core, where they are tested.
+    private var headline: EnergyHeadline { EnergyHeadline(report) }
 
     private var tint: Color {
         if let top = report.topFinding { return top.severity == .attention ? .orange : .yellow }
+        if battery?.powerState == .drainingOnPower { return .orange }
         if let minutes = battery?.minutesRemaining, minutes < 20 { return Color(nsColor: .systemRed) }
         return .green
     }
@@ -167,28 +170,10 @@ struct EnergyHero: View {
         }
     }
 
-    private var title: String {
-        guard let battery else { return "Energy use" }
-        if battery.isDischarging {
-            if let minutes = battery.minutesRemaining {
-                return "About \(EnergyFormat.duration(minutes * 60)) of battery left"
-            }
-            return battery.chargePercent.map { "On battery · \(Int($0.rounded()))%" } ?? "On battery"
-        }
-        guard let charge = battery.chargePercent else {
-            return battery.drawWatts.map { "Drawing \(EnergyFormat.watts($0))" } ?? "Energy use"
-        }
-        return battery.isCharging ? "Charging · \(Int(charge.rounded()))%" : "Plugged in · \(Int(charge.rounded()))%"
-    }
-
     private var subtitle: String {
         var parts: [String] = []
-        if let draw = battery?.drawWatts {
-            parts.append("Your Mac is drawing \(EnergyFormat.watts(draw))")
-        }
-        if report.perProcessEnergy, report.measuredWatts > 0 {
-            parts.append("apps and jobs account for \(EnergyFormat.watts(report.measuredWatts)) of it")
-        }
+        if let draw = headline.drawSentence { parts.append(draw) }
+        if let share = headline.attributionSentence { parts.append(share) }
         let awake = report.unexpectedBlockers.count
         if awake > 0 { parts.append(awake == 1 ? "1 app is keeping it awake" : "\(awake) apps are keeping it awake") }
         return parts.isEmpty ? "Measuring energy for every process" : parts.joined(separator: " · ")
@@ -208,7 +193,7 @@ struct EnergyHero: View {
                         .font(.system(size: 9, weight: .black))
                         .tracking(1.2)
                         .foregroundStyle(tint)
-                    Text(title)
+                    Text(headline.title)
                         .font(.system(size: 25, weight: .bold, design: .rounded))
                         .contentTransition(.numericText())
                     Text(subtitle)
@@ -221,7 +206,7 @@ struct EnergyHero: View {
                     sparkline
                 }
             }
-            if let battery, battery.healthPercent != nil || battery.cycleCount != nil || battery.adapterInputWatts != nil {
+            if let battery, battery.healthPercent != nil || battery.cycleCount != nil || headline.chargerTag != nil {
                 WrappingHStack(spacing: 6) {
                     if let health = battery.healthPercent {
                         EnergyTag(text: "Battery health \(Int(health.rounded()))%", systemImage: "heart.fill",
@@ -230,9 +215,8 @@ struct EnergyHero: View {
                     if let cycles = battery.cycleCount {
                         EnergyTag(text: "\(cycles) cycles", systemImage: "arrow.triangle.2.circlepath", color: .secondary)
                     }
-                    if let adapter = battery.adapterInputWatts, adapter > 0 {
-                        EnergyTag(text: "Charger \(EnergyFormat.watts(adapter))", systemImage: "powerplug.fill",
-                                  color: .secondary)
+                    if let charger = headline.chargerTag {
+                        EnergyTag(text: charger, systemImage: "powerplug.fill", color: .secondary)
                     }
                 }
             }

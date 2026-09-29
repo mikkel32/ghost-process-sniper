@@ -111,6 +111,17 @@ final class EnergyFindingRulesTests: XCTestCase {
         XCTAssertTrue(evaluate(&rules, consumers: [heavy], battery: plugged).isEmpty)
     }
 
+    func testTheDrainIsJudgedAgainstTheFiveMinuteDrawItIsAveragedOver() {
+        // The last minute spiked to 30 W, but over the five minutes the app was measured the Mac drew 12 W.
+        let battery = BatteryOutlook(chargePercent: 70, isDischarging: true, isCharging: false, drawWatts: 30,
+                                     remainingWattHours: 50, minutesRemaining: 100, healthPercent: 90,
+                                     cycleCount: 100, adapterInputWatts: nil, averageDrawWatts: 12)
+        var rules = EnergyFindingRules()
+        let finding = evaluate(&rules, consumers: [consumer("Chrome", watts: 4, gained: 125)], battery: battery).first
+        XCTAssertEqual(finding?.kind, .batteryDrain, "4 W is a third of 12 W, though not a fifth of 30 W")
+        XCTAssertEqual(finding?.detail, "It used \(EnergyFormat.watts(4)) of the \(EnergyFormat.watts(12)) your Mac is drawing, averaged over 5 minutes.")
+    }
+
     func testFindingsLeadWithTheMostUrgent() {
         var rules = EnergyFindingRules()
         let findings = evaluate(&rules, consumers: [consumer(wakeups: 200)], blockers: [blocker(heldFor: 5 * 3_600)])

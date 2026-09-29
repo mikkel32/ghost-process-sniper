@@ -230,4 +230,44 @@ final class EnergyMonitorTests: XCTestCase {
         XCTAssertEqual(first, second)
         XCTAssertEqual(second.batteryLine?.hasPrefix("On battery 80%"), true)
     }
+
+    // MARK: - The header's power state
+
+    private func idle(_ index: Int, _ date: Date) -> [ProcessMetrics] {
+        [EnergyFixture.process(pid: 1, name: "x", path: "/x", counters: .init(joules: 2 * Double(index)), at: date)]
+    }
+
+    func testTheChargerIsLabelledByItsRatingAndTheStateFollowsTheFlow() {
+        let battery = ScriptedBattery.pluggedIn(amperage: 2_540, load: 31, input: 39, rated: 65)
+        var driver = EnergyDriver(battery: battery, tick: 2)
+        let charging = driver.run(ticks: 3, processes: idle)
+        XCTAssertEqual(charging.battery?.adapterRatedWatts, 65)
+        XCTAssertEqual(charging.battery?.powerState, .charging)
+        XCTAssertEqual(EnergyHeadline(charging).chargerTag, "Charger \(EnergyFormat.watts(65))")
+        XCTAssertEqual(EnergyHeadline(charging).title, "Charging \u{00B7} 76%")
+
+        // The Mac now wants 94 W of a 65 W charger: the flag still says charging, the current says otherwise.
+        battery.set { $0.amperageMilliamps = -2_300; $0.systemLoadWatts = 94; $0.adapterInputWatts = 65 }
+        let short = driver.run(ticks: 2, processes: idle)
+        XCTAssertEqual(short.battery?.powerState, .drainingOnPower)
+        XCTAssertEqual(EnergyHeadline(short).title, "Draining while plugged in \u{00B7} 76%")
+        XCTAssertEqual(EnergyHeadline(short).chargerTag, "Charger \(EnergyFormat.watts(65))", "the chip does not move with load")
+
+        battery.set { $0.onExternalPower = false; $0.isCharging = false }
+        let unplugged = driver.run(ticks: 2, processes: idle)
+        XCTAssertEqual(unplugged.battery?.powerState, .onBattery)
+        XCTAssertNil(unplugged.battery?.adapterRatedWatts, "no charger, no rating")
+    }
+
+    func testTheStateHoldsAcrossScansThatDriftAcrossTheDeadBand() {
+        let battery = ScriptedBattery.pluggedIn(amperage: -2_300, load: 94, input: 65, rated: 65)
+        var driver = EnergyDriver(battery: battery, tick: 2)
+        XCTAssertEqual(driver.run(ticks: 2, processes: idle).battery?.powerState, .drainingOnPower)
+        battery.set { $0.amperageMilliamps = -64 }     // -0.8 W: still a drain, only a smaller one
+        XCTAssertEqual(driver.run(ticks: 2, processes: idle).battery?.powerState, .drainingOnPower)
+        battery.set { $0.amperageMilliamps = 0 }
+        XCTAssertEqual(driver.run(ticks: 2, processes: idle).battery?.powerState, .pluggedIn)
+        battery.set { $0.amperageMilliamps = -64 }     // and from here it is too small to start one
+        XCTAssertEqual(driver.run(ticks: 2, processes: idle).battery?.powerState, .pluggedIn)
+    }
 }

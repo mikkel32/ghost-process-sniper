@@ -56,6 +56,23 @@ final class PowerReadingTests: XCTestCase {
         XCTAssertNil(BatteryReading.none.drawWatts)
     }
 
+    func testHealthFollowsTheCapacityMacOSDerivesMaximumCapacityFrom() {
+        // The raw maximum reads 4,374 mAh, macOS's smoothed figure 4,524 mAh (System Settings: 75%).
+        var reading = BatteryReading(
+            hasBattery: true, onExternalPower: true, isCharging: true, currentCapacityMilliampHours: 4_000,
+            fullChargeCapacityMilliampHours: 4_374, designCapacityMilliampHours: 6_075,
+            nominalChargeCapacityMilliampHours: 4_524, voltageMillivolts: 12_500, readAt: Date())
+        XCTAssertEqual(reading.healthPercent ?? 0, 74.47, accuracy: 0.01)
+        XCTAssertEqual(reading.fullChargeWattHours ?? 0, 4_374 * 12.5 / 1_000, accuracy: 1e-9,
+                       "remaining and full stay on the raw pair so they agree with each other")
+        reading.nominalChargeCapacityMilliampHours = nil
+        XCTAssertEqual(reading.healthPercent ?? 0, 72.0, accuracy: 0.01, "Intel Macs have no such key")
+        reading.nominalChargeCapacityMilliampHours = 0
+        XCTAssertEqual(reading.healthPercent ?? 0, 72.0, accuracy: 0.01, "a zero is not a reading")
+        reading.nominalChargeCapacityMilliampHours = 7_000
+        XCTAssertEqual(reading.healthPercent, 100, "never above the design capacity")
+    }
+
     func testPowerAssertionsKeepOnlyWhatHoldsTheMacOrDisplayAwake() {
         let started = Date(timeIntervalSince1970: 1_000)
         let audio = SleepAssertion.parse(pid: 413, entry: [

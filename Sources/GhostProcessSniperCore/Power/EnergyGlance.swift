@@ -6,7 +6,7 @@ public struct EnergyGlance: Equatable, Sendable {
     public let findings: [EnergyFinding]
     public let unexpectedBlockerCount: Int
     public let isDischarging: Bool
-    public let isCharging: Bool
+    public let powerState: PowerState?
     public let chargePercent: Int?
     /// Rounded to five minutes.
     public let minutesRemaining: Int?
@@ -22,7 +22,7 @@ public struct EnergyGlance: Equatable, Sendable {
         unexpectedBlockerCount = report.unexpectedBlockers.count
         let battery = report.battery
         isDischarging = battery?.isDischarging ?? false
-        isCharging = battery?.isCharging ?? false
+        powerState = battery?.powerState
         chargePercent = battery?.chargePercent.map { Int($0.rounded()) }
         minutesRemaining = battery?.minutesRemaining.map { Int(($0 / 5).rounded()) * 5 }
         drawWatts = battery?.drawWatts.map { Int($0.rounded()) }
@@ -43,7 +43,8 @@ public struct EnergyGlance: Equatable, Sendable {
                 parts.append("\(EnergyFormat.duration(Double(minutesRemaining) * 60)) left")
             }
         } else if let chargePercent {
-            parts.append(isCharging ? "Charging \(chargePercent)%" : "Plugged in \(chargePercent)%")
+            parts.append(powerState == .charging ? "Charging \(chargePercent)%" : "Plugged in \(chargePercent)%")
+            if powerState == .drainingOnPower { parts.append("battery draining") }
         }
         if let drawWatts, drawWatts > 0 { parts.append("drawing \(drawWatts) W") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
