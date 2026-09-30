@@ -336,8 +336,12 @@ public enum GhostHeatModel {
         // gates distinguish them.
         let corroboration = sustained + contextVotes
         let criticalForecast = forecastIsHeatTrusted && forecast.confidence >= 0.62 && forecast.state >= .runaway
+        // Critical pressure makes Urgent only the families the Mac is short
+        // of memory because of: a quarter of what is in use, or of the growth.
+        // It made every big app Urgent at once; the others stay Review.
+        let starvesTheMac = pressure.level == .critical && share.boostScale >= 1
         let refinedLevel: GhostLevel
-        if heat >= 80, confidence >= 0.62, (corroboration >= 2 || criticalForecast || pressure.level == .critical) {
+        if heat >= 80, confidence >= 0.62, (corroboration >= 2 || criticalForecast || starvesTheMac) {
             refinedLevel = .critical
         } else if heat >= 58, confidence >= 0.45,
                   (corroboration >= 1 || (forecastIsHeatTrusted && forecast.state >= .leaking)) {
