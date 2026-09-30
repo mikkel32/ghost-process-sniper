@@ -20,7 +20,7 @@ The **Overview** leads with one verdict: what, if anything, needs doing. Its hea
 
 Below it:
 
-- **Risk Queue** and **Warming Up**: families that need attention now, and early warnings, each row saying *why* ("Over its memory limit", "1.7x its usual size", "2 copies running", "Memory is tight on this Mac"). Risk rows show their Quick Stop on hover or keyboard focus; warming rows offer it only in the context menu, because an early warning is not yet a reason to stop. Warming Up lists families with an early sign first, then those merely watched for size. The Risk Queue shows its full count, with **Show all N** when rows are hidden; when both lists are empty, one slim all-clear strip replaces them (the cards return at once when a row appears, and give way again after 30 seconds of calm).
+- **Risk Queue** and **Warming Up**: families that need attention now, and early warnings, each row saying *why* ("Over its memory limit", "1.7x its usual size", "2 copies running", "Holds 22% of scarce memory", "Busy-looping on one core"). Risk rows show their Quick Stop on hover or keyboard focus; warming rows offer it only in the context menu, because an early warning is not yet a reason to stop. Warming Up lists families with an early sign first, then those merely watched for size. The Risk Queue shows its full count, with **Show all N** when rows are hidden; when both lists are empty, one slim all-clear strip replaces them (the cards return at once when a row appears, and give way again after 30 seconds of calm).
 - **Where your resources go**: the Live Radar, memory share, the memory pulse and recent incidents.
 - **Summary cards**: **Families** opens every family, **Needs review** the Hot ones and credible escalations (the **Review** filter), **Leaks** every credible leak, **Duplicates** the overlap review, and **Memory** the processes ordered by footprint.
 - **Heat & CPU activity**: temperatures and the work behind them (see [Temperatures](#temperatures)). It moves up to second place, under the verdict, only while macOS reports serious throttling or the hottest sensor has stayed at 90 °C or more for 30 seconds, and moves back after a calm minute.
@@ -38,6 +38,8 @@ Below it:
 - **The sweep** lights each blip as it passes. In Low Power Mode it steps at 10 frames a second; it rests with Reduce Motion and while the window is covered or Ghost is in the background. The blips move with every scan either way.
 
 The levels **Stable**, **Observe**, **Review**, **Urgent** and **Measuring** summarize how much attention a family needs. A Hot or Critical level is held until the family has read lower for 20 seconds and then steps down one level at a time, so a family hovering around a threshold does not flicker.
+
+Growth is called a leak only once it has lasted: a minute of steady climbing past an app's first 150 seconds, at the leak limit, or, for an app about to cross its memory limit, a slower sustained climb. Slower growth in an app already past its limit is watched until twenty minutes prove it. Builds and test runs are never called leaks, because they give their memory back when they end; their size still counts.
 
 ## All Processes
 
