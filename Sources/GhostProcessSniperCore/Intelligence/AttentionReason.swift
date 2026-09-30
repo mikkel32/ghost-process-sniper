@@ -12,7 +12,8 @@ struct AttentionReason: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case largeButNormal(usual: UInt64)
         case aboveUsual(multiple: Double, usual: UInt64)
-        case hostPressure(detail: String)
+        /// `share` is the family's share of the memory in use.
+        case hostPressure(share: Double?, detail: String)
         case overLimit(detail: String)
         case copies(Int)
         case forgotten(detail: String)
@@ -67,7 +68,7 @@ struct AttentionReason: Equatable, Sendable {
         // pressure component alone says little: any family over 512 MB
         // with a sliver of the memory in use carries it.
         if let memory = component("memory"), memory.level >= .hot {
-            if let pressure = component("pressure") { return .hostPressure(detail: pressure.detail) }
+            if let pressure = component("pressure") { return .hostPressure(share: pressure.ratio, detail: pressure.detail) }
             return .overLimit(detail: memory.detail)
         }
         // The score's own gate: copies it did not count are not why it is here.
@@ -115,7 +116,11 @@ struct AttentionReason: Equatable, Sendable {
         switch kind {
         case .largeButNormal: GhostHeat.usualSizeEvidence
         case let .aboveUsual(multiple, _): "\(RadarFormat.fixed1(multiple))x its usual size"
-        case .hostPressure: "Memory is tight on this Mac"
+        // Every big family carries the pressure while the Mac is short:
+        // its own share tells a queue of them apart.
+        case let .hostPressure(share, _):
+            share.map { Int(($0 * 100).rounded()) }.flatMap { $0 >= 1 ? "Holds \($0)% of scarce memory" : nil }
+                ?? "Memory is tight on this Mac"
         case .overLimit: "Over its memory limit"
         case let .copies(count): "\(count) copies running"
         case .forgotten: "Probably forgotten"
@@ -138,7 +143,7 @@ struct AttentionReason: Equatable, Sendable {
         switch kind {
         case let .largeButNormal(usual): "\(memory), about its usual \(RadarFormat.bytes(usual)); \(cpu) CPU."
         case let .aboveUsual(_, usual): "\(memory) against a usual \(RadarFormat.bytes(usual)); \(cpu) CPU."
-        case let .hostPressure(detail): "\(detail); \(memory) tracked footprint, \(cpu) CPU."
+        case let .hostPressure(_, detail): "\(detail); \(memory) tracked footprint, \(cpu) CPU."
         case let .overLimit(detail): "\(detail); \(cpu) CPU."
         case let .copies(count): "\(count) independent copies are running; this one holds \(memory), \(cpu) CPU."
         case let .forgotten(detail): "\(detail); \(memory) tracked footprint, \(cpu) CPU."

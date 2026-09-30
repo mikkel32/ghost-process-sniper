@@ -531,7 +531,8 @@ public struct RadarIntelligence: Sendable {
             title: "Host memory pressure",
             detail: "Holds \(share.text) while system pressure is \(pressure.level.label.lowercased())",
             impact: boost,
-            level: pressure.level.ghostLevel
+            level: pressure.level.ghostLevel,
+            ratio: share.footprintShare
         )
         let value = min(100, score.value + boost)
         return GhostScore(

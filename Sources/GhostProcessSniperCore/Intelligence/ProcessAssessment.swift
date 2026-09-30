@@ -202,7 +202,7 @@ public struct ProcessAssessment: Equatable, Sendable {
         reason = specific?.text ?? cause
     }
 
-    /// The reason to end a sentence with: "ChatGPT: memory is tight on this Mac".
+    /// The reason to end a sentence with: "ChatGPT: holds 11% of scarce memory".
     public var reasonInSentence: String { AttentionReason.inSentence(reason) }
 
     /// Over its memory limit with CPU well inside its own: a busy core or
