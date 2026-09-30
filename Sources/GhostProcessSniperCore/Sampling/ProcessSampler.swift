@@ -84,7 +84,7 @@ public actor NativeProcessSampler: ProcessSampling {
 
         // Cold start and big backlogs get a one-off allowance so paths and argv
         // fill in within a few ticks instead of minutes.
-        if completedSampleCount < 3 || tick.telemetryJobs.count > 64 {
+        if completedSampleCount < Self.coldStartTicks || tick.telemetryJobs.count > 64 {
             tick.deadline.budgetMilliseconds += Self.backlogAllowanceMilliseconds
         }
         runPathLane(now: now, tick: &tick)
@@ -251,10 +251,15 @@ public actor NativeProcessSampler: ProcessSampling {
     }
 
     /// Paths are cheap and decide app and bundle recognition, so every
-    /// identity without one gets it this tick, deadline permitting.
+    /// identity without one gets it this tick, deadline permitting. The first
+    /// ticks read them past the deadline, up to an allowance: a Mac under load
+    /// can spend a cold tick's budget before this lane, and without paths an
+    /// app's helpers stood alone as families of their own for half a minute.
     private func runPathLane(now: Date, tick: inout SamplerTick) {
+        let limit = tick.deadline.budgetMilliseconds +
+            (completedSampleCount < Self.coldStartTicks ? Self.coldStartPathAllowanceMilliseconds : 0)
         for index in tick.telemetryJobs.indices where tick.telemetryJobs[index].needsPath {
-            if tick.deadline.isExpired(at: source.now()) {
+            if tick.deadline.elapsedMilliseconds(at: source.now()) >= limit {
                 tick.counters.didHitDeadline = true
                 return
             }
@@ -443,6 +448,8 @@ public actor NativeProcessSampler: ProcessSampling {
 
     private static let sequentialJobLimit = 8
     private static let backlogAllowanceMilliseconds = 30.0
+    private static let coldStartTicks = 3
+    private static let coldStartPathAllowanceMilliseconds = 400.0
     private static let fullCensusMilliseconds = 40.0
     private static let freshForensicsAge: TimeInterval = 60
     private static let quietForensicsMaxAge: TimeInterval = 600
