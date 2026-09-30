@@ -112,6 +112,11 @@ final class RadarConsoleSession {
         currentDerivedSnapshot().familyRows
     }
 
+    /// Every tracked family behind `familyItems`, from the same snapshot.
+    var familyTotal: Int {
+        currentDerivedSnapshot().familyTotal
+    }
+
     var compactFamilyItems: [CompactSidebarRowModel] {
         currentDerivedSnapshot().compactFamilyRows
     }
