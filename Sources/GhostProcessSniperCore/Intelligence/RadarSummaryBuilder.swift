@@ -28,7 +28,7 @@ enum RadarSummaryBuilder {
         } else if let topGPU = families.first(where: { $0.totalGPUPercent >= 25 }) {
             statusText = "GPU \(Int(topGPU.totalGPUPercent.rounded()))%"
         } else if hotCount > 0 {
-            statusText = "\(hotCount) hot"
+            statusText = "\(hotCount) to review"
         } else if let top, top.score.level == .watch {
             statusText = "Watching"
         } else if let top, top.totalPhysicalFootprintBytes > 0 {

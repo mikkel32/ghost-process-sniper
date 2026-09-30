@@ -17,7 +17,7 @@ struct ProcessBrowserView: View {
         let items = session.familyItems
         let search = session.searchResults
         let rows = session.browserRows
-        let familyCount = session.monitor.summary.familyCount
+        let familyCount = session.familyTotal
         return VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .top, spacing: 16) {

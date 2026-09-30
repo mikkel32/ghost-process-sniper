@@ -308,7 +308,7 @@ public struct FamilyVerdict: Equatable, Sendable {
             case let .aboveUsual(_, usual):
                 headline = "Bigger than usual for it"
                 observed = "\(RadarFormat.bytes(family.totalPhysicalFootprintBytes)) against a usual \(RadarFormat.bytes(usual)). "
-            case let .hostPressure(detail):
+            case let .hostPressure(_, detail):
                 headline = "Memory is tight on this Mac"
                 observed = sentence(detail) + " "
             default:

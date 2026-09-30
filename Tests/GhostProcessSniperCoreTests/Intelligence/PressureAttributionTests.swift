@@ -11,9 +11,9 @@ final class PressureAttributionTests: XCTestCase {
                              availableBytes: available, compressedBytes: 2 << 30)
     }
 
-    /// A 2 GB family, growing `rate` MB/min over eight samples.
+    /// A 2 GB family, growing `rate` MB/min for a minute: long enough to be a leak.
     private func family(pid: Int32, rate: Double) -> ProcessFamily {
-        let megabytes = (0..<8).map { 2_048 + Double($0) * rate * 5 / 60 }
+        let megabytes = (0..<13).map { 2_048 + Double($0) * rate * 5 / 60 }
         let root = Fixture.process(pid: pid, megabytes: megabytes.last ?? 2_048, cpu: 2)
         return Fixture.family(root, trend: Fixture.trend(megabytes: megabytes))
     }

@@ -31,7 +31,7 @@ final class ProcessBrowserRowReasonTests: XCTestCase {
     func testARowSaysHowManyProcessesTheFamilyHoldsAndWhy() throws {
         let family = try chatGPT()
         XCTAssertEqual(family.members.count, 3)
-        XCTAssertEqual(browserRow(family).detail, "3 processes · Memory is tight on this Mac")
+        XCTAssertEqual(browserRow(family).detail, "3 processes · Holds 11% of scarce memory")
     }
 
     func testALoneProcessIsNotCountedAsAGroup() throws {

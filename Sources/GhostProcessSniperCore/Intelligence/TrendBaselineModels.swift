@@ -61,6 +61,17 @@ public struct TrendMetrics: Equatable, Sendable {
         sampleCount >= 4 && (samples.isEmpty || observedSeconds >= 15)
     }
 
+    /// The shortest climb a leak call may rest on. Fifteen seconds make a
+    /// slope worth drawing, but opening a document, a tab or a simulator's
+    /// device climbs that long too; a leak keeps climbing past it.
+    public static let sustainedGrowthSeconds: TimeInterval = 60
+
+    /// Enough history to call growth sustained: a leak, a Critical, an
+    /// alert. Hand-built metrics carry no dates and are trusted, as above.
+    public var growthIsSustained: Bool {
+        hasSustainedHistory && (samples.isEmpty || observedSeconds >= Self.sustainedGrowthSeconds)
+    }
+
     public init(
         memoryVelocityMegabytesPerMinute: Double,
         cpuSlopePerMinute: Double,

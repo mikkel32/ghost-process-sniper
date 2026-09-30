@@ -16,6 +16,18 @@ final class ConsoleSearchProjectionTests: XCTestCase {
         XCTAssertTrue(result.search.processRows.isEmpty, "a tracked helper is never listed again as untracked")
     }
 
+    /// All Processes read "175 of 26" and "26 of 25": the rows came from one
+    /// snapshot and the total from the live summary, a scan apart.
+    func testTheTotalComesFromTheSnapshotTheRowsCameFrom() {
+        let other = makeFamily(metrics(300, "node-exporter", command: "node-exporter"), memory: 900_000_000)
+        let all = project("", families: [npm, other])
+        XCTAssertEqual(all.familyRows.count, 2)
+        XCTAssertEqual(all.familyTotal, 2)
+        let searched = project("vite", families: [npm, other])
+        XCTAssertEqual(searched.familyRows.count, 1)
+        XCTAssertEqual(searched.familyTotal, 2, "a search narrows the rows, not the total")
+    }
+
     func testUntrackedProcessesAppearWithHonestMetrics() {
         let result = project("safari")
         XCTAssertTrue(result.familyRows.isEmpty)

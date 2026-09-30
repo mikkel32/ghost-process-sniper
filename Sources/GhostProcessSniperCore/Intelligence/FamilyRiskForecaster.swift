@@ -206,11 +206,13 @@ public struct FamilyRiskForecaster: Sendable {
         if cpuEvidence.isRunaway {
             return .runaway
         }
-        // Being above the memory limit is not a leak; growth is. Near the
-        // limit a slower but real, sustained climb is enough, unless it only
-        // refills the family to its usual size: a big app is over its limit
-        // by design. Growth past the leak limit itself is a leak either way.
-        let nearLimit = horizon == .imminent || horizon == .breached
+        // Being above the memory limit is not a leak; growth is. About to
+        // cross the limit, a slower but real, sustained climb is enough,
+        // unless it only refills the family to its usual size. Already past
+        // it, a big app's ordinary use climbs that fast too: slow creep there
+        // is proven over twenty minutes (slowLeak), not one. Growth past the
+        // leak limit itself is a leak either way.
+        let nearLimit = horizon == .imminent
         let fastGrowth = memoryVelocity >= settings.leakVelocityMegabytesPerMinute
         let leakEntry = fastGrowth ||
             (nearLimit && family.trend.hasSustainedHistory &&
@@ -219,7 +221,10 @@ public struct FamilyRiskForecaster: Sendable {
             // Positive net velocity with a reclaiming shape (sawtooth) or a
             // single allocation step is not an accumulating leak. Startup
             // allocation bursts get the same benefit of the doubt.
-            if pattern.indicatesAccumulation, !inStartupGrace, fastGrowth || !refilling {
+            // Under a minute of climbing is warming, however steep, and so is a
+            // build's climb: it gives the memory back when it ends.
+            if pattern.indicatesAccumulation, !inStartupGrace, family.trend.growthIsSustained, !family.isOneShotBuild,
+               fastGrowth || !refilling {
                 return .leaking
             }
             return .warming
@@ -454,6 +459,9 @@ public struct FamilyRiskForecaster: Sendable {
         }
         if inStartupGrace, memoryVelocity > 0 {
             parts.append("inside startup grace window")
+        }
+        if family.isOneShotBuild, memoryVelocity > 0, !slowLeak {
+            parts.append("build or test work returns its memory when it ends")
         }
         if pattern.pattern == .sawtooth {
             parts.append("churns in reclaim cycles (likely GC), not accumulating")

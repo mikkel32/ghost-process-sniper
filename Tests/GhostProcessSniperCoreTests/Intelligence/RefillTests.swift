@@ -100,17 +100,36 @@ final class RefillTests: XCTestCase {
         XCTAssertTrue(refilling.whyNow.contains("back toward its usual size"), refilling.whyNow)
     }
 
+    /// About to cross its limit (800 MB climbing to 907 MB, three minutes
+    /// from 1 GB), a climb that is not a refill is a leak.
     func testAClimbThatIsNotARefillIsStillALeak() {
-        XCTAssertEqual(forecast(from: 1_500, rate: 40, usualMegabytes: nil).state, .leaking, "no learned usual size")
-        XCTAssertEqual(forecast(from: 1_500, rate: 40, usualMegabytes: 1_200).state, .leaking, "already past its usual size")
+        XCTAssertEqual(forecast(from: 800, rate: 40, usualMegabytes: nil).horizon, .imminent)
+        XCTAssertEqual(forecast(from: 800, rate: 40, usualMegabytes: nil).state, .leaking, "no learned usual size")
+        XCTAssertEqual(forecast(from: 800, rate: 40, usualMegabytes: 500).state, .leaking, "already past its usual size")
+        XCTAssertEqual(forecast(from: 800, rate: 40, usualMegabytes: 2_450).state, .leaking, "far below its usual size, so not a refill")
+        XCTAssertEqual(forecast(from: 800, rate: 40, usualMegabytes: 1_500).state, .warming, "climbing back toward its usual size")
         XCTAssertEqual(forecast(from: 1_500, rate: 400, usualMegabytes: 2_450).state, .leaking, "would leave the usual range within minutes")
-        XCTAssertEqual(forecast(from: 950, rate: 40, usualMegabytes: 2_450).state, .leaking, "far below its usual size, so not a refill")
+    }
+
+    /// Claude at 4.1 GB, four times its 1 GB limit, climbing 44 MB/min while
+    /// in use was "Leaking" a minute in, and so was every big app while the
+    /// 2.2 baselines relearned. Past its limit, a big app's ordinary use
+    /// climbs that fast: slow growth there is warming until it is fast
+    /// (the leak limit) or proven over twenty minutes.
+    func testSlowGrowthPastTheLimitIsWarmingUntilItIsFastOrProven() {
+        for usual in [nil, 1_200.0, 2_450] as [Double?] {
+            let slow = forecast(from: 1_500, rate: 40, usualMegabytes: usual)
+            XCTAssertEqual(slow.horizon, .breached)
+            XCTAssertEqual(slow.state, .warming, "usual \(String(describing: usual))")
+            XCTAssertTrue(slow.whyNow.contains("above its memory limit"), slow.whyNow)
+        }
+        XCTAssertEqual(forecast(from: 1_500, rate: 400, usualMegabytes: nil).state, .leaking)
     }
 
     /// A custom limit is the user's exact word, and growth past the leak
     /// limit needs no nearness to a memory limit to be a leak.
     func testCustomLimitsAndFastGrowthAreNotExempt() {
-        XCTAssertEqual(forecast(from: 1_500, rate: 40, usualMegabytes: 2_450, settings: .aggressive).state, .leaking)
+        XCTAssertEqual(forecast(from: 800, rate: 40, usualMegabytes: 1_500, settings: .aggressive).state, .leaking)
         var strict = ThresholdSettings.smart
         strict.leakVelocityMegabytesPerMinute = 30
         XCTAssertEqual(forecast(from: 1_500, rate: 40, usualMegabytes: 2_450, settings: strict).state, .leaking)

@@ -55,6 +55,7 @@ public struct GhostHeat: Equatable, Sendable {
     static let sustainedCPUEvidence = "CPU stayed elevated across the sampling window"
     static let instantCPUEvidence = "CPU is high now, but persistence is not proven yet"
     static let memoryAboveLimitEvidence = "Memory footprint is above its adaptive limit"
+    static let buildMemoryEvidence = "Build or test work is taking memory it returns when it ends"
     /// Leads the line that says a big family was held at Watch for being at
     /// its usual size; the assessment reads it back as the reason.
     static let usualSizeEvidence = "Large, but normal for it"
@@ -110,7 +111,8 @@ public enum GhostHeatModel {
         trend: TrendMetrics,
         hardwareLevel: GhostLevel,
         cpuBehavior: CPUBehavior = .none,
-        isStarting: Bool = false
+        isStarting: Bool = false,
+        isOneShotBuild: Bool = false
     ) -> GhostHeat {
         // The real limit, never one inferred from the last trend sample: that
         // sample is stale whenever a cached reading skipped the append.
@@ -155,7 +157,12 @@ public enum GhostHeatModel {
             trend.observedSeconds >= 90
         let sustainedCPU = isBurst ? cpuBehavior.isSustained : (windowSustained || cpuBehavior.isSustained)
         let pattern = trend.resolvedPattern
-        let sustainedLeak = trendProven && leakRatio >= 1 && pattern.indicatesAccumulation &&
+        // A clean slope over twenty seconds is a trend worth drawing, not yet
+        // a sustained leak: that takes a minute of it. A build's climb is the
+        // work itself, given back when it ends; if it squeezes the Mac, the
+        // pressure evidence says so.
+        let sustainedLeak = trendProven && trend.growthIsSustained && !isOneShotBuild && leakRatio >= 1 &&
+            pattern.indicatesAccumulation &&
             (trend.memoryFitQuality >= 0.5 || pattern.pattern == .risingFloor)
         let corroboratingAxes = axes.filter { $0 >= 55 }.count
         let instantCorroboration = [memoryRatio >= 1, cpuRatio >= 0.8, gpuRatio >= 0.55, leakRatio >= 0.8]
@@ -184,7 +191,8 @@ public enum GhostHeatModel {
         if sustainedLeak { evidence.append("Memory growth is sustained with a trusted trend") }
         else if leakRatio >= 1 {
             evidence.append(isStarting ? "Memory is rising, but the process only just started"
-                                       : "Memory is rising, but the trend still needs confirmation")
+                            : isOneShotBuild ? GhostHeat.buildMemoryEvidence
+                            : "Memory is rising, but the trend still needs confirmation")
         }
         if memoryRatio >= 1 { evidence.append(GhostHeat.memoryAboveLimitEvidence) }
         if gpuRatio >= 0.55 { evidence.append("GPU load is materially elevated") }
@@ -328,8 +336,12 @@ public enum GhostHeatModel {
         // gates distinguish them.
         let corroboration = sustained + contextVotes
         let criticalForecast = forecastIsHeatTrusted && forecast.confidence >= 0.62 && forecast.state >= .runaway
+        // Critical pressure makes Urgent only the families the Mac is short
+        // of memory because of: a quarter of what is in use, or of the growth.
+        // It made every big app Urgent at once; the others stay Review.
+        let starvesTheMac = pressure.level == .critical && share.boostScale >= 1
         let refinedLevel: GhostLevel
-        if heat >= 80, confidence >= 0.62, (corroboration >= 2 || criticalForecast || pressure.level == .critical) {
+        if heat >= 80, confidence >= 0.62, (corroboration >= 2 || criticalForecast || starvesTheMac) {
             refinedLevel = .critical
         } else if heat >= 58, confidence >= 0.45,
                   (corroboration >= 1 || (forecastIsHeatTrusted && forecast.state >= .leaking)) {

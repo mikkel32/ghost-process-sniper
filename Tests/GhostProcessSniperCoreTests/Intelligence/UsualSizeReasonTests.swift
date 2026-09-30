@@ -61,7 +61,7 @@ final class UsualSizeReasonTests: XCTestCase {
         let family = try score(chat(megabytes: 1_700), usual: 2_450, pressure: starved)
         XCTAssertGreaterThanOrEqual(family.score.level, .hot)
 
-        XCTAssertEqual(ProcessAssessment(family: family).reason, "Memory is tight on this Mac")
+        XCTAssertEqual(ProcessAssessment(family: family).reason, "Holds 11% of scarce memory")
         let verdict = FamilyVerdict.synthesize(family: family, pattern: family.trend.resolvedPattern)
         XCTAssertEqual(verdict.headline, "Memory is tight on this Mac")
         XCTAssertTrue(verdict.detail.hasSuffix("Not confirmed as a leak yet."), verdict.detail)

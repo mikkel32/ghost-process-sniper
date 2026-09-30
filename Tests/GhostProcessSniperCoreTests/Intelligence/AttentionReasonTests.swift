@@ -48,14 +48,33 @@ final class AttentionReasonTests: XCTestCase {
         XCTAssertTrue(family.score.components.contains { $0.slot == "pressure" }, "\(family.score.components.map(\.slot))")
 
         let assessment = ProcessAssessment(family: family)
-        XCTAssertEqual(assessment.reason, "Memory is tight on this Mac")
+        XCTAssertEqual(assessment.reason, "Holds 11% of scarce memory")
         XCTAssertTrue(assessment.evidence.contains("system pressure is warning"), assessment.evidence)
         XCTAssertFalse(assessment.evidence.contains("Size alone"), "no hedge next to a specific reason")
         XCTAssertEqual(assessment.cause, "Memory footprint", "the category stays")
 
         let sidebar = row(family)
-        XCTAssertEqual(sidebar.subtitle, "Memory is tight on this Mac")
-        XCTAssertTrue(sidebar.helpText.hasPrefix("Memory is tight on this Mac."), sidebar.helpText)
+        XCTAssertEqual(sidebar.subtitle, "Holds 11% of scarce memory")
+        XCTAssertTrue(sidebar.helpText.hasPrefix("Holds 11% of scarce memory."), sidebar.helpText)
+    }
+
+    /// Every big family carries the pressure while the Mac is short of
+    /// memory: five rows all read "Memory is tight on this Mac". Each now
+    /// names its own share, and says the Mac is short only when it has none.
+    func testFamiliesUnderTheSamePressureAreToldApart() throws {
+        let big = try scored(chat(megabytes: 3_400), pressure: squeezed)
+        let small = try scored(chat(megabytes: 1_700), pressure: squeezed)
+        XCTAssertEqual(ProcessAssessment(family: big).reason, "Holds 22% of scarce memory")
+        XCTAssertEqual(ProcessAssessment(family: small).reason, "Holds 11% of scarce memory")
+
+        let pressure = GhostScoreComponent(slot: "pressure", kind: .system, title: "Host memory pressure",
+                                           detail: "System pressure is warning", impact: 5, level: .watch)
+        let memory = GhostScoreComponent(slot: "memory", kind: .memory, title: "memory above threshold",
+                                         detail: "1.7 GB is 1.7x the 1.0 GB limit", impact: 60, level: .hot, ratio: 1.7)
+        let score = GhostScore(value: 70, level: .hot, reasons: [], components: [memory, pressure],
+                               heat: GhostHeat(value: 70, level: .hot, confidence: 0.6, evidence: [], sustainedSignalCount: 0))
+        let unshared = Fixture.family(chat(), level: .hot).enriched(score: score)
+        XCTAssertEqual(ProcessAssessment(family: unshared).reason, "Memory is tight on this Mac", "no share known")
     }
 
     func testAFamilyOverItsLimitWithNothingElseSaysSo() throws {
@@ -143,11 +162,11 @@ final class AttentionReasonTests: XCTestCase {
         XCTAssertEqual(ProcessAssessment(family: stale).reason, "Waiting for a complete reading")
     }
 
-    /// "ChatGPT: memory is tight on this Mac": the reason ends the sentence,
+    /// "ChatGPT: holds 11% of scarce memory": the reason ends the sentence,
     /// and its capitals ("Mac", "CPU") survive the hero's lower case.
     func testTheHeroNamesTheReasonAndDropsTheContradictingHedge() throws {
         let brief = hero(try scored(chat(), pressure: squeezed))
-        XCTAssertEqual(brief.title, "ChatGPT: memory is tight on this Mac")
+        XCTAssertEqual(brief.title, "ChatGPT: holds 11% of scarce memory")
         XCTAssertTrue(brief.detail.contains("1.7 GB"), brief.detail)
         XCTAssertFalse(brief.detail.contains("Size alone"), brief.detail)
     }

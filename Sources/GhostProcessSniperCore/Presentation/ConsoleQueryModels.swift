@@ -48,6 +48,10 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
     public let search: ConsoleSearchResults
     /// Tracked families and untracked matches, ordered for the browser table.
     public let browserRows: [ProcessBrowserRowModel]
+    /// Every tracked family in the snapshot the rows came from: the "of" in
+    /// All Processes' "26 of 26". The live summary can be a scan ahead of the
+    /// rows, and "26 of 25" or "175 of 26" is what the two made together.
+    public let familyTotal: Int
 
     public static let empty = ConsoleDerivedSnapshot(
         key: ConsoleDerivedSnapshotKey(ConsoleProjectionRequest(source: .empty, incidents: [], state: .default)),
@@ -68,7 +72,8 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
         duplicateRows: [DuplicateClusterViewModel],
         search: ConsoleSearchResults,
         browserRows: [ProcessBrowserRowModel] = [],
-        incidentScope: IncidentListScope = .published(total: 0)
+        incidentScope: IncidentListScope = .published(total: 0),
+        familyTotal: Int = 0
     ) {
         self.key = key
         self.familyRows = familyRows
@@ -79,6 +84,7 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
         self.search = search
         self.browserRows = browserRows
         self.incidentScope = incidentScope
+        self.familyTotal = familyTotal
     }
 
     /// Projection without a live process sample: families are searched by
@@ -140,7 +146,8 @@ public struct ConsoleDerivedSnapshot: Equatable, Sendable {
             search: projection.results,
             browserRows: browserRows(request, rows: projection.rows, results: projection.results),
             incidentScope: request.incidentHistory.map { .history(total: $0.incidents.count, isTruncated: $0.isTruncated) }
-                ?? .published(total: request.incidents.count)
+                ?? .published(total: request.incidents.count),
+            familyTotal: snapshot.families.count
         )
     }
 

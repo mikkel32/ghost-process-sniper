@@ -167,9 +167,11 @@ public struct ProcessAssessment: Equatable, Sendable {
                 recommendation = "Inspect the growing member and its work before previewing a stop."
             }
             systemImage = "chart.line.uptrend.xyaxis"
-        } else if family.totalCPUPercent >= 80 {
+        } else if family.totalCPUPercent >= 80, !Self.isRaisedByMemoryAlone(family) {
             cause = "CPU activity"
-            evidence = "\(cpu) CPU across \(family.members.count) processes. 100% means one logical CPU."
+            specific = AttentionReason(family: family, cpuFirst: true)
+            evidence = specific?.evidence(memory: memory, cpu: cpu) ??
+                "\(cpu) CPU across \(family.members.count) processes. 100% means one logical CPU."
             recommendation = "Check whether a build, task, or foreground app is doing expected work."
             systemImage = "cpu"
         } else if family.totalGPUPercent >= 40 {
@@ -200,6 +202,14 @@ public struct ProcessAssessment: Equatable, Sendable {
         reason = specific?.text ?? cause
     }
 
-    /// The reason to end a sentence with: "ChatGPT: memory is tight on this Mac".
+    /// The reason to end a sentence with: "ChatGPT: holds 11% of scarce memory".
     public var reasonInSentence: String { AttentionReason.inSentence(reason) }
+
+    /// Over its memory limit with CPU well inside its own: a busy core or
+    /// two is not why it is here, so it is not filed under CPU.
+    private static func isRaisedByMemoryAlone(_ family: ProcessFamily) -> Bool {
+        func level(_ slot: String) -> GhostLevel { family.score.components.first { $0.slot == slot }?.level ?? .quiet }
+        return level("memory") >= .hot && level("cpu") < .watch && level("baseline.cpu") < .watch &&
+            family.forecast.cpuBehavior?.isSustained != true
+    }
 }

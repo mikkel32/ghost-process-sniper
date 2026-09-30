@@ -90,8 +90,8 @@ public struct MenuBarStatusPresentation: Equatable, Sendable {
         if summary.level >= .critical {
             return "Critical"
         }
-        if summary.hotCount > 0 {
-            return "\(summary.hotCount) hot"
+        if let review = reviewText(summary: summary) {
+            return review
         }
         if summary.leakingCount > 0 || normalizedStatus.lowercased().contains("leak") {
             return "Leak"
@@ -111,10 +111,11 @@ public struct MenuBarStatusPresentation: Equatable, Sendable {
 
     /// What the tooltip and the menu title open with, each fact once: what
     /// needs review, the status only when it says more than that count (the
-    /// summary's own status is often "N hot"), and the leaks.
+    /// summary's own status is often that count), and the leaks.
     private static func headlineFacts(summary: RadarSummary, normalizedStatus: String) -> [String] {
-        var facts = [reviewText(summary: summary)].compactMap { $0 }
-        if normalizedStatus.lowercased() != "\(summary.hotCount) hot" {
+        let review = reviewText(summary: summary)
+        var facts = [review].compactMap { $0 }
+        if normalizedStatus.lowercased() != review?.lowercased() {
             facts.append(normalizedStatus)
         }
         if summary.leakingCount > 0 {

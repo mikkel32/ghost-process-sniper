@@ -23,11 +23,13 @@ final class MenuBarStatusPresentationTests: XCTestCase {
     }
 
     func testTheTooltipDoesNotRepeatTheHotCount() {
-        let tooltip = presentation(summary("4 hot", level: .hot, hot: 4)).tooltip
+        let tooltip = presentation(summary("4 to review", level: .hot, hot: 4)).tooltip
         XCTAssertEqual(tooltip.components(separatedBy: "4").count - 1, 1, tooltip)
         XCTAssertTrue(tooltip.contains("4 to review"), tooltip)
         XCTAssertFalse(tooltip.contains("hot"), "the console says \"to review\": \(tooltip)")
-        XCTAssertEqual(presentation(summary("4 hot", level: .hot, hot: 4)).reviewText, "4 to review")
+        XCTAssertEqual(MenuBarStatusPresentation.compactStateText(summary: summary("4 to review", level: .hot, hot: 4)), "4 to review",
+                       "the popover's spoken state uses the console's words too")
+        XCTAssertEqual(presentation(summary("4 to review", level: .hot, hot: 4)).reviewText, "4 to review")
         XCTAssertNil(presentation(summary()).reviewText)
     }
 
@@ -59,7 +61,7 @@ final class MenuBarStatusPresentationTests: XCTestCase {
         XCTAssertLessThanOrEqual(busy.menuTitle.count, 60, busy.menuTitle)
         XCTAssertFalse(busy.menuTitle.contains("famil"))
         XCTAssertFalse(busy.menuTitle.contains("duplicate"))
-        XCTAssertEqual(presentation(summary("4 hot", level: .hot, hot: 4)).menuTitle, "Ghost Process Sniper: 4 to review")
+        XCTAssertEqual(presentation(summary("4 to review", level: .hot, hot: 4)).menuTitle, "Ghost Process Sniper: 4 to review")
     }
 
     func testALongStoreErrorShortensInTheMenuTitleButNotTheHoverText() {
@@ -71,8 +73,8 @@ final class MenuBarStatusPresentationTests: XCTestCase {
     }
 
     func testTheSpokenLabelUsesTheReviewWording() {
-        XCTAssertEqual(presentation(summary("2 hot", level: .hot, hot: 2)).accessibilityLabel, "Ghost Process Sniper, 2 need review")
-        XCTAssertEqual(presentation(summary("1 hot", level: .hot, hot: 1)).accessibilityLabel, "Ghost Process Sniper, 1 needs review")
+        XCTAssertEqual(presentation(summary("2 to review", level: .hot, hot: 2)).accessibilityLabel, "Ghost Process Sniper, 2 need review")
+        XCTAssertEqual(presentation(summary("1 to review", level: .hot, hot: 1)).accessibilityLabel, "Ghost Process Sniper, 1 needs review")
         XCTAssertEqual(presentation(summary("Critical", level: .critical, hot: 3)).accessibilityLabel, "Ghost Process Sniper, Critical")
         XCTAssertEqual(presentation(summary("Leak 12m", level: .watch, leaking: 1)).accessibilityLabel, "Ghost Process Sniper, Leak detected")
     }
@@ -80,7 +82,7 @@ final class MenuBarStatusPresentationTests: XCTestCase {
     func testDiagnosticsOnlyChangesDoNotInvalidateTheRenderKey() {
         var slow = RadarPerformanceMetrics.empty
         slow.smoothness.hitchCount = 9
-        let quiet = summary("2 hot", level: .hot, hot: 2)
+        let quiet = summary("2 to review", level: .hot, hot: 2)
         let first = MenuBarStatusPresentation(summary: quiet, engineStatus: .empty, metrics: .empty)
         let second = MenuBarStatusPresentation(summary: quiet, engineStatus: .empty, metrics: slow)
         XCTAssertEqual(first.renderKey, second.renderKey)

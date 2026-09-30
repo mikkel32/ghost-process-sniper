@@ -17,9 +17,25 @@ final class TelemetryLaneTests: XCTestCase {
         XCTAssertEqual(source.recordedCalls.path, 600, "a path is read once per identity")
     }
 
+    /// A Mac under load spent the first tick's deadline before the path lane
+    /// began, and without paths an app's helpers cannot be told from strangers:
+    /// Claude's renderer and helper stood alone as Hot families, and the
+    /// Attention list held 57 rows for half a minute. The first ticks read
+    /// every path, up to a hard allowance past the deadline.
+    func testAColdStartUnderLoadStillReadsEveryPath() async throws {
+        let source = FakeProbeSource.table(count: 200)
+        source.setReadCost(pathMicroseconds: 1_000, argumentsMicroseconds: 200)
+        source.jumpClock(afterBSDReads: 150, by: 0.2)
+        let sampler = NativeProcessSampler(source: source)
+        let first = try await sampler.sample(plan: .fixture(at: 0))
+        XCTAssertTrue(first.stats.didHitDeadline, "the deadline was spent before the path lane")
+        XCTAssertTrue(first.processes.allSatisfy { !$0.executablePath.isEmpty })
+    }
+
     func testDeferredIdentityIsRetriedNextTickAndNeverCountedAsAHit() async throws {
         let source = FakeProbeSource.table(count: 100)
-        source.setReadCost(pathMicroseconds: 2_000, argumentsMicroseconds: 2_000)
+        // Past even the cold start's allowance: 100 paths at 6 ms is 600 ms.
+        source.setReadCost(pathMicroseconds: 6_000, argumentsMicroseconds: 2_000)
         let sampler = NativeProcessSampler(source: source)
         let first = try await sampler.sample(plan: .fixture(at: 0))
         let placeholders = Set(first.processes.filter { $0.executablePath.isEmpty }.map(\.identity))

@@ -178,7 +178,8 @@ public struct RadarIntelligence: Sendable {
                 family: family,
                 baseline: baseline,
                 recentIncidentCount: recentIncidents,
-                settings: settings
+                settings: settings,
+                now: now
             ),
             family: family,
             pressure: context.systemPressure,
@@ -408,7 +409,8 @@ public struct RadarIntelligence: Sendable {
         family: ProcessFamily,
         baseline: FamilyBaseline?,
         recentIncidentCount: Int,
-        settings: ThresholdSettings
+        settings: ThresholdSettings,
+        now: Date
     ) -> GhostScore {
         guard let baseline, baseline.sampleCount >= 3 else {
             return family.score
@@ -482,7 +484,9 @@ public struct RadarIntelligence: Sendable {
             ))
         }
 
-        if leakRatio >= 0.5, family.trend.cpuSlopePerMinute > 20 {
+        // Only growth that could be a leak: a minute of it, past a launch, not a build's.
+        if leakRatio >= 0.5, family.trend.growthIsSustained, !family.isOneShotBuild,
+           !StartupGrace.isStarting(root: family.root, now: now), family.trend.cpuSlopePerMinute > 20 {
             value += 6
             reasons.append("leak and CPU are accelerating together")
             components.append(GhostScoreComponent(
@@ -527,7 +531,8 @@ public struct RadarIntelligence: Sendable {
             title: "Host memory pressure",
             detail: "Holds \(share.text) while system pressure is \(pressure.level.label.lowercased())",
             impact: boost,
-            level: pressure.level.ghostLevel
+            level: pressure.level.ghostLevel,
+            ratio: share.footprintShare
         )
         let value = min(100, score.value + boost)
         return GhostScore(
