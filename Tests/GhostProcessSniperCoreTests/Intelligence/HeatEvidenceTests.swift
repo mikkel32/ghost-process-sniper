@@ -89,8 +89,9 @@ final class CorroborationHistoryTests: XCTestCase {
         var window = TrendWindow()
         let context = RadarContext(baselines: [:], recentIncidentCounts: [:], rules: [], systemPressure: warning)
         var family: ProcessFamily?
-        for step in 0..<6 {
-            let date = Fixture.now.addingTimeInterval(Double(step - 5) * 4)
+        // A minute of climbing: shorter is not yet sustained.
+        for step in 0..<16 {
+            let date = Fixture.now.addingTimeInterval(Double(step - 15) * 4)
             let process = Fixture.process(megabytes: 1_300 + Double(step) * 200 * 4 / 60, cpu: 2, date: date)
             family = Fixture.scored([process], context: context, window: &window, at: date).first
         }

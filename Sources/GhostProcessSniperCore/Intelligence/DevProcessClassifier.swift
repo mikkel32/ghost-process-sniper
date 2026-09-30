@@ -86,6 +86,13 @@ public struct DevClassification: Equatable, Sendable {
         self.traits = traits
     }
 
+    /// Compiles, bundles or tests, and ends by itself: what it takes, it
+    /// gives back when it exits, so its climb is work, not a leak. A watcher
+    /// stays up and can leak like any service.
+    public var isOneShotBuild: Bool {
+        traits.contains(.buildOrTest) && !traits.contains(.longLived)
+    }
+
     /// Picks the representative classification of a group: kinds that own
     /// whole process trees outrank generic CLI hits of equal confidence.
     var groupingPriority: Double {

@@ -17,6 +17,7 @@ struct FamilyEvidenceScorer: Sendable {
         zombieChildCount: Int,
         cpuBehavior: CPUBehavior = .none,
         cpuLimit: Double? = nil,
+        isOneShotBuild: Bool = false,
         settings: ThresholdSettings,
         now: Date
     ) -> GhostScore {
@@ -61,7 +62,8 @@ struct FamilyEvidenceScorer: Sendable {
                 title: memoryRatio >= 1 ? "memory above threshold" : "Memory footprint",
                 detail: "\(RadarFormat.bytes(footprint)) is \(RadarFormat.fixed1(memoryRatio))x the \(RadarFormat.bytes(settings.memoryBytes)) limit",
                 impact: memoryImpact,
-                level: componentLevel(memoryRatio)
+                level: componentLevel(memoryRatio),
+                ratio: memoryRatio
             ),
             GhostScoreComponent(
                 slot: "cpu",
@@ -69,7 +71,8 @@ struct FamilyEvidenceScorer: Sendable {
                 title: cpuRatio >= 1 ? "CPU above threshold" : "CPU activity",
                 detail: "\(RadarFormat.fixed0(cpu))% is \(RadarFormat.fixed1(cpuRatio))x the \(RadarFormat.fixed0(cpuLimit))% limit",
                 impact: cpuImpact,
-                level: componentLevel(cpuRatio, critical: 1.15)
+                level: componentLevel(cpuRatio, critical: 1.15),
+                ratio: cpuRatio
             ),
             GhostScoreComponent(
                 slot: "gpu",
@@ -77,7 +80,8 @@ struct FamilyEvidenceScorer: Sendable {
                 title: gpuRatio >= 1 ? "GPU above threshold" : "GPU activity",
                 detail: "\(RadarFormat.fixed0(gpu))% GPU utilization",
                 impact: gpuImpact,
-                level: componentLevel(gpuRatio, hot: 0.55, critical: 1)
+                level: componentLevel(gpuRatio, hot: 0.55, critical: 1),
+                ratio: gpuRatio
             ),
             GhostScoreComponent(
                 slot: "leak",
@@ -86,11 +90,14 @@ struct FamilyEvidenceScorer: Sendable {
                 detail: "\(RadarFormat.fixed0(leakVelocity)) MB/min is \(RadarFormat.fixed1(leakRatio))x the " +
                     "\(RadarFormat.fixed0(settings.leakVelocityMegabytesPerMinute)) MB/min limit",
                 impact: leakImpact,
-                // A launch allocates fast while it warms up: the climb is shown, but
-                // it is not a leak (Leaks, "Sustained memory growth", a culprit) until grace is over.
-                level: StartupGrace.isStarting(root: root, now: now)
+                // A launch allocates fast while it warms up, any app can for a few
+                // seconds, and a build takes memory it gives back when it ends: the
+                // climb is shown, but it is not a leak (Leaks, "Sustained memory
+                // growth", a culprit) until grace is over and a minute of it is seen.
+                level: StartupGrace.isStarting(root: root, now: now) || !trend.growthIsSustained || isOneShotBuild
                     ? min(componentLevel(leakRatio, critical: 1.6), .watch)
-                    : componentLevel(leakRatio, critical: 1.6)
+                    : componentLevel(leakRatio, critical: 1.6),
+                ratio: leakRatio
             ),
             GhostScoreComponent(
                 slot: "relevance",
@@ -230,7 +237,8 @@ struct FamilyEvidenceScorer: Sendable {
             trend: trend,
             hardwareLevel: hardwareLevel,
             cpuBehavior: cpuBehavior,
-            isStarting: StartupGrace.isStarting(root: root, now: now)
+            isStarting: StartupGrace.isStarting(root: root, now: now),
+            isOneShotBuild: isOneShotBuild
         )
         if let copies, heat.level == .quiet {
             heat = GhostHeat(

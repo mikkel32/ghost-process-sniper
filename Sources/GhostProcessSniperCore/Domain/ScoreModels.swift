@@ -24,6 +24,9 @@ public struct GhostScoreComponent: Identifiable, Equatable, Sendable {
     public let detail: String
     public let impact: Double
     public let level: GhostLevel
+    /// The measure against its limit (1 = at it), for the components that
+    /// have one: memory, CPU, GPU, growth. Nil for the rest.
+    public let ratio: Double?
 
     public var id: String { slot }
 
@@ -33,13 +36,15 @@ public struct GhostScoreComponent: Identifiable, Equatable, Sendable {
         title: String,
         detail: String,
         impact: Double,
-        level: GhostLevel
+        level: GhostLevel,
+        ratio: Double? = nil
     ) {
         self.kind = kind
         self.title = title
         self.detail = detail
         self.impact = impact
         self.level = level
+        self.ratio = ratio
         self.slot = slot ?? "\(kind.rawValue).\(title.lowercased())"
     }
 
@@ -113,7 +118,8 @@ enum GhostScoreComponentMath {
                 title: component.title,
                 detail: component.detail,
                 impact: component.impact * scale,
-                level: component.level
+                level: component.level,
+                ratio: component.ratio
             )
         }
     }

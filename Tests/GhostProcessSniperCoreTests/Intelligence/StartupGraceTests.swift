@@ -7,14 +7,14 @@ import XCTest
 final class StartupGraceTests: XCTestCase {
     private typealias Fixture = IntelligenceFixture
 
-    /// Six scans four seconds apart, ending at the fixture clock, climbing at
-    /// `rate` MB/min: fast enough to be a leak on any process old enough to judge.
-    private func ramp(startedSecondsAgo: TimeInterval, rate: Double = 400, base: Double = 300) throws -> ProcessFamily {
+    /// `scans` scans four seconds apart (a minute by default), ending at the fixture clock, climbing at
+    /// `rate` MB/min: fast and long enough to be a leak on any process old enough to judge.
+    private func ramp(startedSecondsAgo: TimeInterval, rate: Double = 400, base: Double = 300, scans: Int = 16) throws -> ProcessFamily {
         var window = TrendWindow()
         var family: ProcessFamily?
         let started = Fixture.now.addingTimeInterval(-startedSecondsAgo)
-        for step in 0..<6 {
-            let date = Fixture.now.addingTimeInterval(Double(step - 5) * 4)
+        for step in 0..<scans {
+            let date = Fixture.now.addingTimeInterval(Double(step - scans + 1) * 4)
             let megabytes = base + Double(step) * rate * 4 / 60
             let process = Fixture.process(megabytes: megabytes, started: started, date: date)
             family = Fixture.scored([process], window: &window, at: date).first
@@ -48,7 +48,7 @@ final class StartupGraceTests: XCTestCase {
         XCTAssertTrue(settled.hasCredibleLeak, "the same climb an hour in is a leak")
     }
 
-    /// The same ramp on a process that has been running for an hour is a leak.
+    /// The same minute-long ramp on a process that has been running for an hour is a leak.
     func testTheSameRampOnALongRunningProcessStillEscalates() throws {
         let old = try ramp(startedSecondsAgo: 3_600)
         XCTAssertEqual(old.score.level, .critical)
@@ -89,7 +89,7 @@ final class StartupGraceTests: XCTestCase {
 
     /// The same window and limit: only the flag differs, so the flag is what holds the leak back.
     func testAProvenClimbIsNotASustainedLeakWhileStarting() {
-        let climb = Fixture.trend(megabytes: (0..<6).map { 300 + Double($0) * 400 * 4 / 60 }, cadence: 4)
+        let climb = Fixture.trend(megabytes: (0..<16).map { 300 + Double($0) * 400 * 4 / 60 }, cadence: 4)
         func heat(isStarting: Bool) -> GhostHeat {
             GhostHeatModel.initial(memoryRatio: 0.4, cpuRatio: 0, cpuThreshold: 90, gpuRatio: 0, leakRatio: 3,
                                    trend: climb, hardwareLevel: .quiet, isStarting: isStarting)

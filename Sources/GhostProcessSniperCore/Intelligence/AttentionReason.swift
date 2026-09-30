@@ -17,14 +17,26 @@ struct AttentionReason: Equatable, Sendable {
         case copies(Int)
         case forgotten(detail: String)
         case cpuAboveUsual(detail: String)
+        case nearLimit(detail: String)
+        case learningUsual
+        case cpuOverLimit(detail: String)
+        case buildWork(detail: String)
+        case busyLoop(detail: String)
+        case saturating(detail: String)
+        case busyWhenUsuallyIdle(detail: String)
+        case steadyBurn(minutes: Int, detail: String)
     }
 
     let kind: Kind
 
     /// Nil at Quiet, which has nothing to explain, and when none of the
-    /// facts below is what raised the family.
-    init?(family: ProcessFamily) {
-        guard family.score.level >= .watch, let kind = Self.kind(for: family) else { return nil }
+    /// facts below is what raised the family. `cpuFirst` is for a family
+    /// under the CPU cause: what its CPU is doing is asked before its size.
+    init?(family: ProcessFamily, cpuFirst: Bool = false) {
+        guard family.score.level >= .watch else { return nil }
+        guard let kind = cpuFirst ? Self.cpuKind(for: family) ?? Self.kind(for: family) : Self.kind(for: family) else {
+            return nil
+        }
         self.kind = kind
     }
 
@@ -63,7 +75,38 @@ struct AttentionReason: Equatable, Sendable {
             return .copies(copies.independentRootCount)
         }
         if let forgotten = component("forgotten") { return .forgotten(detail: forgotten.detail) }
-        if let cpu = component("baseline.cpu"), cpu.level >= .watch { return .cpuAboveUsual(detail: cpu.title) }
+        if let cpu = cpuKind(for: family) { return cpu }
+        // Size is all that is left: say how close it is to the limit (the
+        // last stretch before it is what the hardware floor makes Hot), or,
+        // at Watch only, that its usual size is still being learned.
+        guard family.totalPhysicalFootprintBytes >= 512 * 1_048_576,
+              let memory = component("memory"), memory.level >= .watch else { return nil }
+        if let ratio = memory.ratio, ratio >= 0.8 { return .nearLimit(detail: memory.detail) }
+        if family.score.level == .watch, family.baseline?.isMeasurementTrusted != true { return .learningUsual }
+        return nil
+    }
+
+    /// What the family's CPU is doing, when that is why it is here: a
+    /// behavior the ledger proved, a learned usual it is above, or its limit.
+    private static func cpuKind(for family: ProcessFamily) -> Kind? {
+        let cpu = family.score.components.first { $0.slot == "cpu" }
+        let overLimit = (cpu?.level ?? .quiet) >= .hot
+        if let behavior = family.forecast.cpuBehavior, !behavior.reason.isEmpty {
+            let detail = behavior.reason.prefix(1).uppercased() + behavior.reason.dropFirst()
+            switch behavior.kind {
+            case .spin: return .busyLoop(detail: detail)
+            case .machineSaturation: return .saturating(detail: detail)
+            case .idleServiceBurning: return .busyWhenUsuallyIdle(detail: detail)
+            case .steadyBurn: return .steadyBurn(minutes: behavior.minutes, detail: detail)
+            case .expectedBurst where overLimit || behavior.isRunaway: return .buildWork(detail: detail)
+            case .none where behavior.isSustained: return .cpuOverLimit(detail: detail)
+            default: break
+            }
+        }
+        if let usual = family.score.components.first(where: { $0.slot == "baseline.cpu" }), usual.level >= .watch {
+            return .cpuAboveUsual(detail: usual.title)
+        }
+        if let cpu, overLimit { return .cpuOverLimit(detail: cpu.detail) }
         return nil
     }
 
@@ -77,6 +120,14 @@ struct AttentionReason: Equatable, Sendable {
         case let .copies(count): "\(count) copies running"
         case .forgotten: "Probably forgotten"
         case .cpuAboveUsual: "CPU above its usual"
+        case .nearLimit: "Near its memory limit"
+        case .learningUsual: "Large; learning its usual"
+        case .cpuOverLimit: "Over its CPU limit"
+        case .buildWork: "Build or test work"
+        case .busyLoop: "Busy-looping on one core"
+        case .saturating: "Using most of this Mac's CPU"
+        case .busyWhenUsuallyIdle: "Busy; it usually idles"
+        case let .steadyBurn(minutes, _): "Busy for \(minutes) min"
         }
     }
 
@@ -92,6 +143,11 @@ struct AttentionReason: Equatable, Sendable {
         case let .copies(count): "\(count) independent copies are running; this one holds \(memory), \(cpu) CPU."
         case let .forgotten(detail): "\(detail); \(memory) tracked footprint, \(cpu) CPU."
         case let .cpuAboveUsual(detail): "\(detail); \(memory) tracked footprint."
+        case let .nearLimit(detail): "\(detail); \(cpu) CPU."
+        case .learningUsual: "\(memory), \(cpu) CPU. Its usual size is learned over about twenty minutes."
+        case let .cpuOverLimit(detail), let .buildWork(detail), let .busyLoop(detail), let .saturating(detail),
+             let .busyWhenUsuallyIdle(detail), let .steadyBurn(_, detail):
+            "\(detail); \(memory) tracked footprint."
         }
     }
 

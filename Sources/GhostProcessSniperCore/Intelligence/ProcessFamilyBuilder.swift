@@ -375,6 +375,7 @@ public struct ProcessFamilyBuilder: Sendable {
                                                      processorCount: processorCount, cpuThreshold: cpuLimit,
                                                      isUnattended: forgotten.launchContext.isUnattended),
             cpuLimit: cpuLimit,
+            isOneShotBuild: familyClassification?.isOneShotBuild ?? false,
             settings: settings,
             now: now
         )

@@ -66,6 +66,8 @@ public struct ProcessFamily: Identifiable, Equatable, Sendable {
     public let displayName: String
     public var childCount: Int { max(0, members.count - 1) }
     public var isKillable: Bool { !ownedIdentities.isEmpty && protectedPIDs.isEmpty }
+    /// A build or test run that ends by itself (see DevClassification).
+    public var isOneShotBuild: Bool { classification?.isOneShotBuild ?? false }
 
     /// Whether one member may be previewed and stopped by itself: the family's
     /// own processes, and the helpers linked in by their app.
