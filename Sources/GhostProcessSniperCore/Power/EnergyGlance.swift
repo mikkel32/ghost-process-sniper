@@ -25,7 +25,8 @@ public struct EnergyGlance: Equatable, Sendable {
         powerState = battery?.powerState
         chargePercent = battery?.chargePercent.map { Int($0.rounded()) }
         minutesRemaining = battery?.minutesRemaining.map { Int(($0 / 5).rounded()) * 5 }
-        drawWatts = battery?.drawWatts.map { Int($0.rounded()) }
+        // The Energy page's figure, so the two never show different numbers.
+        drawWatts = report.macWatts.map { Int($0.rounded()) }
         let top = report.perProcessEnergy
             ? report.consumers.first { $0.isRunning && !$0.isSystem && $0.averageWatts >= 0.5 } : nil
         topConsumerName = top?.displayName

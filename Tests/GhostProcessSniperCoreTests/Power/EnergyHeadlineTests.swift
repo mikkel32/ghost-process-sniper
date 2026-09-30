@@ -69,4 +69,15 @@ final class EnergyHeadlineTests: XCTestCase {
         XCTAssertEqual(line(.pluggedIn), "Plugged in 76% \u{00B7} drawing 26 W")
         XCTAssertEqual(line(.drainingOnPower), "Plugged in 76% \u{00B7} battery draining \u{00B7} drawing 26 W")
     }
+
+    /// The popover said "drawing 31 W" (the last ninety seconds) while the
+    /// Energy page said 19 W (five minutes): one Mac, one moment, two numbers.
+    func testThePopoverAndTheEnergyPageShowTheSameDraw() {
+        var battery = outlook(.charging, draw: 31)
+        battery.averageDrawWatts = 19
+        let energy = report(battery)
+        XCTAssertEqual(EnergyGlance(energy).drawWatts, 19)
+        XCTAssertEqual(EnergyHeadline(energy).drawSentence, "Your Mac is drawing \(EnergyFormat.watts(19))")
+        XCTAssertEqual(EnergyGlance(report(outlook(.charging, draw: 31))).drawWatts, 31, "until the mean exists, the recent draw")
+    }
 }
