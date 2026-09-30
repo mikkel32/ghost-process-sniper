@@ -206,11 +206,13 @@ public struct FamilyRiskForecaster: Sendable {
         if cpuEvidence.isRunaway {
             return .runaway
         }
-        // Being above the memory limit is not a leak; growth is. Near the
-        // limit a slower but real, sustained climb is enough, unless it only
-        // refills the family to its usual size: a big app is over its limit
-        // by design. Growth past the leak limit itself is a leak either way.
-        let nearLimit = horizon == .imminent || horizon == .breached
+        // Being above the memory limit is not a leak; growth is. About to
+        // cross the limit, a slower but real, sustained climb is enough,
+        // unless it only refills the family to its usual size. Already past
+        // it, a big app's ordinary use climbs that fast too: slow creep there
+        // is proven over twenty minutes (slowLeak), not one. Growth past the
+        // leak limit itself is a leak either way.
+        let nearLimit = horizon == .imminent
         let fastGrowth = memoryVelocity >= settings.leakVelocityMegabytesPerMinute
         let leakEntry = fastGrowth ||
             (nearLimit && family.trend.hasSustainedHistory &&
